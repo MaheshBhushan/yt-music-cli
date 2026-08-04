@@ -42,6 +42,7 @@ class Player:
 
         self._on_position: Optional[Callable[[float], None]] = None
         self._on_eof: Optional[Callable[[], None]] = None
+        self._on_error: Optional[Callable[[str], None]] = None
 
         self._start_mpv()
         self._connect()
@@ -158,8 +159,18 @@ class Player:
             if value is not None and self._on_position is not None:
                 self._on_position(value)
         elif event == "end-file":
-            if self._on_eof is not None:
-                self._on_eof()
+            # mpv fires end-file for every reason a file stops playing, not
+            # just a genuine end-of-track: `loadfile ... replace` (what
+            # `load()` does on every play/next) also emits it with
+            # reason "stop", and a stream that fails to load emits it with
+            # reason "error". Only "eof" means the track actually finished.
+            reason = msg.get("reason")
+            if reason == "eof":
+                if self._on_eof is not None:
+                    self._on_eof()
+            elif reason == "error":
+                if self._on_error is not None:
+                    self._on_error(msg.get("file_error") or "playback error")
 
     # -- playback control --------------------------------------------------
 
@@ -204,3 +215,7 @@ class Player:
     def on_eof(self, callback: Callable[[], None]) -> None:
         """Register a callback invoked when the current file finishes."""
         self._on_eof = callback
+
+    def on_error(self, callback: Callable[[str], None]) -> None:
+        """Register a callback invoked when the current file fails to load."""
+        self._on_error = callback

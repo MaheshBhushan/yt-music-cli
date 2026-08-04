@@ -215,6 +215,7 @@ class Daemon:
             )
         )
         self._player.tap(on_position=self._pushed_position, on_eof=self._pushed_eof)
+        self._queue.on_error(self._pushed_error)
 
         self._clients = set()
         self._server = None
@@ -351,6 +352,9 @@ class Daemon:
         self._paused = False
         self._emit_track_changed()
         self._emit_queue_changed()
+
+    def _pushed_error(self, message):
+        self._emit("error", {"error": message, "kind": "playback"})
 
     # -- helpers -----------------------------------------------------------
 

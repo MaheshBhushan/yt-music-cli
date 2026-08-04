@@ -30,6 +30,10 @@ PREFETCH_LEAD_SECONDS = 15.0
 #: how long a prefetched URL may be trusted before it is re-resolved
 PREFETCH_TTL_SECONDS = 300.0
 
+#: consecutive load failures tolerated before the circuit breaker stops
+#: advancing the queue, so a run of dead tracks can't skip forever
+MAX_CONSECUTIVE_FAILURES = 3
+
 
 class Queue:
     """An ordered list of Tracks with a cursor, driving a Player."""
@@ -44,9 +48,12 @@ class Queue:
         self._index = -1
         #: (video_id, url, monotonic timestamp) for the next track, or None
         self._prefetch = None
+        self._consecutive_failures = 0
+        self._on_error = None
 
         self._player.on_eof(self._handle_eof)
         self._player.on_position(self._handle_position)
+        self._player.on_error(self._handle_error)
 
     # -- inspection --------------------------------------------------------
 
@@ -178,7 +185,33 @@ class Queue:
         self._player.load(url)
         self._invalidate_prefetch()
 
+    def on_error(self, callback):
+        """Register a callback invoked with a message when playback fails."""
+        self._on_error = callback
+
     def _handle_eof(self):
+        self._consecutive_failures = 0
+        self.next()
+
+    def _handle_error(self, message=None):
+        """A track failed to load. Skip it, unless too many failed in a row.
+
+        Resets only on a genuine successful playback (see `_handle_eof`), so
+        a run of dead tracks trips the breaker instead of skipping through
+        the whole queue. It is deliberately *not* reset by `_handle_position`
+        -- mpv reports an initial time-pos of 0.0 for a file it is about to
+        fail to open, and resetting on that would defeat the breaker.
+        """
+        self._consecutive_failures += 1
+        if self._consecutive_failures >= MAX_CONSECUTIVE_FAILURES:
+            if self._on_error is not None:
+                self._on_error(
+                    f"stopped after {self._consecutive_failures} consecutive "
+                    f"playback failures: {message or 'playback error'}"
+                )
+            return
+        if self._on_error is not None:
+            self._on_error(message or "playback error")
         self.next()
 
     def _handle_position(self, position):

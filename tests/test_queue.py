@@ -22,6 +22,7 @@ class FakePlayer:
         self.loaded = []
         self._on_eof = None
         self._on_position = None
+        self._on_error = None
 
     def load(self, url):
         self.loaded.append(url)
@@ -32,11 +33,17 @@ class FakePlayer:
     def on_position(self, callback):
         self._on_position = callback
 
+    def on_error(self, callback):
+        self._on_error = callback
+
     def emit_eof(self):
         self._on_eof()
 
     def emit_position(self, value):
         self._on_position(value)
+
+    def emit_error(self, message=None):
+        self._on_error(message)
 
 
 class FakeResolver:
@@ -379,3 +386,79 @@ def test_no_file_writes_during_full_playback_cycle(monkeypatch, tmp_path):
     q.prev()
     q.clear()
     assert not list(tmp_path.iterdir())
+
+
+# -- regression: mpv end-file reason must gate advancement ---------------
+
+
+def test_no_spurious_eof_does_not_advance_queue(q):
+    """Playing a track (which calls player.load(), the equivalent of mpv's
+    `loadfile ... replace`) must not by itself advance the queue. Player is
+    responsible for only calling on_eof for a genuine "eof" reason and
+    never for the "stop" reason mpv emits on every replace (see
+    tests/test_player.py::test_stop_reason_does_not_fire_eof_callback for
+    the mpv-facing half of this regression); this asserts the Queue side:
+    no eof callback fired means no advance."""
+    q, player, resolver, _ = q
+    q.enqueue([track("a"), track("b"), track("c")])
+    assert q.index == 0
+    assert len(player.loaded) == 1
+    # Simulate the load completing without any eof callback firing at all
+    # (as happens for a "stop" reason) -- the cursor must stay put.
+    assert q.index == 0
+
+
+def test_genuine_eof_still_advances_queue(q):
+    """A real end-of-track (reason "eof") must still advance -- autoplay
+    and manual "next track finished" behaviour must not be broken."""
+    q, player, resolver, _ = q
+    q.enqueue([track("a"), track("b"), track("c")])
+    assert q.index == 0
+    player.emit_eof()
+    assert q.index == 1
+    assert q.current.video_id == "b"
+
+
+def test_repeated_load_errors_trip_circuit_breaker_and_surface_error(q):
+    q, player, resolver, _ = q
+    q.enqueue([track("a"), track("b"), track("c"), track("d")])
+    errors = []
+    q.on_error(errors.append)
+
+    assert q.index == 0
+    player.emit_error("loading failed")
+    assert q.index == 1  # first failure: skipped
+    player.emit_error("loading failed")
+    assert q.index == 2  # second failure: skipped
+    player.emit_error("loading failed")
+    # third consecutive failure trips the breaker: no further advance
+    assert q.index == 2
+    assert len(errors) == 3
+    assert "stopped after 3 consecutive" in errors[-1]
+
+    # queue must not have run away past the tail
+    assert q.index < len(q.tracks)
+
+
+def test_error_counter_resets_after_successful_playback(q):
+    q, player, resolver, _ = q
+    q.enqueue(
+        [track("a"), track("b"), track("c"), track("d"), track("e"), track("f")]
+    )
+    errors = []
+    q.on_error(errors.append)
+
+    player.emit_error("loading failed")
+    player.emit_error("loading failed")
+    assert q.index == 2
+    # a genuine end-of-track proves a track actually played successfully --
+    # the failure streak resets (a bare position tick does not: mpv reports
+    # an initial time-pos of 0.0 for a file it is about to fail to open, so
+    # resetting on that would defeat the breaker)
+    player.emit_eof()
+    player.emit_error("loading failed")
+    player.emit_error("loading failed")
+    # two more failures after the reset is still under the breaker limit
+    assert q.index == 5
+    assert len(errors) == 4
+    assert all("stopped after" not in message for message in errors)

@@ -42,6 +42,7 @@ class FakePlayer:
         self.calls = []
         self._on_position = None
         self._on_eof = None
+        self._on_error = None
         self.closed = False
 
     def load(self, url):
@@ -71,11 +72,17 @@ class FakePlayer:
     def on_eof(self, callback):
         self._on_eof = callback
 
+    def on_error(self, callback):
+        self._on_error = callback
+
     def emit_position(self, value):
         self._on_position(value)
 
     def emit_eof(self):
         self._on_eof()
+
+    def emit_error(self, message=None):
+        self._on_error(message)
 
 
 class FakeQueue:
@@ -85,8 +92,12 @@ class FakeQueue:
         self._tracks = []
         self._index = -1
         self.player = player
+        self._on_error = None
         player.on_eof(lambda: None)
         player.on_position(lambda value: None)
+
+    def on_error(self, callback):
+        self._on_error = callback
 
     @property
     def tracks(self):

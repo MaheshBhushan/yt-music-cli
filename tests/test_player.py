@@ -166,6 +166,42 @@ def test_eof_event_dispatched_to_observer(fake_player):
     assert received.wait(timeout=2.0)
 
 
+def test_stop_reason_does_not_fire_eof_callback(fake_player):
+    """Regression: `load()` issues `loadfile ... replace` on every play/next,
+    which makes real mpv emit end-file with reason "stop" -- not "eof".
+    Before the fix, `_handle_event` fired on_eof for *any* end-file event,
+    so this "stop" (the direct result of our own replace) was treated as a
+    real end-of-track and immediately triggered another advance/replace,
+    which produced another "stop", forever: a self-feeding runaway skip
+    through the whole queue. This must not fire on_eof at all."""
+    player, server = fake_player
+
+    called = threading.Event()
+    player.on_eof(called.set)
+    time.sleep(0.1)
+    server.send_event({"event": "end-file", "reason": "stop"})
+    assert not called.wait(timeout=0.5)
+
+
+def test_error_reason_fires_on_error_callback_not_eof(fake_player):
+    """A stream that fails to load emits end-file reason "error". It must
+    not be silently treated as an eof (which would advance blindly); it
+    should be surfaced via on_error instead."""
+    player, server = fake_player
+
+    eof_called = threading.Event()
+    error_messages = []
+    player.on_eof(eof_called.set)
+    player.on_error(error_messages.append)
+    time.sleep(0.1)
+    server.send_event(
+        {"event": "end-file", "reason": "error", "file_error": "loading failed"}
+    )
+    time.sleep(0.3)
+    assert not eof_called.is_set()
+    assert error_messages == ["loading failed"]
+
+
 def test_position_observer_dispatched(fake_player):
     player, server = fake_player
 
