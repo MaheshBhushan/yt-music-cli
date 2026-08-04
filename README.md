@@ -38,7 +38,27 @@ ytm --help
 
 ## Authentication
 
-YouTube Music authentication is required and must be set up once by hand:
+YouTube Music authentication is required. Choose the method below:
+
+### Automated: Extract cookies from your browser
+
+```bash
+ytm auth --from-browser
+```
+
+Auto-detects a logged-in browser (tries Chrome, Chromium, Edge, Brave, Vivaldi, Opera, Firefox in order) and extracts YouTube cookies. To target a specific browser:
+
+```bash
+ytm auth --from-browser chrome
+```
+
+The command writes `~/.config/ytm/auth.json` at mode 0600, then validates it with a live API call. If validation fails the file is removed, so a set of credentials that does not work is never left behind to fail later.
+
+**Requires:** You must be logged in to <https://music.youtube.com> in the target browser.
+
+### Manual: Paste request headers from DevTools
+
+If `--from-browser` does not find your browser, use the interactive fallback:
 
 ```bash
 ytm auth
@@ -58,9 +78,17 @@ The command will prompt you to:
 
 The headers are stored in `~/.config/ytm/auth.json` with mode 0600. They must include `cookie` and `x-goog-authuser` to work.
 
-**Important:** Browser header auth expires when your YouTube session is revoked or the cookie ages out (typically after weeks). When it expires, the app will report it and you re-run `ytm auth` with fresh headers.
+### Session expiry
 
-**Why not OAuth?** ytmusicapi 1.12.1's OAuth path requires you to provision your own Google Cloud OAuth client (credentials, redirect URIs, etc.), which is impractical for a CLI tool. Browser headers are the only credentials a human can supply interactively.
+Browser header auth expires when your YouTube session is revoked or the cookie ages out (typically after weeks). When it expires, the app will report it and you re-run `ytm auth` (or `ytm auth --from-browser`) with fresh credentials.
+
+### Why not OAuth?
+
+ytmusicapi 1.12.1's OAuth path requires you to provision your own Google Cloud OAuth client (credentials, redirect URIs, etc.), which is impractical for a CLI tool. Browser headers are the only credentials a human can supply interactively.
+
+### Playback and authentication
+
+Search, library browsing, and playlist operations use your authenticated session normally. However, stream URL resolution (converting a video ID to a playable audio stream) proceeds unauthenticated as a fallback: when yt-dlp receives authenticated cookies, some YouTube accounts are placed in an experiment where all audio/video formats return no usable URLs. The resolver therefore tries authenticated first (necessary for private or age-restricted tracks) and falls back to the same request without cookies if needed. **Consequence:** tracks that are private, age-restricted, or otherwise account-gated may not resolve for playback, while search and library access remain fully authenticated.
 
 ## Usage
 
