@@ -118,6 +118,29 @@ def search(query, limit=20, yt=None):
     return to_tracks(results)
 
 
+def get_lyrics(video_id, yt=None):
+    """Fetch lyrics for a track, or None if it has none.
+
+    Returns (lyrics_text, source) -- both None when the track has no lyrics
+    available. Two calls under the hood: the watch playlist gives the lyrics
+    browseId, then that id is used to fetch the actual text.
+    """
+    yt = yt if yt is not None else client()
+    try:
+        watch = yt.get_watch_playlist(videoId=video_id)
+        browse_id = (watch or {}).get("lyrics")
+        if not browse_id:
+            return None, None
+        result = yt.get_lyrics(browse_id)
+    except YTMusicError as exc:
+        if is_expiry(exc):
+            raise AuthExpired(_EXPIRED_HINT) from exc
+        raise
+    if not result:
+        return None, None
+    return result.get("lyrics"), result.get("source")
+
+
 def library_playlists(limit=25, yt=None):
     """Return the user's remote playlists as Playlist objects."""
     yt = yt if yt is not None else client()

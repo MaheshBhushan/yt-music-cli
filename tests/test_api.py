@@ -144,6 +144,66 @@ def test_non_auth_server_error_is_not_swallowed():
         api.search("anything", yt=yt)
 
 
+class FakeLyricsYTMusic:
+    """Stand-in for the two calls behind api.get_lyrics."""
+
+    def __init__(self, browse_id="browse-1", lyrics_result=None, error=None):
+        self._browse_id = browse_id
+        self._lyrics_result = lyrics_result
+        self._error = error
+        self.watch_calls = []
+        self.lyrics_calls = []
+
+    def get_watch_playlist(self, videoId=None):
+        self.watch_calls.append(videoId)
+        if self._error:
+            raise self._error
+        data = {"tracks": []}
+        if self._browse_id is not None:
+            data["lyrics"] = self._browse_id
+        return data
+
+    def get_lyrics(self, browseId):
+        self.lyrics_calls.append(browseId)
+        return self._lyrics_result
+
+
+def test_get_lyrics_returns_normalised_text_and_source():
+    yt = FakeLyricsYTMusic(
+        browse_id="browse-1",
+        lyrics_result={"lyrics": "some lyrics text", "source": "Musixmatch"},
+    )
+    lyrics, source = api.get_lyrics("PYgcJpC6WAQ", yt=yt)
+    assert lyrics == "some lyrics text"
+    assert source == "Musixmatch"
+    assert yt.watch_calls == ["PYgcJpC6WAQ"]
+    assert yt.lyrics_calls == ["browse-1"]
+
+
+def test_get_lyrics_missing_browse_id_returns_none_without_second_call():
+    yt = FakeLyricsYTMusic(browse_id=None)
+    lyrics, source = api.get_lyrics("no-lyrics-track", yt=yt)
+    assert lyrics is None
+    assert source is None
+    assert yt.lyrics_calls == []
+
+
+def test_get_lyrics_null_result_returns_none():
+    yt = FakeLyricsYTMusic(browse_id="browse-1", lyrics_result=None)
+    lyrics, source = api.get_lyrics("v1", yt=yt)
+    assert lyrics is None
+    assert source is None
+
+
+def test_get_lyrics_expired_auth_raises_typed_autherror():
+    expired = YTMusicServerError(
+        "Server returned HTTP 401: Unauthorized.\nRequest had invalid authentication credentials."
+    )
+    yt = FakeLyricsYTMusic(error=expired)
+    with pytest.raises(auth.AuthExpired):
+        api.get_lyrics("v1", yt=yt)
+
+
 def test_playlist_normalisation_marks_remote_and_local():
     remote = api.to_playlist({"playlistId": "PL1", "title": "Mix", "count": "12"})
     assert (remote.playlist_id, remote.title, remote.track_count, remote.local) == ("PL1", "Mix", 12, False)
