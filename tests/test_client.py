@@ -144,6 +144,121 @@ def test_error_response_raises_client_error(sock_path):
         server.close()
 
 
+def test_request_works_while_a_listener_thread_is_running(sock_path):
+    """The regression: a listener thread must not steal the response that a
+    concurrent `request()` is waiting for."""
+    def handler(conn):
+        request = _recv_line(conn)
+        _send(conn, {"event": "position", "data": {"position": 0.5}})
+        _send(conn, {"id": request["id"], "ok": True, "data": "answered"})
+        time.sleep(1)
+
+    server = StubServer(sock_path, handler)
+    try:
+        client = Client(path=sock_path, auto_spawn=False)
+        events = []
+        client.on_event(lambda name, data: events.append((name, data)))
+        listener = threading.Thread(target=_swallow_listen, args=(client,), daemon=True)
+        listener.start()
+        time.sleep(0.1)  # let the listener get in first
+
+        result = {}
+        caller = threading.Thread(
+            target=lambda: result.setdefault("data", client.request("status")),
+            daemon=True,
+        )
+        caller.start()
+        caller.join(timeout=3)
+        assert not caller.is_alive(), "request() hung with a listener running"
+        assert result["data"] == "answered"
+        assert events == [("position", {"position": 0.5})]
+        client.close()
+    finally:
+        server.close()
+
+
+def _swallow_listen(client):
+    try:
+        client.listen()
+    except ClientError:
+        pass
+
+
+def test_many_requests_and_events_interleaved_are_never_misrouted(sock_path):
+    def handler(conn):
+        requests = [_recv_line(conn) for _ in range(3)]
+        _send(conn, {"event": "e1", "data": 1})
+        _send(conn, {"id": requests[2]["id"], "ok": True, "data": "r2"})
+        _send(conn, {"event": "e2", "data": 2})
+        _send(conn, {"id": requests[0]["id"], "ok": True, "data": "r0"})
+        _send(conn, {"event": "e3", "data": 3})
+        _send(conn, {"id": requests[1]["id"], "ok": True, "data": "r1"})
+        time.sleep(1)
+
+    server = StubServer(sock_path, handler)
+    try:
+        client = Client(path=sock_path, auto_spawn=False)
+        events = []
+        client.on_event(lambda name, data: events.append((name, data)))
+        listener = threading.Thread(target=_swallow_listen, args=(client,), daemon=True)
+        listener.start()
+
+        results = {}
+        barrier = threading.Barrier(3)
+
+        def call(index):
+            barrier.wait()
+            results[index] = client.request(f"cmd{index}")
+
+        threads = [
+            threading.Thread(target=call, args=(i,), daemon=True) for i in range(3)
+        ]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=3)
+            assert not thread.is_alive()
+
+        # each caller got the response carrying its own id
+        assert sorted(results.values()) == ["r0", "r1", "r2"]
+        assert sorted(events) == [("e1", 1), ("e2", 2), ("e3", 3)]
+        client.close()
+    finally:
+        server.close()
+
+
+def test_request_raises_when_the_daemon_dies_mid_request(sock_path):
+    def handler(conn):
+        _recv_line(conn)
+        conn.close()  # daemon dies without answering
+
+    server = StubServer(sock_path, handler)
+    try:
+        client = Client(path=sock_path, auto_spawn=False)
+        started = time.monotonic()
+        with pytest.raises(ClientError):
+            client.request("status")
+        assert time.monotonic() - started < 5, "request() hung instead of erroring"
+        client.close()
+    finally:
+        server.close()
+
+
+def test_close_stops_the_reader_thread(sock_path):
+    def handler(conn):
+        time.sleep(2)
+
+    server = StubServer(sock_path, handler)
+    try:
+        client = Client(path=sock_path, auto_spawn=False)
+        reader = client._reader
+        assert reader.is_alive()
+        client.close()
+        assert not reader.is_alive()
+    finally:
+        server.close()
+
+
 def test_unreachable_daemon_without_auto_spawn_raises_clean_error(sock_path):
     with pytest.raises(ClientError):
         Client(path=sock_path, auto_spawn=False)
