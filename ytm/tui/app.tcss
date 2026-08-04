@@ -1,0 +1,28 @@
+Screen {
+    layout: vertical;
+}
+
+#search-pane {
+    height: 1fr;
+}
+
+#middle-row {
+    height: 1fr;
+}
+
+#queue-pane {
+    width: 1fr;
+}
+
+#playlists-pane {
+    width: 1fr;
+}
+
+#now-playing {
+    height: 3;
+}
+
+#error-banner {
+    color: red;
+    height: auto;
+}
