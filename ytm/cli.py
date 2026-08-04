@@ -7,8 +7,11 @@ from ytm.client import Client, ClientError
 
 
 def cmd_auth(args):
-    """Run the interactive authentication setup."""
-    path = auth.setup()
+    """Run the authentication setup: interactive, or --from-browser to extract cookies."""
+    if args.from_browser is not None:
+        path = auth.from_browser(args.from_browser or None)
+    else:
+        path = auth.setup()
     print(f"Saved credentials to {path}")
 
 
@@ -108,6 +111,15 @@ def main():
     subparsers = parser.add_subparsers(dest="command")
 
     auth_parser = subparsers.add_parser("auth", help="set up YouTube Music authentication")
+    auth_parser.add_argument(
+        "--from-browser",
+        nargs="?",
+        const="",
+        default=None,
+        metavar="BROWSER",
+        help="extract cookies from a local browser profile instead of pasting headers "
+        "(auto-detects a logged-in browser if BROWSER is omitted)",
+    )
     auth_parser.set_defaults(func=cmd_auth)
 
     search_parser = subparsers.add_parser("search", help="search YouTube Music for songs")
