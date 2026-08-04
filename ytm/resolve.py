@@ -12,7 +12,7 @@ from datetime import datetime, timedelta
 
 import yt_dlp
 
-from ytm import auth
+from ytm import auth, pot
 
 STALE_WARNING_DAYS = 28
 
@@ -85,6 +85,11 @@ def ydl_opts(cookie_header, silent=False, **extra):
 
     `silent` suppresses yt-dlp's own error reporting, for an attempt that
     has a further fallback behind it and so must not look like a failure.
+
+    Also points yt-dlp at the PO token provider (see :mod:`ytm.pot`), which
+    is what lets the authenticated attempt come back with real stream URLs.
+    If the provider is unreachable the plugin just warns and carries on, so
+    the cookies-then-no-cookies fallback still applies.
     """
     opts = {
         "format": "bestaudio",
@@ -92,6 +97,7 @@ def ydl_opts(cookie_header, silent=False, **extra):
         "no_warnings": True,
         "noplaylist": True,
     }
+    opts.update(pot.ydl_opts())
     if silent:
         opts["logger"] = _SilentLogger()
     opts.update(extra)

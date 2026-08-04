@@ -14,6 +14,10 @@ startup. The shape and defaults are::
     [ui]
     theme = "dark"
 
+    [pot]
+    enabled = true
+    base_url = "http://127.0.0.1:4416"
+
     [keys]
     toggle = "space"
     next = "n"
@@ -41,6 +45,7 @@ DEFAULTS = {
     "audio": {"volume": 70, "device": "auto"},
     "behaviour": {"autoplay_radio": True, "confirm_remote_delete": True},
     "ui": {"theme": "dark"},
+    "pot": {"enabled": True, "base_url": "http://127.0.0.1:4416"},
     "keys": {
         "toggle": "space",
         "next": "n",
@@ -58,6 +63,8 @@ _TYPES = {
     ("behaviour", "autoplay_radio"): bool,
     ("behaviour", "confirm_remote_delete"): bool,
     ("ui", "theme"): str,
+    ("pot", "enabled"): bool,
+    ("pot", "base_url"): str,
     ("keys", "toggle"): str,
     ("keys", "next"): str,
     ("keys", "prev"): str,

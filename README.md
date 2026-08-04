@@ -15,6 +15,7 @@ No browser, no Electron, no window — audio plays while the terminal stays the 
 Run `pip install -e .` to install Python dependencies from `pyproject.toml`:
 - `ytmusicapi` — YouTube Music API
 - `yt-dlp` — stream URL resolution and offline cache downloads
+- `bgutil-ytdlp-pot-provider` — yt-dlp plugin that fetches PO tokens (BotGuard attestations) when YouTube demands one; see [PO token provider](#po-token-provider)
 - `textual` — terminal UI framework
 - `dbus-next` — MPRIS support (optional; degrades gracefully if missing or no session bus)
 
@@ -89,6 +90,32 @@ ytmusicapi 1.12.1's OAuth path requires you to provision your own Google Cloud O
 ### Playback and authentication
 
 Search, library browsing, and playlist operations use your authenticated session normally. However, stream URL resolution (converting a video ID to a playable audio stream) proceeds unauthenticated as a fallback: when yt-dlp receives authenticated cookies, some YouTube accounts are placed in an experiment where all audio/video formats return no usable URLs. The resolver therefore tries authenticated first (necessary for private or age-restricted tracks) and falls back to the same request without cookies if needed. **Consequence:** tracks that are private, age-restricted, or otherwise account-gated may not resolve for playback, while search and library access remain fully authenticated.
+
+### PO token provider
+
+Part of what YouTube asks for on such requests is a *PO token* — a BotGuard attestation that cannot be computed in Python. `ytm` supplies one through the maintained [`bgutil-ytdlp-pot-provider`](https://github.com/Brainicism/bgutil-ytdlp-pot-provider) yt-dlp plugin, which is installed as a dependency and asks a small HTTP service for tokens. The service runs as a Docker container:
+
+```bash
+docker run --name bgutil-provider --detach --init --restart unless-stopped \
+    --publish 4416:4416 brainicism/bgutil-ytdlp-pot-provider
+```
+
+You do not have to run that yourself, and you do not have to start anything after a reboot:
+
+- `ytmd` calls `ytm.pot.ensure_provider()` at startup. It pings `pot.base_url`; only if that fails does it `docker start` the container, and only if there is no container does it create one with the command above.
+- `--restart unless-stopped` means Docker itself brings the container back after a reboot (provided `docker.service` is enabled), so the daemon's check is normally a single local ping.
+
+It degrades rather than blocking playback. If Docker is missing, the container cannot start, or the service never answers, `ytmd` prints one line to stderr and carries on; resolution falls back to the cookies-then-no-cookies chain exactly as before. Set `enabled = false` under `[pot]` to opt out entirely.
+
+**What this does and does not buy you, measured on a SABR-forced account.** With the token, the authenticated request stops failing and returns a stream URL — without it, that request fails outright. But those authenticated URLs answer `403` to the unbounded `Range: bytes=0-` that ffmpeg and mpv always send, while accepting bounded ranges, so mpv cannot play them:
+
+```
+authenticated URL   bytes=0-100000  ->  206
+authenticated URL   bytes=0-        ->  403
+unauthenticated URL bytes=0-        ->  206
+```
+
+Those formats are SABR-delivered and are not plain progressive HTTP. So on such an account the unauthenticated fallback is still what produces the playable URL, and the token changes nothing you can hear. The provider is kept wired because it is free at playback time and starts paying off the moment either side of that changes — YouTube dropping the experiment for the account, or yt-dlp handing mpv a stream it can consume. Streaming SABR would mean piping yt-dlp's output into mpv instead of passing a URL, which costs seeking; that trade was considered and declined.
 
 ## Usage
 
@@ -174,6 +201,10 @@ confirm_remote_delete = true
 [ui]
 theme = "dark"
 
+[pot]
+enabled = true
+base_url = "http://127.0.0.1:4416"
+
 [keys]
 toggle = "space"
 next = "n"
@@ -190,6 +221,8 @@ quit = "q"
 | `audio` | `device` | string | `"auto"` | Audio device for mpv. Use `"auto"` or a device string (e.g., `"pulse"`). |
 | `behaviour` | `autoplay_radio` | bool | `true` | Auto-fill queue with radio recommendations when it empties. |
 | `behaviour` | `confirm_remote_delete` | bool | `true` | Require explicit `confirm=true` for deleting/removing tracks from remote playlists. |
+| `pot` | `enabled` | bool | `true` | Whether to use the PO token provider (start it, and point yt-dlp at it). |
+| `pot` | `base_url` | string | `"http://127.0.0.1:4416"` | Where the PO token service listens. The port is also the one the container publishes. |
 | `ui` | `theme` | string | `"dark"` | Textual theme: `"dark"` or `"light"`. Unknown themes fall back to dark with a warning. |
 | `keys` | `toggle` | string | `"space"` | Key to toggle play/pause. |
 | `keys` | `next` | string | `"n"` | Key to skip to next. |

@@ -34,7 +34,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-from ytm import api, auth, cache, config as config_mod, playlists_local
+from ytm import api, auth, cache, config as config_mod, playlists_local, pot
 from ytm.daemon import mpris
 from ytm.daemon import state as state_mod
 from ytm.daemon.player import Player
@@ -790,6 +790,15 @@ async def run(path=None):
     except RuntimeError as exc:
         print(exc, file=sys.stderr)
         return 1
+    # the PO token provider is what makes authenticated resolution work; a
+    # daemon that cannot reach it still starts, and resolution falls back to
+    # trying without cookies, so this is advisory only
+    if not await asyncio.to_thread(pot.ensure_provider):
+        print(
+            "ytm: PO token provider unavailable; "
+            "falling back to unauthenticated stream resolution",
+            file=sys.stderr,
+        )
     daemon = Daemon(path=path)
     await daemon.start()
     daemon.restore()

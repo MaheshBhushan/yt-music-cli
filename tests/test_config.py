@@ -13,6 +13,7 @@ def test_missing_file_yields_documented_defaults(tmp_path):
         "audio": {"volume": 70, "device": "auto"},
         "behaviour": {"autoplay_radio": True, "confirm_remote_delete": True},
         "ui": {"theme": "dark"},
+        "pot": {"enabled": True, "base_url": "http://127.0.0.1:4416"},
         "keys": {
             "toggle": "space",
             "next": "n",
