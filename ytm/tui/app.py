@@ -13,6 +13,7 @@ from textual.widgets import Input, DataTable, Static
 
 from ytm import config as config_mod
 from ytm.client import Client, ClientError
+from ytm.tui.lyrics import LyricsPane
 from ytm.tui.nowplaying import NowPlaying
 from ytm.tui.playlists import PlaylistsPane
 from ytm.tui.queue import QueuePane
@@ -41,6 +42,17 @@ class DaemonEvent(Message):
         self.data = data
 
 
+class LyricsFetched(Message):
+    """The result of a background `lyrics` request, handed back to the
+    Textual message loop the same way `DaemonEvent` is."""
+
+    def __init__(self, video_id, data, error):
+        super().__init__()
+        self.video_id = video_id
+        self.data = data
+        self.error = error
+
+
 class YTMApp(App):
     """ytm's full-screen player: search, queue, playlists (later) and
     now-playing, all driven by pushed daemon events."""
@@ -55,8 +67,8 @@ class YTMApp(App):
         ("space", "toggle", "Play/Pause"),
         ("n", "next", "Next"),
         ("p", "prev", "Prev"),
-        ("left", "seek_back", "Seek -5s"),
-        ("right", "seek_forward", "Seek +5s"),
+        Binding("left", "seek_back", "Seek -5s", priority=True),
+        Binding("right", "seek_forward", "Seek +5s", priority=True),
         ("plus", "volume_up", "Vol +"),
         ("minus", "volume_down", "Vol -"),
         ("tab", "cycle_pane", "Cycle panes"),
@@ -77,6 +89,7 @@ class YTMApp(App):
             self.client = None
             self._client_error = str(exc)
         self._listener_thread = None
+        self._lyrics_video_id = None
 
     @staticmethod
     def _resolve_theme(name):
@@ -105,8 +118,8 @@ class YTMApp(App):
             (keys["toggle"], "toggle", "Play/Pause"),
             (keys["next"], "next", "Next"),
             (keys["prev"], "prev", "Prev"),
-            ("left", "seek_back", "Seek -5s"),
-            ("right", "seek_forward", "Seek +5s"),
+            Binding("left", "seek_back", "Seek -5s", priority=True),
+            Binding("right", "seek_forward", "Seek +5s", priority=True),
             ("plus", "volume_up", "Vol +"),
             ("minus", "volume_down", "Vol -"),
             ("tab", "cycle_pane", "Cycle panes"),
@@ -121,6 +134,7 @@ class YTMApp(App):
         with Horizontal(id="middle-row"):
             yield QueuePane(id="queue-pane")
             yield PlaylistsPane(id="playlists-pane")
+            yield LyricsPane(id="lyrics-pane")
         yield NowPlaying(id="now-playing")
         yield Static("", id="error-banner")
 
@@ -160,10 +174,43 @@ class YTMApp(App):
     def on_daemon_event(self, message: DaemonEvent):
         self._apply_event(message.event, message.data)
 
+    def _fetch_lyrics(self, video_id):
+        """Kick off a background `lyrics` request for `video_id`.
+
+        Mirrors `_listen`'s thread + `post_message` hand-off: the request
+        blocks on a background thread so a slow/unresponsive daemon never
+        freezes the UI, and the result is marshalled back onto Textual's
+        own loop via `LyricsFetched`.
+        """
+        if video_id is None or self.client is None:
+            return
+        self._lyrics_video_id = video_id
+
+        def worker():
+            try:
+                data = self.client.request("lyrics", {"video_id": video_id})
+            except ClientError as exc:
+                self.post_message(LyricsFetched(video_id, None, str(exc)))
+            else:
+                self.post_message(LyricsFetched(video_id, data, None))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def on_lyrics_fetched(self, message: LyricsFetched):
+        # a later track_changed may have superseded this in-flight request
+        if message.video_id != self._lyrics_video_id:
+            return
+        pane = self.query_one(LyricsPane)
+        if message.error is not None:
+            pane.set_error(message.error)
+            return
+        pane.set_lyrics((message.data or {}).get("lyrics"))
+
     def _apply_event(self, event, data):
         now_playing = self.query_one(NowPlaying)
         if event == "track_changed":
             now_playing.on_track_changed(data)
+            self._fetch_lyrics((data or {}).get("video_id"))
         elif event == "position":
             now_playing.on_position(data)
         elif event == "state_changed":
@@ -212,8 +259,12 @@ class YTMApp(App):
         if message.input.id != "search-input":
             return
         data = self._request("search", {"query": message.value})
-        if data is not None:
-            self.query_one(SearchPane).set_results(data.get("tracks") or [])
+        if data is None:
+            return
+        tracks = data.get("tracks") or []
+        self.query_one(SearchPane).set_results(tracks)
+        if tracks:
+            self._request("play", self._track_args(tracks[0]))
 
     def on_data_table_row_selected(self, message: DataTable.RowSelected):
         if message.data_table.id != "search-results":
@@ -225,10 +276,8 @@ class YTMApp(App):
     def action_focus_search(self):
         self.query_one("#search-input", Input).focus()
 
-    def _selected_track_args(self):
-        track = self.query_one(SearchPane).selected_track()
-        if track is None:
-            return None
+    @staticmethod
+    def _track_args(track):
         return {
             "video_id": track.get("video_id"),
             "title": track.get("title"),
@@ -237,6 +286,12 @@ class YTMApp(App):
             "duration": track.get("duration"),
             "duration_seconds": track.get("duration_seconds"),
         }
+
+    def _selected_track_args(self):
+        track = self.query_one(SearchPane).selected_track()
+        if track is None:
+            return None
+        return self._track_args(track)
 
     def action_play_selected(self):
         args = self._selected_track_args()

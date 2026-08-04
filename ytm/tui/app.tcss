@@ -18,6 +18,15 @@ Screen {
     width: 1fr;
 }
 
+#lyrics-pane {
+    width: 2fr;
+    border-left: solid $panel;
+}
+
+#lyrics-scroll {
+    height: 1fr;
+}
+
 #now-playing {
     height: 3;
 }

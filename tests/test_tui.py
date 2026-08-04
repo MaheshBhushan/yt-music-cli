@@ -11,6 +11,7 @@ from textual.widgets import DataTable
 
 from ytm.client import ClientError
 from ytm.tui.app import YTMApp
+from ytm.tui.lyrics import LyricsPane, NO_LYRICS_TEXT
 from ytm.tui.nowplaying import NowPlaying
 from ytm.tui.queue import QueuePane
 from ytm.tui.search import SearchPane
@@ -104,20 +105,75 @@ def test_search_populates_table():
     asyncio.run(scenario())
 
 
-def test_enter_plays_selected_row():
+def test_enter_in_search_input_plays_first_result():
+    """Change A: submitting the search box plays the first result
+    immediately, without also needing Enter on the results table."""
+
     async def scenario():
         stub = StubClient()
         app = YTMApp(client=stub)
         async with app.run_test() as pilot:
             await _search(pilot)
-            table = app.query_one("#search-results", DataTable)
-            table.focus()
-            await pilot.pause()
-            await pilot.press("enter")
-            await pilot.pause()
             play_calls = [c for c in stub.calls if c[0] == "play"]
             assert len(play_calls) == 1
             assert play_calls[0][1]["video_id"] == "abc123"
+
+    asyncio.run(scenario())
+
+
+def test_enter_in_search_input_with_no_results_sends_no_play():
+    async def scenario():
+        class EmptySearchClient(StubClient):
+            def request(self, cmd, args=None):
+                if cmd == "search":
+                    self.calls.append((cmd, args))
+                    return {"tracks": []}
+                return super().request(cmd, args)
+
+        stub = EmptySearchClient()
+        app = YTMApp(client=stub)
+        async with app.run_test() as pilot:
+            await _search(pilot)
+            table = app.query_one("#search-results", DataTable)
+            assert table.row_count == 0
+            assert not any(c[0] == "play" for c in stub.calls)
+            assert not app._exit
+
+    asyncio.run(scenario())
+
+
+def test_enter_on_selected_row_plays_that_row_not_the_first():
+    """Enter on the results table plays the highlighted row -- distinct
+    from the auto-play-first-result triggered by submitting the search
+    box (Change A)."""
+
+    TRACK_TWO = dict(TRACK, video_id="zzz999", title="something else")
+
+    async def scenario():
+        class TwoResultsClient(StubClient):
+            def request(self, cmd, args=None):
+                if cmd == "search":
+                    self.calls.append((cmd, args))
+                    return {"tracks": [TRACK, TRACK_TWO]}
+                return super().request(cmd, args)
+
+        stub = TwoResultsClient()
+        app = YTMApp(client=stub)
+        async with app.run_test() as pilot:
+            await _search(pilot)
+            table = app.query_one("#search-results", DataTable)
+            table.focus()
+            table.cursor_coordinate = (1, 0)
+            await pilot.pause()
+            await pilot.press("enter")
+            await pilot.pause()
+
+            play_calls = [c for c in stub.calls if c[0] == "play"]
+            # the first play came from submitting the search box (first
+            # result); the second came from Enter on the selected row
+            assert len(play_calls) == 2
+            assert play_calls[0][1]["video_id"] == "abc123"
+            assert play_calls[1][1]["video_id"] == "zzz999"
 
     asyncio.run(scenario())
 
@@ -363,27 +419,164 @@ def test_client_error_on_playlist_action_shows_banner_not_crash():
 
 
 def test_smoke_render_layout():
-    """Headless smoke run: the app starts up and lays out all panes."""
+    """Headless smoke run: the app starts up and lays out all panes,
+    including the lyrics pane (Change B), at two terminal sizes."""
 
-    async def scenario():
+    async def scenario(size):
         stub = StubClient()
         app = YTMApp(client=stub)
-        async with app.run_test(size=(100, 30)) as pilot:
+        async with app.run_test(size=size) as pilot:
             await pilot.pause()
             assert app.query_one(SearchPane) is not None
             assert app.query_one(QueuePane) is not None
             assert app.query_one(NowPlaying) is not None
             assert app.query_one("#playlists-pane") is not None
+            assert app.query_one(LyricsPane) is not None
             svg = app.export_screenshot()
             assert "<svg" in svg
             assert len(svg) > 1000
             return svg
 
-    svg = asyncio.run(scenario())
-    with open("/tmp/ytm_tui_smoke.svg", "w") as fh:
-        fh.write(svg)
+    svg_100x30 = asyncio.run(scenario((100, 30)))
+    with open("/tmp/ytm_tui_smoke_100x30.svg", "w") as fh:
+        fh.write(svg_100x30)
+    print(f"Smoke screenshot written to /tmp/ytm_tui_smoke_100x30.svg ({len(svg_100x30)} bytes)")
 
-    print(f"Smoke screenshot written to /tmp/ytm_tui_smoke.svg ({len(svg)} bytes)")
+    svg_120x40 = asyncio.run(scenario((120, 40)))
+    with open("/tmp/ytm_tui_smoke_120x40.svg", "w") as fh:
+        fh.write(svg_120x40)
+    print(f"Smoke screenshot written to /tmp/ytm_tui_smoke_120x40.svg ({len(svg_120x40)} bytes)")
+
+
+# -- lyrics pane (Change B) -------------------------------------------------
+
+
+class LyricsStubClient(StubClient):
+    """A stub whose `lyrics` command is scriptable per test."""
+
+    def __init__(self, lyrics_response=None, lyrics_error=None, on_lyrics=None):
+        super().__init__()
+        self._lyrics_response = lyrics_response
+        self._lyrics_error = lyrics_error
+        self._on_lyrics = on_lyrics
+
+    def request(self, cmd, args=None):
+        if cmd == "lyrics":
+            self.calls.append((cmd, args))
+            if self._on_lyrics is not None:
+                self._on_lyrics(args)
+            if self._lyrics_error is not None:
+                raise ClientError(self._lyrics_error)
+            return self._lyrics_response
+        return super().request(cmd, args)
+
+
+def test_track_changed_fetches_and_renders_lyrics():
+    async def scenario():
+        stub = LyricsStubClient(
+            lyrics_response={
+                "video_id": "abc123",
+                "lyrics": "la la la\nsecond line",
+                "source": "test",
+            }
+        )
+        app = YTMApp(client=stub)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            stub.push("track_changed", {"video_id": "abc123", "title": "Song"})
+            await pilot.pause()
+
+            lyrics_calls = [c for c in stub.calls if c[0] == "lyrics"]
+            assert len(lyrics_calls) == 1
+            assert lyrics_calls[0][1] == {"video_id": "abc123"}
+
+            content = app.query_one("#lyrics-content")
+            assert "la la la" in str(content.render())
+
+    asyncio.run(scenario())
+
+
+def test_track_changed_with_null_lyrics_renders_no_lyrics_available():
+    async def scenario():
+        stub = LyricsStubClient(
+            lyrics_response={"video_id": "abc123", "lyrics": None, "source": None}
+        )
+        app = YTMApp(client=stub)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            stub.push("track_changed", {"video_id": "abc123", "title": "Song"})
+            await pilot.pause()
+
+            content = app.query_one("#lyrics-content")
+            assert str(content.render()) == NO_LYRICS_TEXT
+
+    asyncio.run(scenario())
+
+
+def test_lyrics_client_error_renders_message_without_crashing():
+    async def scenario():
+        stub = LyricsStubClient(lyrics_error="lyrics service unavailable")
+        app = YTMApp(client=stub)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            stub.push("track_changed", {"video_id": "abc123", "title": "Song"})
+            await pilot.pause()
+
+            content = app.query_one("#lyrics-content")
+            assert "lyrics service unavailable" in str(content.render())
+            assert not app._exit
+
+    asyncio.run(scenario())
+
+
+def test_slow_lyrics_fetch_does_not_block_ui():
+    """The lyrics fetch runs on a background thread; the app keeps
+    processing input (e.g. volume keys) while a slow request is in
+    flight."""
+
+    import threading
+    import time
+
+    release = threading.Event()
+
+    def slow_lyrics(_args):
+        # block the *lyrics* worker thread only -- the UI/event loop must
+        # remain free to handle other input while this is stuck
+        release.wait(timeout=5)
+
+    async def scenario():
+        stub = LyricsStubClient(
+            lyrics_response={"video_id": "abc123", "lyrics": "slow", "source": None},
+            on_lyrics=slow_lyrics,
+        )
+        app = YTMApp(client=stub)
+        async with app.run_test() as pilot:
+            app.query_one("#queue-table", DataTable).focus()
+            await pilot.pause()
+
+            stub.push("track_changed", {"video_id": "abc123", "title": "Song"})
+            await pilot.pause()
+
+            # the lyrics request is now blocked on `release`; the app must
+            # still respond to a keypress while it waits
+            start_volume = app._volume
+            await pilot.press("plus")
+            await pilot.pause()
+            assert app._volume == start_volume + 5
+
+            lyrics_calls = [c for c in stub.calls if c[0] == "lyrics"]
+            assert len(lyrics_calls) == 1
+
+            content = app.query_one("#lyrics-content")
+            # still showing nothing/old content -- the slow fetch hasn't
+            # resolved yet, proving it didn't block to get here
+            assert "slow" not in str(content.render())
+
+            release.set()
+            await pilot.pause(0.2)
+            assert "slow" in str(content.render())
+
+    asyncio.run(scenario())
 
 
 # -- config-driven keybindings and themes ----------------------------------
