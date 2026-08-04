@@ -157,14 +157,22 @@ class FakeQueue:
             self._index -= 1
         return self.current
 
+    def play_at(self, index):
+        if not (0 <= index < len(self._tracks)):
+            raise IndexError(index)
+        self._index = index
+        return self.current
+
 
 class FakeYT:
     """Stands in for ytmusicapi: search plus get_watch_playlist."""
 
-    def __init__(self, results=None, radio=None, error=None):
+    def __init__(self, results=None, radio=None, error=None, lyrics=None):
         self.results = results if results is not None else []
         self.radio = radio if radio is not None else []
         self.error = error
+        self.lyrics = lyrics
+        self.lyrics_calls = 0
 
     def search(self, query, filter=None, limit=None):
         if self.error:
@@ -172,7 +180,16 @@ class FakeYT:
         return self.results
 
     def get_watch_playlist(self, videoId=None):
-        return {"tracks": self.radio}
+        data = {"tracks": self.radio}
+        if self.lyrics is not None:
+            data["lyrics"] = "lyrics-browse-id"
+        return data
+
+    def get_lyrics(self, browseId):
+        self.lyrics_calls += 1
+        if self.lyrics is None:
+            return None
+        return {"lyrics": self.lyrics, "source": "Source"}
 
 
 @pytest.fixture
@@ -259,6 +276,7 @@ ALL_COMMANDS = [
     ("queue_move", {"from_index": 0, "to_index": 1}),
     ("queue_remove", {"index": 0}),
     ("radio", {"video_id": "vid1"}),
+    ("lyrics", {"video_id": "vid1"}),
     ("queue_clear", {}),
     ("shutdown", {}),
 ]
@@ -293,7 +311,7 @@ def test_all_listed_commands_are_routed(tmp_path, sock_path):
     expected = {
         "search", "play", "enqueue", "pause", "resume", "toggle", "next", "prev",
         "seek", "volume", "status", "queue_get", "queue_clear", "queue_move",
-        "queue_remove", "radio", "shutdown",
+        "queue_remove", "radio", "lyrics", "shutdown",
         "playlist_list", "playlist_get", "playlist_create", "playlist_add",
         "playlist_remove", "playlist_delete",
     }
@@ -911,3 +929,122 @@ def test_double_sigterm_during_shutdown_does_not_hang(tmp_path, sock_path, monke
     result = asyncio.run(scenario())
     assert result == 0
     assert not sock_path.exists()
+
+
+# -- play must not duplicate a track already in the queue -----------------
+
+
+def test_play_existing_track_moves_cursor_without_duplicating(tmp_path, sock_path):
+    daemon, player, queue = build_daemon(tmp_path, sock_path)
+    queue.enqueue([make_track("a"), make_track("b"), make_track("c")])
+    queue._index = 0
+    daemon._cmd_play({"video_id": "c"})
+    assert [t.video_id for t in queue.tracks] == ["a", "b", "c"]
+    assert queue.index == 2
+
+
+def test_play_existing_track_jumps_to_first_occurrence(tmp_path, sock_path):
+    daemon, player, queue = build_daemon(tmp_path, sock_path)
+    queue.enqueue([make_track("a"), make_track("b"), make_track("a")])
+    queue._index = 1
+    daemon._cmd_play({"video_id": "a"})
+    assert [t.video_id for t in queue.tracks] == ["a", "b", "a"]
+    assert queue.index == 0
+
+
+def test_play_new_track_still_inserts_after_current(tmp_path, sock_path):
+    daemon, player, queue = build_daemon(tmp_path, sock_path)
+    queue.enqueue([make_track("a"), make_track("b")])
+    queue._index = 0
+    daemon._cmd_play({"video_id": "z"})
+    assert [t.video_id for t in queue.tracks] == ["a", "z", "b"]
+    assert queue.index == 1
+
+
+def test_play_current_track_restarts_rather_than_advances(tmp_path, sock_path):
+    daemon, player, queue = build_daemon(tmp_path, sock_path)
+    queue.enqueue([make_track("a"), make_track("b")])
+    queue._index = 0
+    daemon._cmd_play({"video_id": "a"})
+    assert [t.video_id for t in queue.tracks] == ["a", "b"]
+    assert queue.index == 0
+
+
+def test_enqueue_still_appends_duplicates_unchanged(tmp_path, sock_path):
+    daemon, player, queue = build_daemon(tmp_path, sock_path)
+    daemon._cmd_enqueue({"video_id": "a"})
+    daemon._cmd_enqueue({"video_id": "a"})
+    assert [t.video_id for t in queue.tracks] == ["a", "a"]
+
+
+def test_play_existing_track_invalidates_prefetch_via_real_queue(tmp_path, sock_path):
+    from ytm.daemon.queue import Queue
+
+    player = FakePlayer()
+    resolved = []
+
+    def resolver(video_id):
+        resolved.append(video_id)
+        return f"url-{video_id}"
+
+    queue = Queue(player, resolver=resolver, yt=FakeYT(), autoplay_radio=False)
+    daemon = Daemon(
+        path=sock_path,
+        player=player,
+        queue=queue,
+        state_path=tmp_path / "state.json",
+        yt=FakeYT(),
+    )
+    queue.enqueue([make_track("a"), make_track("b"), make_track("c")])
+    # prime a prefetch of "b" (the track after current "a")
+    queue._prefetch_next()
+    assert queue._prefetch is not None and queue._prefetch[0] == "b"
+    # jumping straight to "c" must drop that stale prefetch
+    daemon._cmd_play({"video_id": "c"})
+    assert queue.index == 2
+    assert queue._prefetch is None
+
+
+# -- lyrics command ---------------------------------------------------------
+
+
+def test_lyrics_returns_normalised_text(tmp_path, sock_path):
+    yt = FakeYT(lyrics="line one\nline two")
+    daemon, _, _ = build_daemon(tmp_path, sock_path, yt=yt)
+    response = daemon._cmd_lyrics({"video_id": "PYgcJpC6WAQ"})
+    assert response == {
+        "video_id": "PYgcJpC6WAQ",
+        "lyrics": "line one\nline two",
+        "source": "Source",
+    }
+
+
+def test_lyrics_missing_is_ok_true_with_null(tmp_path, sock_path):
+    yt = FakeYT(lyrics=None)
+    daemon, _, _ = build_daemon(tmp_path, sock_path, yt=yt)
+    response = daemon._cmd_lyrics({"video_id": "no-lyrics-track"})
+    assert response == {"video_id": "no-lyrics-track", "lyrics": None, "source": None}
+
+
+def test_lyrics_cache_prevents_second_fetch(tmp_path, sock_path):
+    yt = FakeYT(lyrics="cached text")
+    daemon, _, _ = build_daemon(tmp_path, sock_path, yt=yt)
+    daemon._cmd_lyrics({"video_id": "v1"})
+    daemon._cmd_lyrics({"video_id": "v1"})
+    assert yt.lyrics_calls == 1
+
+
+def test_lyrics_malformed_args_returns_ok_false(tmp_path, sock_path):
+    async def scenario():
+        daemon, _, _ = build_daemon(tmp_path, sock_path)
+        await daemon.start()
+        client = await connect(sock_path)
+        response = await client.call(1, "lyrics", video_id=123)
+        follow_up = await client.call(2, "status")
+        await client.close()
+        await daemon.stop()
+        return response, follow_up
+
+    response, follow_up = asyncio.run(scenario())
+    assert response["ok"] is False
+    assert follow_up["ok"] is True

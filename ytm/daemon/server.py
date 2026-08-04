@@ -45,6 +45,9 @@ SOCKET_NAME = "ytmd.sock"
 #: minimum seconds between two pushed `position` events
 POSITION_INTERVAL = 1.0
 
+#: max distinct video_ids kept in the in-memory lyrics cache
+LYRICS_CACHE_LIMIT = 100
+
 
 def socket_path():
     """The daemon socket path, falling back when XDG_RUNTIME_DIR is unset."""
@@ -229,6 +232,9 @@ class Daemon:
         self._last_position = 0.0
         self._last_position_push = 0.0
         self._mpris = None
+        #: in-memory only, per video_id -- (lyrics, source), bounded by
+        #: LYRICS_CACHE_LIMIT so repeated switching doesn't refetch
+        self._lyrics_cache = {}
 
         #: routing table -- later subtasks add `playlist_*` entries here only
         self._routes = {
@@ -248,6 +254,7 @@ class Daemon:
             "queue_move": self._cmd_queue_move,
             "queue_remove": self._cmd_queue_remove,
             "radio": self._cmd_radio,
+            "lyrics": self._cmd_lyrics,
             "shutdown": self._cmd_shutdown,
             "playlist_list": self._cmd_playlist_list,
             "playlist_get": self._cmd_playlist_get,
@@ -410,7 +417,14 @@ class Daemon:
 
     def _cmd_play(self, args):
         track = self._track_from_args(args)
-        if not self._queue.tracks:
+        existing = None
+        for i, queued in enumerate(self._queue.tracks):
+            if queued.video_id == track.video_id:
+                existing = i
+                break
+        if existing is not None:
+            self._queue.play_at(existing)
+        elif not self._queue.tracks:
             self._queue.enqueue(track)
         else:
             self._queue.enqueue(track, position=self._queue.index + 1)
@@ -519,6 +533,17 @@ class Daemon:
         self._emit_track_changed()
         self._emit_queue_changed()
         return self._queue_data()
+
+    def _cmd_lyrics(self, args):
+        video_id = _req_str(args, "video_id")
+        if video_id in self._lyrics_cache:
+            lyrics, source = self._lyrics_cache[video_id]
+        else:
+            lyrics, source = api.get_lyrics(video_id, yt=self._client())
+            if len(self._lyrics_cache) >= LYRICS_CACHE_LIMIT:
+                self._lyrics_cache.pop(next(iter(self._lyrics_cache)))
+            self._lyrics_cache[video_id] = (lyrics, source)
+        return {"video_id": video_id, "lyrics": lyrics, "source": source}
 
     def _cmd_shutdown(self, args):
         # the stop is triggered only once the response has been flushed, so

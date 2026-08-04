@@ -172,6 +172,14 @@ class Queue:
         self._play_current()
         return self.current
 
+    def play_at(self, index):
+        """Move the cursor to `index` and (re)play it; returns the new current."""
+        if not (0 <= index < len(self._tracks)):
+            raise IndexError(index)
+        self._index = index
+        self._play_current()
+        return self.current
+
     # -- playback ----------------------------------------------------------
 
     def _play_current(self):

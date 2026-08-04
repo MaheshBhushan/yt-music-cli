@@ -220,6 +220,34 @@ def test_out_of_range_move_and_remove_raise_without_corrupting(q):
     assert q.index == 0
 
 
+def test_play_at_moves_cursor_and_plays(q):
+    q, player, resolver, _ = q
+    q.enqueue([track("a"), track("b"), track("c")])
+    result = q.play_at(2)
+    assert result.video_id == "c"
+    assert q.index == 2
+    assert resolver.calls[-1] == "c"
+    assert player.loaded[-1].startswith("https://stream.test/c")
+
+
+def test_play_at_out_of_range_raises_without_corrupting(q):
+    q, _, _, _ = q
+    q.enqueue([track("a"), track("b")])
+    with pytest.raises(IndexError):
+        q.play_at(5)
+    assert [t.video_id for t in q.tracks] == ["a", "b"]
+    assert q.index == 0
+
+
+def test_play_at_invalidates_stale_prefetch(q):
+    q, player, resolver, _ = q
+    q.enqueue([track("a"), track("b"), track("c")])
+    q._prefetch_next()
+    assert q._prefetch is not None and q._prefetch[0] == "b"
+    q.play_at(2)
+    assert q._prefetch is None
+
+
 # -- criterion 3: radio autoplay -----------------------------------------
 
 
