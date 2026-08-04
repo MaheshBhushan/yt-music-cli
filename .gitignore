@@ -1,0 +1,8 @@
+auth.json
+state.json
+__pycache__/
+*.pyc
+.venv/
+.cache/
+*.egg-info/
+.pytest_cache/

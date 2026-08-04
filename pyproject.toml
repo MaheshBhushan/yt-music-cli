@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ytm"
+version = "0.1.0"
+description = "YouTube Music CLI and daemon"
+requires-python = ">=3.11"
+dependencies = [
+    "ytmusicapi",
+    "yt-dlp",
+    "textual",
+    "dbus-next",
+]
+
+[project.optional-dependencies]
+dev = ["pytest"]
+
+[project.scripts]
+ytm = "ytm.cli:main"
+ytmd = "ytm.daemon.server:main"
