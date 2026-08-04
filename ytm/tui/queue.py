@@ -20,7 +20,23 @@ class QueuePane(Vertical):
         table.clear()
         tracks = (data or {}).get("tracks") or []
         index = (data or {}).get("index")
+        self._tracks = tracks
         for position, track in enumerate(tracks):
             marker = ">" if position == index else " "
             label = f"{track.get('title', '')} — {track.get('artist', '')}"
-            table.add_row(f"{marker}{position + 1}.", label, key=track.get("video_id"))
+            table.add_row(f"{marker}{position + 1}.", label, key=str(position))
+
+    def selected_track(self):
+        """The Track dict for the currently highlighted row, or None."""
+        table = self.query_one("#queue-table", DataTable)
+        if table.row_count == 0 or table.cursor_row is None:
+            return None
+        try:
+            row_key, _ = table.coordinate_to_cell_key(table.cursor_coordinate)
+        except Exception:
+            return None
+        tracks = getattr(self, "_tracks", [])
+        try:
+            return tracks[int(row_key.value)]
+        except (TypeError, ValueError, IndexError):
+            return None

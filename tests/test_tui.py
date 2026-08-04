@@ -442,3 +442,97 @@ def test_dark_and_light_theme_resolve_to_different_styles():
         assert dark_primary != light_primary
 
     asyncio.run(scenario())
+
+
+def _dup_track(video_id, title):
+    return {
+        "video_id": video_id,
+        "title": title,
+        "artist": "Sid Sriram",
+        "album": "Sarvam Thaala Mayam",
+        "duration": "5:12",
+        "duration_seconds": 312,
+    }
+
+
+class DupQueueClient(StubClient):
+    """A stub whose queue contains the same video_id at two positions."""
+
+    def request(self, cmd, args=None):
+        self.calls.append((cmd, args))
+        if cmd == "queue_get":
+            return {
+                "tracks": [
+                    _dup_track("abc123", "first play"),
+                    _dup_track("zzz999", "something else"),
+                    _dup_track("abc123", "replayed"),
+                ],
+                "index": 0,
+            }
+        return super().request(cmd, args)
+
+
+def test_queue_with_duplicate_video_id_renders_without_crashing():
+    async def scenario():
+        stub = DupQueueClient()
+        app = YTMApp(client=stub)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            table = app.query_one("#queue-table", DataTable)
+            assert table.row_count == 3
+            svg = app.export_screenshot()
+            assert svg
+
+    asyncio.run(scenario())
+
+
+def test_selecting_second_duplicate_queue_row_resolves_correct_track():
+    async def scenario():
+        stub = DupQueueClient()
+        app = YTMApp(client=stub)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            pane = app.query_one(QueuePane)
+            table = app.query_one("#queue-table", DataTable)
+            table.focus()
+
+            table.cursor_coordinate = (0, 0)
+            await pilot.pause()
+            first = pane.selected_track()
+            assert first["video_id"] == "abc123"
+            assert first["title"] == "first play"
+
+            table.cursor_coordinate = (2, 0)
+            await pilot.pause()
+            second = pane.selected_track()
+            assert second["video_id"] == "abc123"
+            assert second["title"] == "replayed"
+
+    asyncio.run(scenario())
+
+
+class DupSearchClient(StubClient):
+    """A stub whose search results repeat a video_id at two positions."""
+
+    def request(self, cmd, args=None):
+        self.calls.append((cmd, args))
+        if cmd == "search":
+            return {
+                "tracks": [
+                    _dup_track("abc123", "first result"),
+                    _dup_track("abc123", "second result"),
+                ]
+            }
+        return super().request(cmd, args)
+
+
+def test_search_results_with_duplicate_video_id_renders_without_crashing():
+    async def scenario():
+        stub = DupSearchClient()
+        app = YTMApp(client=stub)
+        async with app.run_test() as pilot:
+            await _search(pilot)
+            table = app.query_one("#search-results", DataTable)
+            assert table.row_count == 2
+
+    asyncio.run(scenario())

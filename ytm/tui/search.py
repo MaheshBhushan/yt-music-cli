@@ -19,20 +19,22 @@ class SearchPane(Vertical):
     def set_results(self, tracks):
         """Replace the results table's rows with `tracks` (list of dicts).
 
-        Each row's key is the track's video_id, so the selected track can be
-        recovered later without re-parsing displayed text.
+        Each row's key is its position in `tracks`, so the selected track can
+        be recovered later without re-parsing displayed text -- results can
+        legitimately repeat a video_id, so position (not video_id) is used
+        as the row key.
         """
         table = self.query_one("#search-results", DataTable)
         table.clear()
-        for track in tracks:
+        self._tracks = tracks
+        for position, track in enumerate(tracks):
             table.add_row(
                 track.get("title", ""),
                 track.get("artist", ""),
                 track.get("album", ""),
                 track.get("duration", ""),
-                key=track.get("video_id"),
+                key=str(position),
             )
-        self._tracks = {track.get("video_id"): track for track in tracks}
 
     def selected_track(self):
         """The Track dict for the currently highlighted row, or None."""
@@ -43,4 +45,8 @@ class SearchPane(Vertical):
             row_key, _ = table.coordinate_to_cell_key(table.cursor_coordinate)
         except Exception:
             return None
-        return getattr(self, "_tracks", {}).get(row_key.value)
+        tracks = getattr(self, "_tracks", [])
+        try:
+            return tracks[int(row_key.value)]
+        except (TypeError, ValueError, IndexError):
+            return None
