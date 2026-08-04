@@ -49,6 +49,57 @@ def _cookie_header():
         return None
 
 
+def cookie_attempts():
+    """The cookie headers to try, in order: authenticated first, then without.
+
+    Sending real account cookies puts some sessions into YouTube's SABR-only
+    experiment, in which every audio and video format comes back without a
+    URL and yt-dlp is left with nothing but storyboards -- so any format
+    selector fails with "Requested format is not available". The very same
+    request without cookies gets ordinary progressive formats back. Cookies
+    are therefore tried first (they are what makes private and age-gated
+    tracks resolvable), and dropped only as a fallback.
+    """
+    cookie_header = _cookie_header()
+    return [cookie_header, None] if cookie_header else [None]
+
+
+class _SilentLogger:
+    """Swallows yt-dlp's output for an attempt whose failure is expected."""
+
+    def debug(self, msg):
+        pass
+
+    def info(self, msg):
+        pass
+
+    def warning(self, msg):
+        pass
+
+    def error(self, msg):
+        pass
+
+
+def ydl_opts(cookie_header, silent=False, **extra):
+    """Base yt-dlp options for audio extraction, with `cookie_header` if set.
+
+    `silent` suppresses yt-dlp's own error reporting, for an attempt that
+    has a further fallback behind it and so must not look like a failure.
+    """
+    opts = {
+        "format": "bestaudio",
+        "quiet": True,
+        "no_warnings": True,
+        "noplaylist": True,
+    }
+    if silent:
+        opts["logger"] = _SilentLogger()
+    opts.update(extra)
+    if cookie_header:
+        opts["http_headers"] = {"Cookie": cookie_header}
+    return opts
+
+
 def resolve_stream_url(video_id, ydl_class=yt_dlp.YoutubeDL):
     """Resolve a videoId to a direct bestaudio stream URL.
 
@@ -57,19 +108,18 @@ def resolve_stream_url(video_id, ydl_class=yt_dlp.YoutubeDL):
     The returned URL is not written anywhere -- callers must keep it in
     memory only, as it expires within hours.
     """
-    ydl_opts = {
-        "format": "bestaudio",
-        "quiet": True,
-        "no_warnings": True,
-        "noplaylist": True,
-    }
-    cookie_header = _cookie_header()
-    if cookie_header:
-        ydl_opts["http_headers"] = {"Cookie": cookie_header}
-
-    with ydl_class(ydl_opts) as ydl:
-        info = ydl.extract_info(_WATCH_URL.format(video_id=video_id), download=False)
-    return info["url"]
+    url = _WATCH_URL.format(video_id=video_id)
+    attempts = cookie_attempts()
+    for attempt, cookie_header in enumerate(attempts):
+        last = attempt == len(attempts) - 1
+        try:
+            with ydl_class(ydl_opts(cookie_header, silent=not last)) as ydl:
+                info = ydl.extract_info(url, download=False)
+        except yt_dlp.utils.DownloadError:
+            if last:
+                raise
+            continue
+        return info["url"]
 
 
 def main(argv=None):

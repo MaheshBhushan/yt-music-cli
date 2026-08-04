@@ -119,19 +119,24 @@ def download(video_id, cache_dir=None, cap_bytes=DEFAULT_CAP_BYTES, ydl_class=yt
     tmp_root.mkdir(parents=True, exist_ok=True)
     work_dir = Path(tempfile.mkdtemp(dir=tmp_root))
     try:
-        ydl_opts = {
-            "format": "bestaudio",
-            "quiet": True,
-            "no_warnings": True,
-            "noplaylist": True,
-            "outtmpl": str(work_dir / f"{video_id}.%(ext)s"),
-        }
-        cookie_header = resolve._cookie_header()
-        if cookie_header:
-            ydl_opts["http_headers"] = {"Cookie": cookie_header}
-
-        with ydl_class(ydl_opts) as ydl:
-            ydl.extract_info(_WATCH_URL.format(video_id=video_id), download=True)
+        outtmpl = str(work_dir / f"{video_id}.%(ext)s")
+        url = _WATCH_URL.format(video_id=video_id)
+        attempts = resolve.cookie_attempts()
+        for attempt, cookie_header in enumerate(attempts):
+            last = attempt == len(attempts) - 1
+            try:
+                opts = resolve.ydl_opts(cookie_header, silent=not last, outtmpl=outtmpl)
+                with ydl_class(opts) as ydl:
+                    ydl.extract_info(url, download=True)
+            except yt_dlp.utils.DownloadError:
+                if last:
+                    raise
+                # discard anything a failed attempt left behind, so the next
+                # attempt cannot mistake it for its own output
+                for leftover in work_dir.glob("*"):
+                    leftover.unlink()
+                continue
+            break
 
         downloaded = [p for p in work_dir.glob(f"{video_id}.*") if p.is_file()]
         if not downloaded:
