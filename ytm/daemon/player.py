@@ -44,6 +44,11 @@ class Player:
         self._on_eof: Optional[Callable[[], None]] = None
         self._on_error: Optional[Callable[[str], None]] = None
 
+        #: mpv owns pause state; this mirrors it and is only ever written
+        #: from the same call that tells mpv to change it, so it never
+        #: drifts from what was actually sent over IPC.
+        self._paused = False
+
         self._start_mpv()
         self._connect()
         self._observe_property("time-pos")
@@ -180,21 +185,35 @@ class Player:
         If `video_id` is given and already cached, the cached local file is
         played and `url` is ignored -- no resolution needed.
         """
+        target = url
         if video_id is not None:
             cached_path = cache.get_cached_path(video_id)
             if cached_path is not None:
-                self._send(["loadfile", str(cached_path), "replace"])
-                return
-        self._send(["loadfile", url, "replace"])
+                target = str(cached_path)
+        self._send(["loadfile", target, "replace"])
+        # Loading a track means the caller intends to play it -- if mpv was
+        # left paused (a prior deliberate pause, or a restored session),
+        # every subsequent load would otherwise sit fully buffered and never
+        # start.
+        self._send(["set_property", "pause", False])
+        self._paused = False
 
     def pause(self) -> None:
         self._send(["set_property", "pause", True])
+        self._paused = True
 
     def resume(self) -> None:
         self._send(["set_property", "pause", False])
+        self._paused = False
 
     def toggle(self) -> None:
         self._send(["cycle", "pause"])
+        self._paused = not self._paused
+
+    @property
+    def paused(self) -> bool:
+        """Whether mpv is currently paused."""
+        return self._paused
 
     def seek(self, amount: float, absolute: bool = False) -> None:
         """Seek by `amount` seconds, relative by default or absolute."""
