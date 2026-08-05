@@ -183,13 +183,26 @@ class Queue:
     # -- playback ----------------------------------------------------------
 
     def _play_current(self):
-        """Resolve the current track's URL now and hand it to the player."""
+        """Resolve the current track's URL now and hand it to the player.
+
+        A track whose URL will not resolve is a playback failure like any
+        other, so it goes through `_handle_error` and is counted against the
+        circuit breaker. Letting it raise instead would unwind whichever
+        caller happened to be running -- and for an end-of-track that caller
+        is the mpv IPC reader thread, where an escaping exception used to
+        kill the daemon's only channel to mpv.
+        """
         track = self.current
         if track is None:
             return
         url = self._take_prefetched(track.video_id)
         if url is None:
-            url = self._resolver(track.video_id)
+            try:
+                url = self._resolver(track.video_id)
+            except Exception as exc:
+                self._invalidate_prefetch()
+                self._handle_error(f"could not resolve {track.video_id}: {exc}")
+                return
         self._player.load(url)
         self._invalidate_prefetch()
 

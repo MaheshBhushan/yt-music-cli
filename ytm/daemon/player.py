@@ -9,6 +9,7 @@ file path it is given.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import socket
 import subprocess
@@ -19,6 +20,8 @@ import uuid
 from typing import Callable, Optional
 
 from ytm import cache
+
+logger = logging.getLogger(__name__)
 
 MPV_BIN = "/usr/bin/mpv"
 
@@ -155,7 +158,26 @@ class Player:
                 msg = json.loads(line)
             except json.JSONDecodeError:
                 continue
-            self._handle_event(msg)
+            try:
+                self._handle_event(msg)
+            except Exception:
+                # Keep the transport alive whatever an observer does.
+                # Observers run real logic on this thread, and letting one
+                # raise ends the loop: the daemon keeps running while deaf
+                # to mpv for the rest of its life -- no position, no
+                # end-of-track, no errors, playback stuck with nothing
+                # reported.
+                #
+                # This is a backstop, not the handler. A failure an observer
+                # can act on -- a stream URL that will not resolve -- is
+                # dealt with where it happens, so it stays a counted
+                # playback error rather than arriving here. Anything that
+                # does reach this point is a bug in an observer, so it is
+                # logged with its traceback instead of being reshaped into
+                # a playback error: routing it to `on_error` would make the
+                # queue respond to our own crash by skipping the user's
+                # music.
+                logger.exception("error handling mpv event: %r", msg)
 
     def _handle_event(self, msg: dict) -> None:
         event = msg.get("event")
