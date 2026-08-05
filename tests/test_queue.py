@@ -490,3 +490,53 @@ def test_error_counter_resets_after_successful_playback(q):
     assert q.index == 5
     assert len(errors) == 4
     assert all("stopped after" not in message for message in errors)
+
+
+# -- a stream URL that will not resolve is a playback failure -------------
+
+
+def test_unresolvable_track_is_skipped_as_a_counted_playback_failure():
+    """Regression: the resolver raises when yt-dlp gives up, and that
+    exception used to unwind whichever caller was running. For an
+    end-of-track that caller is the mpv IPC reader thread, where it killed
+    the daemon's only channel to mpv. It must be handled as the playback
+    failure it is, so the breaker counts it."""
+    player, yt = FakePlayer(), FakeYT()
+    attempted = []
+
+    def failing_resolver(video_id):
+        attempted.append(video_id)
+        raise RuntimeError(f"DownloadError for {video_id}")
+
+    q = Queue(player, resolver=failing_resolver, yt=yt, autoplay_radio=False)
+    errors = []
+    q.on_error(errors.append)
+    q.enqueue([track(v) for v in ("a", "b", "c", "d", "e")])
+
+    # enqueue starts the first track, which cannot resolve; each failure is
+    # counted, and the third trips the breaker instead of running the queue
+    # out.
+    assert attempted == ["a", "b", "c"]
+    assert q.index == 2
+    assert len(errors) == 3
+    assert "could not resolve a" in errors[0]
+    assert "stopped after 3 consecutive" in errors[-1]
+    assert player.loaded == []  # nothing ever reached mpv
+
+
+def test_resolver_failure_does_not_escape_to_the_caller():
+    """Nothing above `_play_current` should have to catch a resolver error;
+    the eof path runs on the IPC reader thread, which has no useful way to
+    recover."""
+    player, yt = FakePlayer(), FakeYT()
+    q = Queue(
+        player, resolver=_raising_resolver, yt=yt, autoplay_radio=False
+    )
+    q.on_error(lambda message: None)
+    q.enqueue([track("a"), track("b")])
+    # no exception escaped enqueue; the same holds for next() via eof
+    q.next()
+
+
+def _raising_resolver(video_id):
+    raise RuntimeError("nope")
