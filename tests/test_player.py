@@ -133,6 +133,40 @@ def test_pause_resume_toggle_issue_correct_commands(fake_player):
     assert ["cycle", "pause"] in cmds
 
 
+def test_load_unpauses_mpv_when_paused(fake_player):
+    """Regression: a track can load and buffer fully while mpv sits paused
+    (a prior deliberate pause, or a restored session), and just sits there
+    never playing. `load()` must explicitly tell mpv to unpause -- loading a
+    track means the caller intends to play it now."""
+    player, server = fake_player
+    player.pause()
+    server.wait_for_commands(2)  # observe + pause
+    player.load("https://example.com/stream.m4a")
+    cmds = server.wait_for_commands(4)  # observe + pause + loadfile + unpause
+    load_index = cmds.index(
+        ["loadfile", "https://example.com/stream.m4a", "replace"]
+    )
+    # the unpause must come from load() itself, i.e. some command after the
+    # loadfile explicitly clears pause.
+    assert ["set_property", "pause", False] in cmds[load_index:]
+
+
+def test_paused_property_reflects_pause_resume_toggle_and_load(fake_player):
+    player, server = fake_player
+    assert player.paused is False
+    player.pause()
+    assert player.paused is True
+    player.resume()
+    assert player.paused is False
+    player.pause()
+    player.toggle()
+    assert player.paused is False
+    player.pause()
+    assert player.paused is True
+    player.load("https://example.com/stream.m4a")
+    assert player.paused is False
+
+
 def test_seek_relative_and_absolute(fake_player):
     player, server = fake_player
     player.seek(10)

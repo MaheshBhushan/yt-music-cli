@@ -226,7 +226,6 @@ class Daemon:
         self._lock = asyncio.Lock()
         self._stopped = asyncio.Event()
         self._shutdown_requested = False
-        self._paused = False
         self._volume = self._config["audio"]["volume"]
         self._last_played = None
         self._last_position = 0.0
@@ -285,7 +284,6 @@ class Daemon:
             self._queue._index = loaded["index"]
         with contextlib.suppress(Exception):
             self._player.set_volume(self._volume)
-        self._paused = True
 
     def save(self):
         """Persist the queue, cursor, volume and last-played track."""
@@ -337,7 +335,7 @@ class Daemon:
         self._emit("queue_changed", self._queue_data())
 
     def _emit_state_changed(self):
-        self._emit("state_changed", {"paused": self._paused, "volume": self._volume})
+        self._emit("state_changed", {"paused": self._player.paused, "volume": self._volume})
 
     def _pushed_position(self, value):
         self._last_position = value
@@ -356,7 +354,6 @@ class Daemon:
         )
 
     def _pushed_eof(self):
-        self._paused = False
         self._emit_track_changed()
         self._emit_queue_changed()
 
@@ -385,7 +382,7 @@ class Daemon:
             "current": self._track_data(self._queue.current),
             "index": self._queue.index,
             "count": len(self._queue.tracks),
-            "paused": self._paused,
+            "paused": self._player.paused,
             "volume": self._volume,
             "position": self._last_position,
             "last_played": self._last_played,
@@ -429,7 +426,6 @@ class Daemon:
         else:
             self._queue.enqueue(track, position=self._queue.index + 1)
             self._queue.next()
-        self._paused = False
         self._emit_track_changed()
         self._emit_queue_changed()
         self._emit_state_changed()
@@ -442,38 +438,32 @@ class Daemon:
         self._queue.enqueue(track, position=position)
         self._emit_queue_changed()
         if started:
-            self._paused = False
             self._emit_track_changed()
         return self._queue_data()
 
     def _cmd_pause(self, args):
         self._player.pause()
-        self._paused = True
         self._emit_state_changed()
         return self._status_data()
 
     def _cmd_resume(self, args):
         self._player.resume()
-        self._paused = False
         self._emit_state_changed()
         return self._status_data()
 
     def _cmd_toggle(self, args):
         self._player.toggle()
-        self._paused = not self._paused
         self._emit_state_changed()
         return self._status_data()
 
     def _cmd_next(self, args):
         self._queue.next()
-        self._paused = False
         self._emit_track_changed()
         self._emit_queue_changed()
         return self._status_data()
 
     def _cmd_prev(self, args):
         self._queue.prev()
-        self._paused = False
         self._emit_track_changed()
         return self._status_data()
 
@@ -529,7 +519,6 @@ class Daemon:
             raise ProtocolError(f"no radio available for {video_id}")
         self._queue.clear()
         self._queue.enqueue(tracks)
-        self._paused = False
         self._emit_track_changed()
         self._emit_queue_changed()
         return self._queue_data()
