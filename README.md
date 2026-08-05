@@ -83,9 +83,35 @@ The headers are stored in `~/.config/ytm/auth.json` with mode 0600. They must in
 
 Browser header auth expires when your YouTube session is revoked or the cookie ages out (typically after weeks). When it expires, the app will report it and you re-run `ytm auth` (or `ytm auth --from-browser`) with fresh credentials.
 
-### Why not OAuth?
+### OAuth (headless / SSH, no local browser required)
 
-ytmusicapi 1.12.1's OAuth path requires you to provision your own Google Cloud OAuth client (credentials, redirect URIs, etc.), which is impractical for a CLI tool. Browser headers are the only credentials a human can supply interactively.
+Browser-based auth needs a local logged-in browser, so it doesn't work over SSH or on a headless box, and cookie auth expires after a few weeks. `ytm auth --oauth` uses YouTube's device-code flow instead: you get a short code to enter on any other device, and the resulting token refreshes itself rather than expiring.
+
+YouTube removed ytmusicapi's built-in OAuth client in November 2024, so you must provision your own Google Cloud OAuth client first:
+
+1. Go to <https://console.cloud.google.com/> and create (or select) a project
+2. Enable the **YouTube Data API v3** for the project (APIs & Services → Library)
+3. Go to APIs & Services → Credentials → Create Credentials → OAuth client ID
+4. If prompted, configure the OAuth consent screen first (External is fine; add your own Google account as a test user)
+5. Application type: **TVs and Limited Input devices**
+6. Give it a name and click Create
+7. Copy the generated **Client ID** and **Client secret**
+
+Then run:
+
+```bash
+ytm auth --oauth --client-id YOUR_CLIENT_ID --client-secret YOUR_CLIENT_SECRET
+```
+
+The command prints a verification URL and a short user code — open the URL on any device, sign in, and enter the code. `ytm` then polls in the background until you finish and stores the refreshable token.
+
+`--client-id`/`--client-secret` can also come from the `YTM_OAUTH_CLIENT_ID`/`YTM_OAUTH_CLIENT_SECRET` environment variables, or you'll be prompted interactively if neither is set. Precedence: flags > environment variables > interactive prompt.
+
+The token is stored in `~/.config/ytm/auth.json` at mode 0600, same as browser-header auth (the two are detected automatically and never confused). The client ID/secret are stored separately, in `~/.config/ytm/oauth_client.json` at mode 0600, since a token refresh needs them again and ytmusicapi rewrites the token file with only token fields on every refresh.
+
+**Consequence for playback:** an OAuth auth file has no browser cookies, so stream resolution (see below) always proceeds unauthenticated for OAuth users — private/age-restricted tracks that need authenticated cookies to resolve will not resolve. Search and library access are unaffected.
+
+If the refresh token is later revoked (e.g. you revoke access in your Google account, or the OAuth client is deleted), `ytm` reports it as an expired-auth error telling you to run `ytm auth --oauth` again, rather than a raw traceback.
 
 ### Playback and authentication
 

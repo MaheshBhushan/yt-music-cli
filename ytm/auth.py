@@ -1,10 +1,15 @@
 """Authentication module."""
+import getpass
 import json
 import os
+import time
 from pathlib import Path
 
 import ytmusicapi
 from yt_dlp.cookies import extract_cookies_from_browser
+from ytmusicapi.auth.oauth.credentials import OAuthCredentials
+from ytmusicapi.auth.oauth.exceptions import BadOAuthClient, UnauthorizedOAuthClient
+from ytmusicapi.auth.oauth.token import OAuthToken
 from ytmusicapi.exceptions import YTMusicError
 
 AUTH_PATH = Path.home() / ".config" / "ytm" / "auth.json"
@@ -23,6 +28,16 @@ _EXPIRED_HINT = (
     "paste fresh request headers."
 )
 _MISSING_HINT = "No YouTube Music credentials found at {path}. Run 'ytm auth' to set them up."
+
+_OAUTH_EXPIRED_HINT = (
+    "YouTube Music OAuth authentication is no longer valid (the refresh token "
+    "was revoked or rejected). Run 'ytm auth --oauth' to re-authenticate."
+)
+
+_OAUTH_CLIENT_MISSING_HINT = (
+    "OAuth client credentials are missing (expected alongside {path}). "
+    "Run 'ytm auth --oauth' to set them up again."
+)
 
 
 class _QuietLogger:
@@ -73,6 +88,113 @@ def setup(path=AUTH_PATH):
     with open(fd, "w", encoding="utf-8") as file:
         file.write(headers)
     os.chmod(path, 0o600)
+    return path
+
+
+def _oauth_client_path(path):
+    """Where the OAuth app's client_id/client_secret are stored, alongside path.
+
+    Kept separate from the token file because ytmusicapi rewrites the token
+    file on every refresh with only token fields (see RefreshingToken.store_token),
+    which would silently drop client_id/client_secret if they lived in the same file.
+    """
+    return path.parent / "oauth_client.json"
+
+
+def _write_json_0600(path, data):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with open(fd, "w", encoding="utf-8") as file:
+        json.dump(data, file)
+    os.chmod(path, 0o600)
+
+
+def _resolve_oauth_client(client_id, client_secret):
+    """Resolve client_id/client_secret: explicit args > env vars > interactive prompt."""
+    client_id = client_id or os.environ.get("YTM_OAUTH_CLIENT_ID")
+    client_secret = client_secret or os.environ.get("YTM_OAUTH_CLIENT_SECRET")
+    if not client_id:
+        client_id = input("Google Cloud OAuth client ID: ").strip()
+    if not client_secret:
+        client_secret = getpass.getpass("Google Cloud OAuth client secret: ").strip()
+    if not client_id or not client_secret:
+        raise AuthError(
+            "An OAuth client_id and client_secret are required. Create a 'TVs and "
+            "Limited Input devices' OAuth client in Google Cloud Console and pass "
+            "them via --client-id/--client-secret, YTM_OAUTH_CLIENT_ID/"
+            "YTM_OAUTH_CLIENT_SECRET, or the interactive prompt."
+        )
+    return client_id, client_secret
+
+
+def _load_oauth_client(path):
+    """Return the stored (client_id, client_secret) for the OAuth token at path."""
+    client_path = _oauth_client_path(path)
+    try:
+        with open(client_path, encoding="utf-8") as file:
+            data = json.load(file)
+        return data["client_id"], data["client_secret"]
+    except (OSError, ValueError, KeyError) as exc:
+        raise AuthMissing(_OAUTH_CLIENT_MISSING_HINT.format(path=path)) from exc
+
+
+def oauth_setup(
+    client_id=None,
+    client_secret=None,
+    path=AUTH_PATH,
+    credentials_factory=None,
+    sleep=time.sleep,
+):
+    """Run the OAuth device-code flow and store the resulting refreshable token at path.
+
+    Prints a verification URL and short user code for the user to enter on another
+    device, then polls token_from_code at the interval YouTube's response specifies
+    until authorised (or the device code expires). The client_id/client_secret are
+    persisted separately (see _oauth_client_path) since they are needed again for
+    every future token refresh.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    client_id, client_secret = _resolve_oauth_client(client_id, client_secret)
+    _write_json_0600(_oauth_client_path(path), {"client_id": client_id, "client_secret": client_secret})
+
+    make_credentials = credentials_factory or OAuthCredentials
+    credentials = make_credentials(client_id, client_secret)
+    try:
+        code = credentials.get_code()
+    except Exception as exc:
+        raise AuthError(f"Could not start the OAuth device flow: {exc}") from exc
+
+    print(f"Go to {code['verification_url']} and enter the code: {code['user_code']}")
+    print("Waiting for you to authorise this device...")
+
+    interval = code.get("interval", 5)
+    deadline = time.time() + code.get("expires_in", 1800)
+    raw = None
+    while True:
+        sleep(interval)
+        raw = credentials.token_from_code(code["device_code"])
+        if "access_token" in raw:
+            break
+        error = raw.get("error")
+        if error == "slow_down":
+            interval += 5
+        elif error != "authorization_pending":
+            raise AuthError(f"OAuth device authorisation failed: {raw}")
+        if time.time() > deadline:
+            raise AuthError(
+                "OAuth device code expired before authorisation completed; "
+                "run 'ytm auth --oauth' again."
+            )
+
+    token = {
+        "scope": raw["scope"],
+        "token_type": raw["token_type"],
+        "access_token": raw["access_token"],
+        "refresh_token": raw["refresh_token"],
+        "expires_in": raw["expires_in"],
+        "expires_at": int(time.time()) + raw["expires_in"],
+    }
+    _write_json_0600(path, token)
     return path
 
 
@@ -161,21 +283,46 @@ def load_headers(path=AUTH_PATH):
 
 
 def load_cookies(path=AUTH_PATH):
-    """Return the stored Cookie header value, for reuse by stream resolution."""
+    """Return the stored Cookie header value, for reuse by stream resolution.
+
+    OAuth auth files have no cookies (there is no browser session to extract
+    one from), so this returns None for them rather than raising -- stream
+    resolution falls back to cookie-less requests, see ytm/resolve.py.
+    """
     headers = load_headers(path)
+    if OAuthToken.is_oauth(headers):
+        return None
     for key, value in headers.items():
         if key.lower() == "cookie":
             return value
     raise AuthMissing(_MISSING_HINT.format(path=path))
 
 
-def client(path=AUTH_PATH):
-    """Return an authenticated ytmusicapi client."""
+def client(path=AUTH_PATH, credentials_factory=None):
+    """Return an authenticated ytmusicapi client, for either auth kind stored at path."""
     headers = load_headers(path)
+    if OAuthToken.is_oauth(headers):
+        return _oauth_client(path, credentials_factory)
     try:
         return ytmusicapi.YTMusic(headers)
     except YTMusicError as exc:
         raise AuthExpired(_EXPIRED_HINT) from exc
+
+
+def _oauth_client(path, credentials_factory=None):
+    """Build a YTMusic client from a stored OAuth token, eagerly refreshing if due."""
+    client_id, client_secret = _load_oauth_client(path)
+    make_credentials = credentials_factory or OAuthCredentials
+    credentials = make_credentials(client_id, client_secret)
+    try:
+        ytm = ytmusicapi.YTMusic(str(path), oauth_credentials=credentials)
+        # Touching access_token triggers RefreshingToken's auto-refresh (and
+        # persists it back to path) if the stored token is due to expire, so a
+        # revoked/invalid refresh token surfaces here rather than mid-request.
+        _ = ytm._token.access_token
+    except (YTMusicError, UnauthorizedOAuthClient, BadOAuthClient) as exc:
+        raise AuthExpired(_OAUTH_EXPIRED_HINT) from exc
+    return ytm
 
 
 def is_expiry(exc):

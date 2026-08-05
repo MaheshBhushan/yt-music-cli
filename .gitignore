@@ -1,4 +1,5 @@
 auth.json
+oauth_client.json
 state.json
 __pycache__/
 *.pyc

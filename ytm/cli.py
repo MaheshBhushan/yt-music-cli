@@ -7,8 +7,10 @@ from ytm.client import Client, ClientError
 
 
 def cmd_auth(args):
-    """Run the authentication setup: interactive, or --from-browser to extract cookies."""
-    if args.from_browser is not None:
+    """Run the authentication setup: interactive, --from-browser, or --oauth."""
+    if args.oauth:
+        path = auth.oauth_setup(client_id=args.client_id, client_secret=args.client_secret)
+    elif args.from_browser is not None:
         path = auth.from_browser(args.from_browser or None)
     else:
         path = auth.setup()
@@ -119,6 +121,24 @@ def main():
         metavar="BROWSER",
         help="extract cookies from a local browser profile instead of pasting headers "
         "(auto-detects a logged-in browser if BROWSER is omitted)",
+    )
+    auth_parser.add_argument(
+        "--oauth",
+        action="store_true",
+        help="authenticate via OAuth device code flow (works over SSH/headless; "
+        "requires your own Google Cloud 'TVs and Limited Input devices' OAuth client)",
+    )
+    auth_parser.add_argument(
+        "--client-id",
+        default=None,
+        help="OAuth client ID for --oauth (falls back to YTM_OAUTH_CLIENT_ID env var, "
+        "then an interactive prompt)",
+    )
+    auth_parser.add_argument(
+        "--client-secret",
+        default=None,
+        help="OAuth client secret for --oauth (falls back to YTM_OAUTH_CLIENT_SECRET "
+        "env var, then an interactive prompt)",
     )
     auth_parser.set_defaults(func=cmd_auth)
 
