@@ -1132,3 +1132,27 @@ def test_next_and_prev_while_paused_start_playing(tmp_path, sock_path):
     assert daemon._status_data()["paused"] is True
     daemon._cmd_prev({})
     assert daemon._status_data()["paused"] is False
+
+
+def test_restore_reports_a_paused_session(tmp_path, sock_path):
+    """Restoring deliberately does not start playback, so the daemon must
+    not report the restored track as playing -- `ytm status` would print
+    `[playing]` and the TUI would show a play icon over silence."""
+    state_path = tmp_path / "state.json"
+    state_mod.save(
+        {
+            "tracks": [make_track("a")],
+            "index": 0,
+            "volume": 50,
+            "last_played": "a",
+        },
+        state_path,
+    )
+    player = FakePlayer()
+    queue = FakeQueue(player)
+    daemon = Daemon(
+        path=sock_path, player=player, queue=queue, state_path=state_path,
+        yt=FakeYT(),
+    )
+    daemon.restore()
+    assert daemon._status_data()["paused"] is True
