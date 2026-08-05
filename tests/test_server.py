@@ -44,18 +44,23 @@ class FakePlayer:
         self._on_eof = None
         self._on_error = None
         self.closed = False
+        self.paused = False
 
     def load(self, url):
         self.calls.append(("load", url))
+        self.paused = False
 
     def pause(self):
         self.calls.append(("pause",))
+        self.paused = True
 
     def resume(self):
         self.calls.append(("resume",))
+        self.paused = False
 
     def toggle(self):
         self.calls.append(("toggle",))
+        self.paused = not self.paused
 
     def seek(self, amount, absolute=False):
         self.calls.append(("seek", amount, absolute))
@@ -1048,3 +1053,82 @@ def test_lyrics_malformed_args_returns_ok_false(tmp_path, sock_path):
     response, follow_up = asyncio.run(scenario())
     assert response["ok"] is False
     assert follow_up["ok"] is True
+
+
+# -- pause/resume/toggle and the paused/status desync ----------------------
+
+
+def _daemon_with_real_queue(tmp_path, sock_path):
+    """A Daemon wired to the real Queue (not FakeQueue) so that playing a
+    track actually drives FakePlayer.load(), which is what flips
+    FakePlayer.paused back to False -- exactly the mechanism under test."""
+    from ytm.daemon.queue import Queue
+
+    player = FakePlayer()
+    queue = Queue(
+        player, resolver=lambda video_id: f"url-{video_id}", yt=FakeYT(),
+        autoplay_radio=False,
+    )
+    daemon = Daemon(
+        path=sock_path, player=player, queue=queue,
+        state_path=tmp_path / "state.json", yt=FakeYT(),
+    )
+    return daemon, player, queue
+
+
+def test_status_reflects_the_players_real_pause_state_not_a_shadow_copy(
+    tmp_path, sock_path
+):
+    """Regression for the daemon/mpv pause desync: the daemon used to track
+    its own `self._paused` flag, set only from the handful of call sites it
+    remembered to update. If the player's real pause state ever changes
+    through any other path, that shadow copy goes stale. `status` must read
+    the player's actual state directly instead."""
+    daemon, player, queue = build_daemon(tmp_path, sock_path)
+
+    # Simulate the player's real state changing without going through any
+    # daemon command that a shadow-flag implementation might have hooked --
+    # exactly the kind of path a future caller could add and forget to
+    # mirror into a separate flag.
+    player.paused = True
+    assert daemon._status_data()["paused"] is True
+
+    player.paused = False
+    assert daemon._status_data()["paused"] is False
+
+
+def test_pause_resume_toggle_still_work(tmp_path, sock_path):
+    daemon, player, queue = _daemon_with_real_queue(tmp_path, sock_path)
+    daemon._cmd_play({"video_id": "a"})
+    assert daemon._status_data()["paused"] is False
+
+    daemon._cmd_pause({})
+    assert ("pause",) in player.calls
+    assert daemon._status_data()["paused"] is True
+
+    daemon._cmd_resume({})
+    assert ("resume",) in player.calls
+    assert daemon._status_data()["paused"] is False
+
+    daemon._cmd_pause({})
+    daemon._cmd_toggle({})
+    assert ("toggle",) in player.calls
+    assert daemon._status_data()["paused"] is False
+
+
+def test_next_and_prev_while_paused_start_playing(tmp_path, sock_path):
+    """A deliberate pause must not survive advancing to a different track --
+    the user asked for the next/previous track, which means play it."""
+    daemon, player, queue = _daemon_with_real_queue(tmp_path, sock_path)
+    daemon._cmd_play({"video_id": "a"})
+    daemon._cmd_enqueue({"video_id": "b"})
+    daemon._cmd_pause({})
+    assert daemon._status_data()["paused"] is True
+
+    daemon._cmd_next({})
+    assert daemon._status_data()["paused"] is False
+
+    daemon._cmd_pause({})
+    assert daemon._status_data()["paused"] is True
+    daemon._cmd_prev({})
+    assert daemon._status_data()["paused"] is False
