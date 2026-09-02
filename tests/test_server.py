@@ -1058,21 +1058,31 @@ def test_lyrics_malformed_args_returns_ok_false(tmp_path, sock_path):
 # -- pause/resume/toggle and the paused/status desync ----------------------
 
 
-def _daemon_with_real_queue(tmp_path, sock_path):
+def _daemon_with_real_queue(tmp_path, sock_path, autoplay_radio=False):
     """A Daemon wired to the real Queue (not FakeQueue) so that playing a
     track actually drives FakePlayer.load(), which is what flips
-    FakePlayer.paused back to False -- exactly the mechanism under test."""
+    FakePlayer.paused back to False -- exactly the mechanism under test.
+
+    The Queue is built on `daemon._player` -- the tap -- and not on the raw
+    FakePlayer, because that is what production does: `Daemon.__init__`
+    wraps the player first, then constructs the Queue over the wrapper. Wire
+    it the other way round and the tap's own `on_position`/`on_eof`/
+    `on_error` registrations overwrite the Queue's on the bare player, so
+    the Queue silently stops receiving player callbacks entirely.
+    """
     from ytm.daemon.queue import Queue
 
     player = FakePlayer()
-    queue = Queue(
-        player, resolver=lambda video_id: f"url-{video_id}", yt=FakeYT(),
-        autoplay_radio=False,
-    )
     daemon = Daemon(
-        path=sock_path, player=player, queue=queue,
+        path=sock_path, player=player, queue=FakeQueue(player),
         state_path=tmp_path / "state.json", yt=FakeYT(),
     )
+    queue = Queue(
+        daemon._player, resolver=lambda video_id: f"url-{video_id}",
+        yt=FakeYT(), autoplay_radio=autoplay_radio,
+    )
+    daemon._queue = queue
+    queue.on_error(daemon._pushed_error)
     return daemon, player, queue
 
 
@@ -1132,6 +1142,182 @@ def test_next_and_prev_while_paused_start_playing(tmp_path, sock_path):
     assert daemon._status_data()["paused"] is True
     daemon._cmd_prev({})
     assert daemon._status_data()["paused"] is False
+
+
+# -- events for state the daemon changes indirectly ------------------------
+
+
+def test_playback_error_skip_pushes_track_changed(tmp_path, sock_path):
+    """Regression: a track that fails to load is skipped by the queue, which
+    starts playing a different track. The daemon emitted only an `error`
+    event, so clients kept displaying the failed track while unrelated audio
+    played."""
+    async def scenario():
+        daemon, player, queue = _daemon_with_real_queue(tmp_path, sock_path)
+        queue.enqueue([make_track("a"), make_track("b")])
+        await daemon.start()
+        client = await connect(sock_path)
+        player.emit_error("stream unavailable")
+        event = await client.next_event("track_changed")
+        await client.close()
+        await daemon.stop()
+        return event, queue.current.video_id
+
+    event, current = asyncio.run(scenario())
+    assert current == "b"
+    assert event["data"]["video_id"] == "b"
+
+
+def test_playback_error_still_pushes_the_error_event(tmp_path, sock_path):
+    """The error event must survive the skip notification, and must still
+    describe the failure rather than the track that replaced it."""
+    async def scenario():
+        daemon, player, queue = _daemon_with_real_queue(tmp_path, sock_path)
+        queue.enqueue([make_track("a"), make_track("b")])
+        await daemon.start()
+        client = await connect(sock_path)
+        player.emit_error("stream unavailable")
+        event = await client.next_event("error")
+        await client.close()
+        await daemon.stop()
+        return event
+
+    event = asyncio.run(scenario())
+    assert event["data"]["kind"] == "playback"
+    assert "stream unavailable" in event["data"]["error"]
+
+
+def test_next_and_prev_push_state_changed_after_clearing_a_pause(
+    tmp_path, sock_path
+):
+    """Regression: `next`/`prev` clear the pause state as a side effect of
+    loading a track, but emitted no `state_changed`, so a client that paused
+    and then skipped kept rendering a paused indicator over playing audio."""
+    async def scenario():
+        daemon, player, queue = _daemon_with_real_queue(tmp_path, sock_path)
+        await daemon.start()
+        client = await connect(sock_path)
+        await client.call(1, "play", video_id="a", title="A")
+        await client.call(2, "enqueue", video_id="b", title="B")
+
+        await client.call(3, "pause")
+        client.events.clear()
+        await client.call(4, "next")
+        after_next = await client.next_event("state_changed")
+
+        await client.call(5, "pause")
+        client.events.clear()
+        await client.call(6, "prev")
+        after_prev = await client.next_event("state_changed")
+
+        await client.close()
+        await daemon.stop()
+        return after_next, after_prev
+
+    after_next, after_prev = asyncio.run(scenario())
+    assert after_next["data"]["paused"] is False
+    assert after_prev["data"]["paused"] is False
+
+
+def _record_emits(daemon):
+    """Capture every event the daemon pushes, in order.
+
+    The socket Client pops the first matching event and discards the rest,
+    so it cannot assert ordering, absence, or "exactly once" -- which is
+    what the no-skip paths below need.
+    """
+    seen = []
+    daemon._emit = lambda event, data=None: seen.append((event, data or {}))
+    return seen
+
+
+def test_daemon_registers_its_error_reporter_on_the_queue(tmp_path, sock_path):
+    """`Daemon.__init__` must wire the queue's error callback; without it a
+    playback failure is never reported to clients at all. The real-queue
+    fixture re-registers this by hand, so it needs its own guard."""
+    daemon, player, queue = build_daemon(tmp_path, sock_path)
+    seen = _record_emits(daemon)
+    queue._on_error("stream unavailable")
+    assert seen == [
+        ("error", {"error": "stream unavailable", "kind": "playback"})
+    ]
+
+
+def test_tripped_breaker_does_not_announce_a_track_that_never_started(
+    tmp_path, sock_path
+):
+    """Once MAX_CONSECUTIVE_FAILURES is reached the queue stops advancing and
+    nothing is loaded. Announcing `track_changed` there would claim a track
+    is playing while silence plays -- and `_emit_track_changed` records
+    `_last_played`, which `save()` persists to disk."""
+    from ytm.daemon.queue import MAX_CONSECUTIVE_FAILURES
+
+    daemon, player, queue = _daemon_with_real_queue(tmp_path, sock_path)
+    daemon._cmd_play({"video_id": "a"})
+    for video_id in "bcdef":
+        daemon._cmd_enqueue({"video_id": video_id})
+
+    seen = _record_emits(daemon)
+    for _ in range(MAX_CONSECUTIVE_FAILURES - 1):
+        player.emit_error("boom")
+    assert [data["video_id"] for name, data in seen if name == "track_changed"] == [
+        "b",
+        "c",
+    ]
+
+    seen.clear()
+    player.emit_error("boom")
+    assert queue.current.video_id == "c"
+    assert [name for name, _ in seen] == ["error"]
+    assert daemon._last_played == "c"
+
+
+def test_error_at_the_tail_announces_only_the_error(tmp_path, sock_path):
+    """With autoplay off, an error on the last track leaves the cursor put
+    and loads nothing, so there is no new track to announce."""
+    daemon, player, queue = _daemon_with_real_queue(tmp_path, sock_path)
+    daemon._cmd_play({"video_id": "a"})
+
+    seen = _record_emits(daemon)
+    player.emit_error("boom")
+    assert queue.current.video_id == "a"
+    assert [name for name, _ in seen] == ["error"]
+
+
+def test_removing_the_playing_track_announces_the_one_that_replaces_it(
+    tmp_path, sock_path
+):
+    """Removing the current track makes the next one current and starts it,
+    which also clears a pause -- the same silent state change `next`/`prev`
+    had."""
+    daemon, player, queue = _daemon_with_real_queue(tmp_path, sock_path)
+    daemon._cmd_play({"video_id": "a"})
+    daemon._cmd_enqueue({"video_id": "b"})
+    daemon._cmd_pause({})
+    assert daemon._status_data()["paused"] is True
+
+    seen = _record_emits(daemon)
+    daemon._cmd_queue_remove({"index": 0})
+    assert queue.current.video_id == "b"
+    assert daemon._status_data()["paused"] is False
+    names = [name for name, _ in seen]
+    assert "track_changed" in names and "state_changed" in names
+    assert names.count("queue_changed") == 1
+
+
+def test_removing_another_track_does_not_announce_a_track_change(
+    tmp_path, sock_path
+):
+    """Removing a track that isn't playing moves nothing, so the only thing
+    that changed is the queue itself."""
+    daemon, player, queue = _daemon_with_real_queue(tmp_path, sock_path)
+    daemon._cmd_play({"video_id": "a"})
+    daemon._cmd_enqueue({"video_id": "b"})
+
+    seen = _record_emits(daemon)
+    daemon._cmd_queue_remove({"index": 1})
+    assert queue.current.video_id == "a"
+    assert [name for name, _ in seen] == ["queue_changed"]
 
 
 def test_restore_reports_a_paused_session(tmp_path, sock_path):
