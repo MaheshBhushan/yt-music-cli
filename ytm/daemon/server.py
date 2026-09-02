@@ -137,19 +137,24 @@ def _req_str_list(args, name):
 class _PlayerTap:
     """Wraps a Player so the daemon sees the callbacks the Queue registers.
 
-    The Queue registers its own position/eof observers on the player; this
-    proxy keeps them and chains the daemon's own handler after them, so the
-    daemon can push events without the Queue or the Player knowing about it.
+    The Queue registers its own position/eof/error observers on the player;
+    this proxy keeps them and chains the daemon's own handler after them, so
+    the daemon can push events without the Queue or the Player knowing about
+    it. Running after the Queue matters: the Queue's error handler skips to
+    the next track, and the daemon must report the track it skipped *to*.
     """
 
     def __init__(self, player):
         self._player = player
         self._queue_position = None
         self._queue_eof = None
+        self._queue_error = None
         self._tap_position = None
         self._tap_eof = None
+        self._tap_error = None
         player.on_position(self._position)
         player.on_eof(self._eof)
+        player.on_error(self._error)
 
     def __getattr__(self, name):
         return getattr(self._player, name)
@@ -160,10 +165,14 @@ class _PlayerTap:
     def on_eof(self, callback):
         self._queue_eof = callback
 
-    def tap(self, on_position=None, on_eof=None):
+    def on_error(self, callback):
+        self._queue_error = callback
+
+    def tap(self, on_position=None, on_eof=None, on_error=None):
         """Register the daemon's own observers, run after the Queue's."""
         self._tap_position = on_position
         self._tap_eof = on_eof
+        self._tap_error = on_error
 
     def _position(self, value):
         for callback in (self._queue_position, self._tap_position):
@@ -174,6 +183,11 @@ class _PlayerTap:
         for callback in (self._queue_eof, self._tap_eof):
             if callback is not None:
                 callback()
+
+    def _error(self, message=None):
+        for callback in (self._queue_error, self._tap_error):
+            if callback is not None:
+                callback(message)
 
 
 class Daemon:
@@ -217,7 +231,11 @@ class Daemon:
                 autoplay_radio=self._config["behaviour"]["autoplay_radio"],
             )
         )
-        self._player.tap(on_position=self._pushed_position, on_eof=self._pushed_eof)
+        self._player.tap(
+            on_position=self._pushed_position,
+            on_eof=self._pushed_eof,
+            on_error=self._pushed_skip,
+        )
         self._queue.on_error(self._pushed_error)
 
         self._clients = set()
@@ -334,6 +352,25 @@ class Daemon:
     def _emit_queue_changed(self):
         self._emit("queue_changed", self._queue_data())
 
+    def _emit_if_track_moved(self):
+        """Announce a new current track, but only if the cursor really moved.
+
+        For paths that may or may not move it: an error the circuit breaker
+        swallows, an error at the tail with autoplay off, a removal that
+        misses the current track. Announcing unconditionally would claim a
+        track is playing when nothing was loaded, and `_emit_track_changed`
+        also records `_last_played`, which `save()` persists.
+
+        Returns whether it announced anything, so callers can decide what
+        else to push alongside it.
+        """
+        track = self._queue.current
+        if track is None or track.video_id == self._last_played:
+            return False
+        self._emit_track_changed()
+        self._emit_state_changed()
+        return True
+
     def _emit_state_changed(self):
         self._emit("state_changed", {"paused": self._player.paused, "volume": self._volume})
 
@@ -358,7 +395,23 @@ class Daemon:
         self._emit_queue_changed()
 
     def _pushed_error(self, message):
+        # Registered on the Queue, which calls it *before* skipping, so this
+        # describes the track that failed. The skip itself is reported by
+        # `_pushed_skip`.
         self._emit("error", {"error": message, "kind": "playback"})
+
+    def _pushed_skip(self, message=None):
+        """Report the track the Queue skipped to after a playback failure.
+
+        Chained after the Queue's own error handler, so the cursor has
+        already moved. Without this a failed track leaves clients showing
+        the track that died while a different one plays.
+
+        `message` is unused -- it is part of the player's error-observer
+        signature, and what failed is already reported by `_pushed_error`.
+        """
+        if self._emit_if_track_moved():
+            self._emit_queue_changed()
 
     # -- helpers -----------------------------------------------------------
 
@@ -439,6 +492,7 @@ class Daemon:
         self._emit_queue_changed()
         if started:
             self._emit_track_changed()
+            self._emit_state_changed()
         return self._queue_data()
 
     def _cmd_pause(self, args):
@@ -460,11 +514,13 @@ class Daemon:
         self._queue.next()
         self._emit_track_changed()
         self._emit_queue_changed()
+        self._emit_state_changed()
         return self._status_data()
 
     def _cmd_prev(self, args):
         self._queue.prev()
         self._emit_track_changed()
+        self._emit_state_changed()
         return self._status_data()
 
     def _cmd_seek(self, args):
@@ -509,6 +565,10 @@ class Daemon:
         except IndexError:
             raise ProtocolError(f"no track at index {index}") from None
         self._emit_queue_changed()
+        # Removing the playing track makes the next one current and starts
+        # it, which also clears any pause -- the same silent state change
+        # `next`/`prev` had. Removing any other track moves nothing.
+        self._emit_if_track_moved()
         return self._queue_data()
 
     def _cmd_radio(self, args):
@@ -521,6 +581,7 @@ class Daemon:
         self._queue.enqueue(tracks)
         self._emit_track_changed()
         self._emit_queue_changed()
+        self._emit_state_changed()
         return self._queue_data()
 
     def _cmd_lyrics(self, args):
