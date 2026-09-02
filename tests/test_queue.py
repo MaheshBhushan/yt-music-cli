@@ -540,3 +540,29 @@ def test_resolver_failure_does_not_escape_to_the_caller():
 
 def _raising_resolver(video_id):
     raise RuntimeError("nope")
+
+
+def test_failed_prefetch_is_dropped_not_raised():
+    """Prefetching is an optimisation. A resolver failure during prefetch
+    must not escape to whoever delivered the position update; the track is
+    resolved again, and reported properly, when it is actually reached."""
+    from ytm.daemon.queue import PREFETCH_LEAD_SECONDS
+
+    calls = []
+
+    def resolver(video_id):
+        calls.append(video_id)
+        if video_id == "b" and calls.count("b") == 1:
+            raise RuntimeError("transient")
+        return f"url-{video_id}"
+
+    player = FakePlayer()
+    queue = Queue(player, resolver=resolver, autoplay_radio=False)
+    a = track("a", duration_seconds=100)
+    b = track("b", duration_seconds=100)
+    queue.enqueue([a, b])
+    player.emit_position(100 - PREFETCH_LEAD_SECONDS + 1)  # prefetch b: fails
+    assert queue._prefetch is None
+    player.emit_eof()
+    assert queue.current is b
+    assert player.loaded[-1] == "url-b"
