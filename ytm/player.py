@@ -230,21 +230,35 @@ class Player:
         ``timeout=None`` for this. mpv reports each property once right
         after it is observed, so the first values arrive immediately.
         """
-        for observe_id, name in enumerate(names, 1):
-            self.command("observe_property", observe_id, name)
-        while True:
-            try:
+        # All registrations are written before anything is read: mpv answers
+        # each observe_property with the property's current value right
+        # away, and `command()` would discard those events while waiting
+        # for the next reply -- which is how the first track sometimes went
+        # unannounced. Replies are skipped here instead.
+        if self._file is None:
+            raise PlayerError("player connection is closed")
+        try:
+            for observe_id, name in enumerate(names, 1):
+                self._request_id += 1
+                request = {
+                    "command": ["observe_property", observe_id, name],
+                    "request_id": self._request_id,
+                }
+                self._file.write((json.dumps(request) + "\n").encode("utf-8"))
+            while True:
                 line = self._file.readline()
-            except (OSError, socket.timeout) as exc:
-                raise PlayerError(f"lost the connection to mpv: {exc}") from exc
-            if not line:
-                raise PlayerError("mpv closed the connection")
-            try:
-                message = json.loads(line)
-            except ValueError:
-                continue
-            if message.get("event") == "property-change":
-                yield message.get("name"), message.get("data")
+                if not line:
+                    raise PlayerError("mpv closed the connection")
+                try:
+                    message = json.loads(line)
+                except ValueError:
+                    continue
+                if "request_id" in message and message.get("error") != "success":
+                    raise PlayerError(f"mpv rejected observe_property: {message.get('error')}")
+                if message.get("event") == "property-change":
+                    yield message.get("name"), message.get("data")
+        except (OSError, socket.timeout) as exc:
+            raise PlayerError(f"lost the connection to mpv: {exc}") from exc
 
     def get(self, name, default=None):
         """A property's value, or `default` if mpv says it is unavailable."""

@@ -28,7 +28,17 @@ Screen {
 }
 
 #now-playing {
-    height: 3;
+    height: 8;
+}
+
+#now-playing-art {
+    width: 16;
+    height: 8;
+    margin-right: 1;
+}
+
+#now-playing-text {
+    height: 8;
 }
 
 #error-banner {
@@ -42,4 +52,9 @@ Screen {
     padding: 0 1;
     color: $text-muted;
     background: $surface;
+}
+
+#now-playing-image {
+    width: 100%;
+    height: 100%;
 }

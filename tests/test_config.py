@@ -16,7 +16,7 @@ def test_missing_file_yields_documented_defaults(tmp_path):
             "confirm_remote_delete": True,
             "authenticated_streams": False,
         },
-        "ui": {"theme": "dark"},
+        "ui": {"theme": "dark", "art": "auto"},
         "pot": {"enabled": True, "base_url": "http://127.0.0.1:4416"},
         "keys": {
             "toggle": "space",
@@ -52,7 +52,7 @@ def test_partial_config_overrides_only_its_own_keys(tmp_path):
         "confirm_remote_delete": True,
         "authenticated_streams": False,
     }
-    assert config["ui"] == {"theme": "dark"}
+    assert config["ui"] == {"theme": "dark", "art": "auto"}
 
 
 def test_malformed_toml_falls_back_to_defaults_with_warning(tmp_path, capsys):
@@ -97,6 +97,6 @@ def test_unknown_section_and_key_are_ignored_with_warning(tmp_path, capsys):
     )
     config = config_mod.load(path)
     assert "nonsense" not in config
-    assert config["ui"] == {"theme": "light"}
+    assert config["ui"] == {"theme": "light", "art": "auto"}
     captured = capsys.readouterr()
     assert "config warning" in captured.err

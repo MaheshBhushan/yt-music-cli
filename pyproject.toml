@@ -12,6 +12,7 @@ dependencies = [
     "yt-dlp",
     "bgutil-ytdlp-pot-provider",
     "textual",
+    "textual-image",
 ]
 
 [project.optional-dependencies]

@@ -14,6 +14,7 @@ startup. The shape and defaults are::
 
     [ui]
     theme = "dark"
+    art = "auto"
 
     [pot]
     enabled = true
@@ -55,7 +56,11 @@ DEFAULTS = {
         "confirm_remote_delete": True,
         "authenticated_streams": False,
     },
-    "ui": {"theme": "dark"},
+    # art: cover art in the TUI. "auto" probes the terminal for Sixel or the
+    # kitty graphics protocol and falls back to coloured half-cell blocks;
+    # "blocks" forces the half-cell renderer (for terminals that claim
+    # graphics support they do not really have); "off" hides the art.
+    "ui": {"theme": "dark", "art": "auto"},
     "pot": {"enabled": True, "base_url": "http://127.0.0.1:4416"},
     "keys": {
         "toggle": "space",
@@ -75,6 +80,7 @@ _TYPES = {
     ("behaviour", "confirm_remote_delete"): bool,
     ("behaviour", "authenticated_streams"): bool,
     ("ui", "theme"): str,
+    ("ui", "art"): str,
     ("pot", "enabled"): bool,
     ("pot", "base_url"): str,
     ("keys", "toggle"): str,

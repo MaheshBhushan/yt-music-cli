@@ -250,6 +250,7 @@ quit = "e"
 | `behaviour` | `confirm_remote_delete` | bool | `true` | Require explicit `confirm=true` for deleting/removing tracks from remote playlists. |
 | `pot` | `enabled` | bool | `true` | Whether to use the PO token provider (start it, and point yt-dlp at it). |
 | `pot` | `base_url` | string | `"http://127.0.0.1:4416"` | Where the PO token service listens. The port is also the one the container publishes. |
+| `ui` | `art` | string | `"auto"` | Cover art in the TUI: `auto` (Sixel/kitty graphics when the terminal has them, else coloured blocks), `blocks`, or `off`. |
 | `ui` | `theme` | string | `"dark"` | Textual theme: `"dark"` or `"light"`. Unknown themes fall back to dark with a warning. |
 | `keys` | `toggle` | string | `"space"` | Key to toggle play/pause. |
 | `keys` | `next` | string | `"n"` | Key to skip to next. |
