@@ -298,6 +298,48 @@ def load_cookies(path=AUTH_PATH):
     raise AuthMissing(_MISSING_HINT.format(path=path))
 
 
+COOKIES_PATH = AUTH_PATH.parent / "cookies.txt"
+
+
+def cookies_file(path=AUTH_PATH, cookies_path=COOKIES_PATH):
+    """A Netscape-format cookie file for yt-dlp, derived from the stored auth.
+
+    yt-dlp (and therefore mpv's ytdl_hook) reads cookies from a file, while
+    ytmusicapi keeps them as one Cookie header in auth.json. This writes the
+    header out in the file format, refreshing it whenever auth.json is newer,
+    so re-authenticating is the only step the user ever takes. Returns None
+    when there are no cookies to write (OAuth auth, or not authenticated).
+    """
+    try:
+        header = load_cookies(path)
+    except AuthError:
+        return None
+    if header is None:
+        return None
+    cookies_path = Path(cookies_path)
+    try:
+        fresh = cookies_path.stat().st_mtime >= Path(path).stat().st_mtime
+    except OSError:
+        fresh = False
+    if fresh:
+        return str(cookies_path)
+    lines = ["# Netscape HTTP Cookie File"]
+    for pair in header.split(";"):
+        name, _, value = pair.strip().partition("=")
+        if name:
+            lines.append(f".youtube.com\tTRUE\t/\tTRUE\t2147483647\t{name}\t{value}")
+    _write_text_0600(cookies_path, "\n".join(lines) + "\n")
+    return str(cookies_path)
+
+
+def _write_text_0600(path, text):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with open(fd, "w", encoding="utf-8") as file:
+        file.write(text)
+    os.chmod(path, 0o600)
+
+
 def client(path=AUTH_PATH, credentials_factory=None):
     """Return an authenticated ytmusicapi client, for either auth kind stored at path."""
     headers = load_headers(path)

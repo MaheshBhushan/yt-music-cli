@@ -1,201 +1,484 @@
-"""Command-line interface entry point."""
+"""The ytm command line.
+
+Every command follows the same shape: parse, do one catalogue operation
+and/or one mpv operation, print, exit. Local commands (pause, status,
+volume, ...) touch only mpv over IPC and import nothing heavy; network
+commands (search, play, lyrics, ...) import :mod:`ytm.music` lazily, so
+``ytm pause`` never pays for ytmusicapi.
+
+Output is plain lines by default and JSON with ``--json``. JSON bypasses
+the formatting entirely, which is what makes the TUI a client of this CLI.
+"""
+
 import argparse
+import json
+import os
+import re
+import shutil
 import sys
 
-from ytm import api, auth, cache
-from ytm.client import Client, ClientError
+from ytm.player import Player, PlayerError, watch_url
+
+_VIDEO_ID = re.compile(r"^[A-Za-z0-9_-]{11}$")
+
+#: where the detached mpv writes its log
+LOG_PATH = os.path.join(
+    os.environ.get("XDG_STATE_HOME", os.path.expanduser("~/.local/state")), "ytm", "mpv.log"
+)
 
 
-def cmd_auth(args):
-    """Run the authentication setup: interactive, --from-browser, or --oauth."""
-    if args.oauth:
-        path = auth.oauth_setup(client_id=args.client_id, client_secret=args.client_secret)
-    elif args.from_browser is not None:
-        path = auth.from_browser(args.from_browser or None)
-    else:
-        path = auth.setup()
-    print(f"Saved credentials to {path}")
+class CliError(Exception):
+    """A user-facing failure: printed to stderr, exit code 1."""
+
+
+# -- wiring -----------------------------------------------------------------
+
+
+def _ytdlp_path():
+    """The yt-dlp next to this interpreter, else whatever is on PATH."""
+    here = os.path.dirname(sys.executable)
+    return shutil.which("yt-dlp", path=here) or shutil.which("yt-dlp")
+
+
+def _js_runtime():
+    for name in ("deno", "node"):
+        if shutil.which(name):
+            return name
+    return None
+
+
+def player(spawn=True):
+    """A connected Player, configured from config.toml and the stored auth."""
+    from ytm import auth, config
+
+    cfg = config.load()
+    pot = cfg["pot"]
+    return Player(
+        spawn=spawn,
+        ytdlp_path=_ytdlp_path(),
+        cookies_file=(
+            auth.cookies_file() if cfg["behaviour"]["authenticated_streams"] else None
+        ),
+        extractor_args=(
+            f"youtubepot-bgutilhttp:base_url={pot['base_url']}" if pot["enabled"] else None
+        ),
+        js_runtimes=_js_runtime(),
+        audio_device=cfg["audio"]["device"],
+        extra_args=[
+            f"--volume={cfg['audio']['volume']}",
+            # mpv runs detached with no terminal, so this file is the only
+            # place a failed resolve or a dead audio device is ever reported
+            f"--log-file={LOG_PATH}",
+            "--msg-level=all=warn,ytdl_hook=v",
+        ],
+    )
+
+
+# -- selecting a track -------------------------------------------------------
+
+
+def select(what, yt=None):
+    """Turn the user's `what` into a Track.
+
+    A small integer is an index into the last search, an 11-character id is
+    a video id, and anything else is a search whose first hit wins.
+    """
+    from ytm import music, state
+
+    if what.isdigit():
+        results = state.last_search()
+        index = int(what)
+        if not 1 <= index <= len(results):
+            raise CliError(
+                f"no result {index}; the last search had {len(results)} results"
+                if results
+                else "no previous search to pick from; run 'ytm search' first"
+            )
+        return results[index - 1]
+    if _VIDEO_ID.match(what):
+        track = music.song(what, yt=yt)
+        if track is None:
+            raise CliError(f"no track with id {what}")
+        return track
+    results = music.search(what, limit=5, yt=yt)
+    if not results:
+        raise CliError(f"nothing found for '{what}'")
+    # so "ytm play <query>" followed by "ytm add 2" picks from these hits
+    state.remember_search(results)
+    return results[0]
+
+
+def current_track(p):
+    """The Track mpv is on, from remembered metadata, or a stub from mpv."""
+    from ytm import music, state
+
+    for entry in p.playlist():
+        if entry["current"]:
+            known = state.track_for(entry["video_id"]) if entry["video_id"] else None
+            if known:
+                return known
+            title = entry["title"] or entry["url"]
+            return music.Track(entry["video_id"] or "", title, "", "", "", 0)
+    return None
+
+
+def _label(track):
+    return f"{track.title} / {track.artist}" if track.artist else track.title
+
+
+# -- formatting ---------------------------------------------------------------
+
+
+def _clock(seconds):
+    seconds = int(seconds or 0)
+    return f"{seconds // 60:02d}:{seconds % 60:02d}"
+
+
+def fmt_track(track):
+    return {
+        "video_id": track.video_id,
+        "title": track.title,
+        "artist": track.artist,
+        "album": track.album,
+        "duration": track.duration,
+        "duration_seconds": track.duration_seconds,
+    }
+
+
+def render_status(status, track):
+    if status["idle"]:
+        return f"Nothing playing (volume {int(status['volume'])})"
+    lines = [track.title if track else status["title"] or "Unknown"]
+    if track and track.artist:
+        lines.append(track.artist)
+    if track and track.album:
+        lines.append(track.album)
+    lines.append(f"{_clock(status['position'])} / {_clock(status['duration'])}")
+    lines.append(
+        f"{'Paused' if status['paused'] else 'Playing'}  "
+        f"track {status['index'] + 1} of {status['count']}  "
+        f"volume {int(status['volume'])}"
+    )
+    return "\n".join(lines)
+
+
+def render_results(tracks):
+    width = len(str(len(tracks)))
+    return "\n".join(
+        f"{i:>{width}}. {t.title} — {t.artist}" + (f"  ({t.duration})" if t.duration else "")
+        for i, t in enumerate(tracks, 1)
+    )
+
+
+def render_queue(entries, tracks_by_id):
+    if not entries:
+        return "Queue is empty"
+    width = len(str(len(entries)))
+    lines = []
+    for i, entry in enumerate(entries, 1):
+        track = tracks_by_id.get(entry["video_id"])
+        label = _label(track) if track else (entry["title"] or entry["url"])
+        marker = "▶" if entry["current"] else " "
+        lines.append(f"{marker} {i:>{width}}. {label}")
+    return "\n".join(lines)
+
+
+# -- commands ------------------------------------------------------------------
+#
+# Each returns (data, text): the JSON payload and the plain rendering.
 
 
 def cmd_search(args):
-    """Print normalised search results as plain text."""
-    for track in api.search(args.query):
-        print(f"{track.title}\t{track.artist}\t{track.album or '-'}\t{track.duration}")
+    from ytm import music, state
+
+    tracks = music.search(args.query, limit=args.limit)
+    state.remember_search(tracks)
+    if not tracks:
+        return {"tracks": []}, f"nothing found for '{args.query}'"
+    return {"tracks": [fmt_track(t) for t in tracks]}, render_results(tracks)
 
 
-def _describe_status(data):
-    """A short human-readable status line from `status` command data."""
-    current = data.get("current")
-    state = "paused" if data.get("paused") else "playing"
-    if current is None:
-        return f"[{state}] nothing playing (volume {data.get('volume')})"
+def _load(args, flags):
+    from ytm import state
+
+    track = select(" ".join(args.what))
+    state.remember_tracks([track])
+    with player() as p:
+        if flags == "play":
+            p.play(watch_url(track.video_id), title=_label(track))
+        else:
+            p.enqueue(watch_url(track.video_id), title=_label(track))
+    verb = "Playing" if flags == "play" else "Queued"
+    text = "\n".join([f"{verb}:", track.title, track.artist] + ([track.album] if track.album else []))
+    return {"track": fmt_track(track), "action": flags}, text
+
+
+def cmd_play(args):
+    if not args.what:
+        return cmd_resume(args)
+    return _load(args, "play")
+
+
+def cmd_add(args):
+    return _load(args, "add")
+
+
+def cmd_radio(args):
+    from ytm import music, state
+
+    with player() as p:
+        if args.what:
+            seed = select(" ".join(args.what))
+        else:
+            seed = current_track(p)
+            if seed is None:
+                raise CliError("nothing is playing; give radio a song to start from")
+        tracks = music.radio(seed.video_id, limit=args.limit)
+        if not tracks:
+            raise CliError(f"no radio available for {seed.title}")
+        state.remember_tracks([seed] + tracks)
+        if args.what:
+            p.stop()
+            p.play(watch_url(seed.video_id), title=_label(seed))
+        for track in tracks:
+            p.enqueue(watch_url(track.video_id), title=_label(track))
     return (
-        f"[{state}] {current.get('title')} - {current.get('artist')} "
-        f"(volume {data.get('volume')})"
+        {"seed": fmt_track(seed), "tracks": [fmt_track(t) for t in tracks]},
+        f"Radio from {seed.title} — {seed.artist}: {len(tracks)} tracks queued",
     )
 
 
-def _one_shot(cmd, args=None, describe=None):
-    """Send one command to the daemon and print a short result line."""
-    try:
-        client = Client()
-        try:
-            data = client.request(cmd, args)
-        finally:
-            client.close()
-    except ClientError as exc:
-        print(exc, file=sys.stderr)
-        return 1
-    print(describe(data) if describe else f"ok: {cmd}")
-    return 0
+def _transport(method, text):
+    def run(args):
+        with player(spawn=False) as p:
+            getattr(p, method)()
+            status = p.status()
+        return {"status": status}, text
+
+    return run
 
 
-def cmd_next(args):
-    return _one_shot("next", describe=lambda data: "next")
-
-
-def cmd_prev(args):
-    return _one_shot("prev", describe=lambda data: "prev")
-
-
-def cmd_pause(args):
-    return _one_shot("pause", describe=lambda data: "paused")
-
-
-def cmd_resume(args):
-    return _one_shot("resume", describe=lambda data: "resumed")
+cmd_pause = _transport("pause", "paused")
+cmd_resume = _transport("resume", "resumed")
+cmd_next = _transport("next", "next")
+cmd_prev = _transport("prev", "previous")
+cmd_stop = _transport("stop", "stopped")
 
 
 def cmd_toggle(args):
-    return _one_shot(
-        "toggle", describe=lambda data: "paused" if data.get("paused") else "resumed"
-    )
+    with player(spawn=False) as p:
+        p.toggle()
+        status = p.status()
+    return {"status": status}, "paused" if status["paused"] else "resumed"
 
 
-def cmd_status(args):
-    return _one_shot("status", describe=_describe_status)
+def cmd_seek(args):
+    with player(spawn=False) as p:
+        p.seek(args.seconds, absolute=args.to)
+        status = p.status()
+    return {"status": status}, _clock(status["position"])
 
 
 def cmd_volume(args):
-    return _one_shot(
-        "volume",
-        {"level": args.level},
-        describe=lambda data: f"volume: {data.get('volume')}",
-    )
+    with player(spawn=False) as p:
+        level = p.volume(args.level)
+    return {"volume": level}, f"volume {int(level)}"
 
 
-def cmd_cache_add(args):
-    """Download a videoId's audio into the offline cache."""
-    path = cache.download(args.video_id)
-    print(f"cached {args.video_id} -> {path}")
-    return 0
+def cmd_status(args):
+    with player(spawn=False) as p:
+        status = p.status()
+        track = None if status["idle"] else current_track(p)
+    data = dict(status, track=fmt_track(track) if track else None)
+    return data, render_status(status, track)
 
 
-def cmd_cache_rm(args):
-    """Remove a videoId's entry from the offline cache."""
-    if cache.remove(args.video_id):
-        print(f"removed {args.video_id}")
-        return 0
-    print(f"not cached: {args.video_id}", file=sys.stderr)
-    return 1
+def cmd_queue(args):
+    from ytm import state
+
+    with player(spawn=False) as p:
+        entries = p.playlist()
+    known = {e["video_id"]: state.track_for(e["video_id"]) for e in entries if e["video_id"]}
+    known = {k: v for k, v in known.items() if v}
+    data = [
+        dict(entry, track=fmt_track(known[entry["video_id"]]) if entry["video_id"] in known else None)
+        for entry in entries
+    ]
+    return {"queue": data}, render_queue(entries, known)
 
 
-def cmd_cache_list(args):
-    """List cached entries."""
-    for entry in cache.list_cached():
-        print(f"{entry['video_id']}\t{entry['size']}\t{entry['path']}")
-    return 0
+def cmd_clear(args):
+    with player(spawn=False) as p:
+        p.clear()
+    return {"cleared": True}, "queue cleared (current track kept)"
 
 
-def main():
-    """Parse arguments and dispatch commands."""
-    parser = argparse.ArgumentParser(description="YouTube Music CLI")
-    subparsers = parser.add_subparsers(dest="command")
+def cmd_shuffle(args):
+    with player(spawn=False) as p:
+        p.shuffle()
+    return {"shuffled": True}, "queue shuffled"
 
-    auth_parser = subparsers.add_parser("auth", help="set up YouTube Music authentication")
-    auth_parser.add_argument(
-        "--from-browser",
-        nargs="?",
-        const="",
-        default=None,
-        metavar="BROWSER",
-        help="extract cookies from a local browser profile instead of pasting headers "
-        "(auto-detects a logged-in browser if BROWSER is omitted)",
-    )
-    auth_parser.add_argument(
-        "--oauth",
-        action="store_true",
-        help="authenticate via OAuth device code flow (works over SSH/headless; "
-        "requires your own Google Cloud 'TVs and Limited Input devices' OAuth client)",
-    )
-    auth_parser.add_argument(
-        "--client-id",
-        default=None,
-        help="OAuth client ID for --oauth (falls back to YTM_OAUTH_CLIENT_ID env var, "
-        "then an interactive prompt)",
-    )
-    auth_parser.add_argument(
-        "--client-secret",
-        default=None,
-        help="OAuth client secret for --oauth (falls back to YTM_OAUTH_CLIENT_SECRET "
-        "env var, then an interactive prompt)",
-    )
-    auth_parser.set_defaults(func=cmd_auth)
 
-    search_parser = subparsers.add_parser("search", help="search YouTube Music for songs")
-    search_parser.add_argument("query", help="search query")
-    search_parser.set_defaults(func=cmd_search)
+def cmd_lyrics(args):
+    from ytm import music
 
-    next_parser = subparsers.add_parser("next", help="skip to the next track")
-    next_parser.set_defaults(func=cmd_next)
+    with player(spawn=False) as p:
+        track = current_track(p)
+    if track is None:
+        raise CliError("nothing is playing")
+    lyrics, source = music.get_lyrics(track.video_id)
+    if not lyrics:
+        return {"track": fmt_track(track), "lyrics": None, "source": None}, f"no lyrics for {track.title}"
+    text = lyrics + (f"\n\n— {source}" if source else "")
+    return {"track": fmt_track(track), "lyrics": lyrics, "source": source}, text
 
-    prev_parser = subparsers.add_parser("prev", help="go to the previous track")
-    prev_parser.set_defaults(func=cmd_prev)
 
-    pause_parser = subparsers.add_parser("pause", help="pause playback")
-    pause_parser.set_defaults(func=cmd_pause)
+def cmd_like(args):
+    from ytm import music
 
-    resume_parser = subparsers.add_parser("resume", help="resume playback")
-    resume_parser.set_defaults(func=cmd_resume)
+    with player(spawn=False) as p:
+        track = current_track(p)
+    if track is None:
+        raise CliError("nothing is playing")
+    music.like(track.video_id)
+    return {"liked": fmt_track(track)}, f"liked {track.title} — {track.artist}"
 
-    toggle_parser = subparsers.add_parser("toggle", help="toggle play/pause")
-    toggle_parser.set_defaults(func=cmd_toggle)
 
-    status_parser = subparsers.add_parser("status", help="show the current track and state")
-    status_parser.set_defaults(func=cmd_status)
-
-    volume_parser = subparsers.add_parser("volume", help="set the playback volume")
-    volume_parser.add_argument("level", type=float, help="volume level (0-100)")
-    volume_parser.set_defaults(func=cmd_volume)
-
-    cache_parser = subparsers.add_parser("cache", help="manage the offline track cache")
-    cache_subparsers = cache_parser.add_subparsers(dest="cache_command")
-
-    cache_add_parser = cache_subparsers.add_parser("add", help="download a track into the cache")
-    cache_add_parser.add_argument("video_id", help="YouTube videoId")
-    cache_add_parser.set_defaults(func=cmd_cache_add)
-
-    cache_rm_parser = cache_subparsers.add_parser("rm", help="remove a track from the cache")
-    cache_rm_parser.add_argument("video_id", help="YouTube videoId")
-    cache_rm_parser.set_defaults(func=cmd_cache_rm)
-
-    cache_list_parser = cache_subparsers.add_parser("list", help="list cached tracks")
-    cache_list_parser.set_defaults(func=cmd_cache_list)
-
-    args = parser.parse_args()
-    if getattr(args, "command", None) == "cache" and not getattr(args, "func", None):
-        cache_parser.print_help()
-        return 0
-    if not getattr(args, "func", None):
-        from ytm.tui.app import run as run_tui
-
-        run_tui()
-        return 0
+def cmd_quit(args):
     try:
-        return args.func(args) or 0
-    except auth.AuthError as exc:
-        print(exc, file=sys.stderr)
+        with player(spawn=False) as p:
+            p.quit()
+    except PlayerError:
+        return {"stopped": False}, "mpv was not running"
+    return {"stopped": True}, "mpv stopped"
+
+
+def cmd_auth(args):
+    from ytm import auth
+
+    if args.oauth:
+        path = auth.oauth_setup(client_id=args.client_id, client_secret=args.client_secret)
+    elif args.manual:
+        path = auth.setup()
+    else:
+        path = auth.from_browser(args.from_browser or None)
+    # regenerate the cookie file yt-dlp reads, so mpv's next resolve is authenticated
+    auth.cookies_file()
+    return {"saved": str(path)}, f"Saved credentials to {path}"
+
+
+def cmd_cache(args):
+    from ytm import cache
+
+    if args.cache_command == "add":
+        path = cache.download(args.video_id)
+        return {"cached": args.video_id, "path": str(path)}, f"cached {args.video_id} -> {path}"
+    if args.cache_command == "rm":
+        removed = cache.remove(args.video_id)
+        if not removed:
+            raise CliError(f"not cached: {args.video_id}")
+        return {"removed": args.video_id}, f"removed {args.video_id}"
+    entries = cache.list_cached()
+    return {"cached": entries}, "\n".join(
+        f"{e['video_id']}\t{e['size']}\t{e['path']}" for e in entries
+    ) or "cache is empty"
+
+
+def cmd_tui(args):
+    """The Textual TUI, still on the old daemon until the new one lands."""
+    from ytm.tui.app import run as run_tui
+
+    run_tui()
+    return None, None
+
+
+# -- parser ---------------------------------------------------------------------
+
+
+def build_parser():
+    parser = argparse.ArgumentParser(prog="ytm", description="YouTube Music from the terminal")
+    parser.add_argument("--json", action="store_true", help="print JSON instead of text")
+    sub = parser.add_subparsers(dest="command", metavar="command")
+
+    def add(name, func, help, **kwargs):
+        p = sub.add_parser(name, help=help, **kwargs)
+        p.set_defaults(func=func)
+        return p
+
+    p = add("search", cmd_search, "search songs")
+    p.add_argument("query")
+    p.add_argument("-n", "--limit", type=int, default=10)
+
+    p = add("play", cmd_play, "play a song: a query, a result number, or a video id")
+    p.add_argument("what", nargs="*")
+    p = add("add", cmd_add, "queue a song after the current queue")
+    p.add_argument("what", nargs="+")
+    p = add("radio", cmd_radio, "queue a radio from a song (default: the one playing)")
+    p.add_argument("what", nargs="*")
+    p.add_argument("-n", "--limit", type=int, default=25)
+
+    add("pause", cmd_pause, "pause")
+    add("resume", cmd_resume, "resume")
+    add("toggle", cmd_toggle, "toggle pause")
+    add("next", cmd_next, "next track")
+    add("prev", cmd_prev, "previous track")
+    add("stop", cmd_stop, "stop and empty the queue")
+    p = add("seek", cmd_seek, "seek by seconds (negative to go back)")
+    p.add_argument("seconds", type=float)
+    p.add_argument("--to", action="store_true", help="seek to an absolute position")
+    p = add("volume", cmd_volume, "show or set the volume (0-100)")
+    p.add_argument("level", type=float, nargs="?")
+    add("status", cmd_status, "what is playing")
+    add("queue", cmd_queue, "list the queue")
+    add("clear", cmd_clear, "clear the queue, keeping the current track")
+    add("shuffle", cmd_shuffle, "shuffle the queue")
+    add("lyrics", cmd_lyrics, "lyrics for the current track")
+    add("like", cmd_like, "like the current track")
+    add("quit", cmd_quit, "stop mpv entirely")
+
+    p = add("auth", cmd_auth, "sign in (default: cookies from a logged-in browser)")
+    p.add_argument("--from-browser", nargs="?", const="", default=None, metavar="BROWSER")
+    p.add_argument("--manual", action="store_true", help="paste request headers instead")
+    p.add_argument("--oauth", action="store_true", help="OAuth device flow, for SSH")
+    p.add_argument("--client-id", default=None)
+    p.add_argument("--client-secret", default=None)
+
+    p = add("cache", cmd_cache, "offline cache")
+    cache_sub = p.add_subparsers(dest="cache_command")
+    cache_sub.add_parser("add").add_argument("video_id")
+    cache_sub.add_parser("rm").add_argument("video_id")
+    cache_sub.add_parser("list")
+    p.set_defaults(cache_command="list")
+
+    add("tui", cmd_tui, "open the full-screen interface")
+    return parser
+
+
+def main(argv=None, out=sys.stdout, err=sys.stderr):
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    if args.command is None:
+        return cmd_tui(args) or 0
+    try:
+        data, text = args.func(args)
+    except (CliError, PlayerError) as exc:
+        print(exc, file=err)
         return 1
+    except Exception as exc:  # auth and network failures included
+        from ytm import auth
+
+        if isinstance(exc, auth.AuthError):
+            print(exc, file=err)
+            return 1
+        raise
+    if data is None:
+        return 0
+    if args.json:
+        json.dump(data, out)
+        out.write("\n")
+    elif text:
+        print(text, file=out)
+    return 0
 
 
 if __name__ == "__main__":

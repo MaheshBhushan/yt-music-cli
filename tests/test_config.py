@@ -11,7 +11,11 @@ def test_missing_file_yields_documented_defaults(tmp_path):
     config = config_mod.load(tmp_path / "does-not-exist.toml")
     assert config == {
         "audio": {"volume": 70, "device": "auto"},
-        "behaviour": {"autoplay_radio": True, "confirm_remote_delete": True},
+        "behaviour": {
+            "autoplay_radio": True,
+            "confirm_remote_delete": True,
+            "authenticated_streams": False,
+        },
         "ui": {"theme": "dark"},
         "pot": {"enabled": True, "base_url": "http://127.0.0.1:4416"},
         "keys": {
@@ -46,6 +50,7 @@ def test_partial_config_overrides_only_its_own_keys(tmp_path):
     assert config["behaviour"] == {
         "autoplay_radio": True,
         "confirm_remote_delete": True,
+        "authenticated_streams": False,
     }
     assert config["ui"] == {"theme": "dark"}
 
