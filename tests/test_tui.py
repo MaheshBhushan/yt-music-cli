@@ -9,7 +9,7 @@ import asyncio
 
 from textual.widgets import DataTable
 
-from ytm.client import ClientError
+from ytm.tui.backend import BackendError as ClientError
 from ytm.tui.app import YTMApp
 from ytm.tui.lyrics import LyricsPane, NO_LYRICS_TEXT
 from ytm.tui.nowplaying import NowPlaying
@@ -25,6 +25,14 @@ TRACK = {
     "duration": "5:12",
     "duration_seconds": 312,
 }
+
+
+async def settle(pilot, delay=None):
+    """Let background request workers finish, then drain the message loop."""
+    await pilot.app.workers.wait_for_complete()
+    await pilot.pause(delay) if delay else await pilot.pause()
+    await pilot.app.workers.wait_for_complete()
+    await pilot.pause()
 
 
 class StubClient:
@@ -89,7 +97,7 @@ async def _search(pilot, query="kaanave"):
     for char in query:
         await pilot.press(char)
     await pilot.press("enter")
-    await pilot.pause()
+    await settle(pilot)
 
 
 def test_search_populates_table():
@@ -164,9 +172,9 @@ def test_enter_on_selected_row_plays_that_row_not_the_first():
             table = app.query_one("#search-results", DataTable)
             table.focus()
             table.cursor_coordinate = (1, 0)
-            await pilot.pause()
+            await settle(pilot)
             await pilot.press("enter")
-            await pilot.pause()
+            await settle(pilot)
 
             play_calls = [c for c in stub.calls if c[0] == "play"]
             # the first play came from submitting the search box (first
@@ -186,9 +194,9 @@ def test_enqueue_key_sends_enqueue():
             await _search(pilot)
             table = app.query_one("#search-results", DataTable)
             table.focus()
-            await pilot.pause()
+            await settle(pilot)
             await pilot.press("a")
-            await pilot.pause()
+            await settle(pilot)
             enqueue_calls = [c for c in stub.calls if c[0] == "enqueue"]
             assert len(enqueue_calls) == 1
             assert enqueue_calls[0][1]["video_id"] == "abc123"
@@ -202,14 +210,14 @@ def test_transport_keys_send_expected_commands():
         app = YTMApp(client=stub)
         async with app.run_test() as pilot:
             app.query_one("#queue-table").focus()
-            await pilot.pause()
+            await settle(pilot)
 
             await pilot.press("space")
-            await pilot.pause()
+            await settle(pilot)
             await pilot.press("n")
-            await pilot.pause()
+            await settle(pilot)
             await pilot.press("p")
-            await pilot.pause()
+            await settle(pilot)
 
             cmds = [c[0] for c in stub.calls]
             assert "toggle" in cmds
@@ -225,12 +233,12 @@ def test_seek_keys_send_plus_minus_five_seconds():
         app = YTMApp(client=stub)
         async with app.run_test() as pilot:
             app.query_one("#queue-table").focus()
-            await pilot.pause()
+            await settle(pilot)
 
             await pilot.press("left")
-            await pilot.pause()
+            await settle(pilot)
             await pilot.press("right")
-            await pilot.pause()
+            await settle(pilot)
 
             seeks = [c[1]["seconds"] for c in stub.calls if c[0] == "seek"]
             assert -5 in seeks
@@ -245,15 +253,15 @@ def test_volume_keys_change_volume():
         app = YTMApp(client=stub)
         async with app.run_test() as pilot:
             app.query_one("#queue-table").focus()
-            await pilot.pause()
+            await settle(pilot)
             start = app._volume
 
             await pilot.press("plus")
-            await pilot.pause()
+            await settle(pilot)
             assert app._volume == start + 5
 
             await pilot.press("minus")
-            await pilot.pause()
+            await settle(pilot)
             assert app._volume == start
 
     asyncio.run(scenario())
@@ -264,14 +272,14 @@ def test_position_event_moves_progress_bar_without_polling():
         stub = StubClient()
         app = YTMApp(client=stub)
         async with app.run_test() as pilot:
-            await pilot.pause()
+            await settle(pilot)
             calls_before = len(stub.calls)
 
             stub.push(
                 "position",
                 {"position": 42, "video_id": "abc123", "duration_seconds": 312},
             )
-            await pilot.pause()
+            await settle(pilot)
 
             now_playing = app.query_one(NowPlaying)
             progress_bar = now_playing.query_one("#now-playing-progress")
@@ -282,7 +290,7 @@ def test_position_event_moves_progress_bar_without_polling():
             assert len(stub.calls) == calls_before
 
             # give any timers a chance to fire, then confirm nothing polled
-            await pilot.pause(0.3)
+            await settle(pilot, 0.3)
             assert len(stub.calls) == calls_before
             # one status fetch at startup (to seed the volume indicator) is
             # fine; a poll would keep sending more of them over time
@@ -298,9 +306,9 @@ def test_lowercase_q_quits_without_shutdown():
         app = YTMApp(client=stub)
         async with app.run_test() as pilot:
             app.query_one("#queue-table").focus()
-            await pilot.pause()
+            await settle(pilot)
             await pilot.press("q")
-            await pilot.pause()
+            await settle(pilot)
         assert not any(c[0] == "shutdown" for c in stub.calls)
         assert stub.closed
 
@@ -313,9 +321,9 @@ def test_uppercase_q_quits_and_shuts_down_daemon():
         app = YTMApp(client=stub)
         async with app.run_test() as pilot:
             app.query_one("#queue-table").focus()
-            await pilot.pause()
+            await settle(pilot)
             await pilot.press("Q")
-            await pilot.pause()
+            await settle(pilot)
         assert any(c[0] == "shutdown" for c in stub.calls)
         assert stub.closed
 
@@ -347,15 +355,15 @@ def test_client_error_on_construction_renders_and_does_not_crash():
         # the Client symbol app.py resolves at construction time.
         import ytm.tui.app as app_module
 
-        original = app_module.Client
-        app_module.Client = FailingClient
+        original = app_module.Backend
+        app_module.Backend = FailingClient
         try:
             app = YTMApp(client=None)
         finally:
-            app_module.Client = original
+            app_module.Backend = original
 
         async with app.run_test() as pilot:
-            await pilot.pause()
+            await settle(pilot)
             banner = app.query_one("#error-banner")
             assert "cannot reach the ytm daemon" in str(banner.render())
 
@@ -370,7 +378,7 @@ def test_playlists_pane_renders_local_and_remote_markers():
         stub = StubClient()
         app = YTMApp(client=stub)
         async with app.run_test() as pilot:
-            await pilot.pause()
+            await settle(pilot)
             pane = app.query_one(PlaylistsPane)
             table = pane.query_one("#playlists-table", _DT)
             assert table.row_count == 2
@@ -392,11 +400,11 @@ def test_add_to_playlist_key_sends_playlist_add():
             await _search(pilot)
             table = app.query_one("#search-results", DataTable)
             table.focus()
-            await pilot.pause()
+            await settle(pilot)
             await pilot.press("P")
-            await pilot.pause()
+            await settle(pilot)
             await pilot.press("A")
-            await pilot.pause()
+            await settle(pilot)
             add_calls = [c for c in stub.calls if c[0] == "playlist_add"]
             assert len(add_calls) == 1
             assert add_calls[0][1]["video_ids"] == ["abc123"]
@@ -409,9 +417,9 @@ def test_client_error_on_playlist_action_shows_banner_not_crash():
         stub = RaisingClient()
         app = YTMApp(client=stub)
         async with app.run_test() as pilot:
-            await pilot.pause()
+            await settle(pilot)
             app._request("playlist_add", {"playlist_id": "x", "video_ids": ["y"]})
-            await pilot.pause()
+            await settle(pilot)
             banner = app.query_one("#error-banner")
             assert "auth expired" in str(banner.render())
 
@@ -426,7 +434,7 @@ def test_smoke_render_layout():
         stub = StubClient()
         app = YTMApp(client=stub)
         async with app.run_test(size=size) as pilot:
-            await pilot.pause()
+            await settle(pilot)
             assert app.query_one(SearchPane) is not None
             assert app.query_one(QueuePane) is not None
             assert app.query_one(NowPlaying) is not None
@@ -482,9 +490,9 @@ def test_track_changed_fetches_and_renders_lyrics():
         )
         app = YTMApp(client=stub)
         async with app.run_test() as pilot:
-            await pilot.pause()
+            await settle(pilot)
             stub.push("track_changed", {"video_id": "abc123", "title": "Song"})
-            await pilot.pause()
+            await settle(pilot)
 
             lyrics_calls = [c for c in stub.calls if c[0] == "lyrics"]
             assert len(lyrics_calls) == 1
@@ -503,9 +511,9 @@ def test_track_changed_with_null_lyrics_renders_no_lyrics_available():
         )
         app = YTMApp(client=stub)
         async with app.run_test() as pilot:
-            await pilot.pause()
+            await settle(pilot)
             stub.push("track_changed", {"video_id": "abc123", "title": "Song"})
-            await pilot.pause()
+            await settle(pilot)
 
             content = app.query_one("#lyrics-content")
             assert str(content.render()) == NO_LYRICS_TEXT
@@ -518,9 +526,9 @@ def test_lyrics_client_error_renders_message_without_crashing():
         stub = LyricsStubClient(lyrics_error="lyrics service unavailable")
         app = YTMApp(client=stub)
         async with app.run_test() as pilot:
-            await pilot.pause()
+            await settle(pilot)
             stub.push("track_changed", {"video_id": "abc123", "title": "Song"})
-            await pilot.pause()
+            await settle(pilot)
 
             content = app.query_one("#lyrics-content")
             assert "lyrics service unavailable" in str(content.render())
@@ -552,16 +560,16 @@ def test_slow_lyrics_fetch_does_not_block_ui():
         app = YTMApp(client=stub)
         async with app.run_test() as pilot:
             app.query_one("#queue-table", DataTable).focus()
-            await pilot.pause()
+            await settle(pilot)
 
             stub.push("track_changed", {"video_id": "abc123", "title": "Song"})
-            await pilot.pause()
+            await settle(pilot)
 
             # the lyrics request is now blocked on `release`; the app must
             # still respond to a keypress while it waits
             start_volume = app._volume
             await pilot.press("plus")
-            await pilot.pause()
+            await settle(pilot)
             assert app._volume == start_volume + 5
 
             lyrics_calls = [c for c in stub.calls if c[0] == "lyrics"]
@@ -598,18 +606,18 @@ def test_custom_toggle_key_is_the_key_actually_bound():
         stub = StubClient()
         app = YTMApp(client=stub, config=_config_with_keys(toggle="x"))
         async with app.run_test() as pilot:
-            await pilot.pause()
+            await settle(pilot)
             # move focus off the search input, which otherwise swallows
             # printable keys before they reach the app's bindings
             app.query_one("#queue-table", DataTable).focus()
-            await pilot.pause()
+            await settle(pilot)
             # the configured key fires the action
             await pilot.press("x")
-            await pilot.pause()
+            await settle(pilot)
             assert ("toggle", None) in stub.calls
             # the old default no longer triggers it
             await pilot.press("space")
-            await pilot.pause()
+            await settle(pilot)
             toggle_calls_after = [c for c in stub.calls if c[0] == "toggle"]
             assert len(toggle_calls_after) == 1
 
@@ -670,7 +678,7 @@ def test_queue_with_duplicate_video_id_renders_without_crashing():
         stub = DupQueueClient()
         app = YTMApp(client=stub)
         async with app.run_test() as pilot:
-            await pilot.pause()
+            await settle(pilot)
             table = app.query_one("#queue-table", DataTable)
             assert table.row_count == 3
             svg = app.export_screenshot()
@@ -684,19 +692,19 @@ def test_selecting_second_duplicate_queue_row_resolves_correct_track():
         stub = DupQueueClient()
         app = YTMApp(client=stub)
         async with app.run_test() as pilot:
-            await pilot.pause()
+            await settle(pilot)
             pane = app.query_one(QueuePane)
             table = app.query_one("#queue-table", DataTable)
             table.focus()
 
             table.cursor_coordinate = (0, 0)
-            await pilot.pause()
+            await settle(pilot)
             first = pane.selected_track()
             assert first["video_id"] == "abc123"
             assert first["title"] == "first play"
 
             table.cursor_coordinate = (2, 0)
-            await pilot.pause()
+            await settle(pilot)
             second = pane.selected_track()
             assert second["video_id"] == "abc123"
             assert second["title"] == "replayed"

@@ -12,7 +12,6 @@ dependencies = [
     "yt-dlp",
     "bgutil-ytdlp-pot-provider",
     "textual",
-    "dbus-next",
 ]
 
 [project.optional-dependencies]
@@ -20,4 +19,6 @@ dev = ["pytest"]
 
 [project.scripts]
 ytm = "ytm.cli:main"
-ytmd = "ytm.daemon.server:main"
+
+[tool.setuptools.package-data]
+ytm = ["mpv/*.lua", "tui/*.tcss"]

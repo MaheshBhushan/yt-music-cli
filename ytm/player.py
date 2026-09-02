@@ -60,6 +60,8 @@ def mpv_args(
     extractor_args=None,
     js_runtimes=None,
     audio_device=None,
+    scripts=(),
+    script_opts=None,
     extra_args=(),
 ):
     """The command line for the persistent mpv.
@@ -94,6 +96,10 @@ def mpv_args(
         args.append("--ytdl-raw-options=" + ",".join(raw))
     if audio_device and audio_device != "auto":
         args.append(f"--audio-device={audio_device}")
+    for script in scripts:
+        args.append(f"--script={script}")
+    for key, value in (script_opts or {}).items():
+        args.append(f"--script-opts-append={key}={value}")
     args.extend(extra_args)
     return args
 
@@ -120,9 +126,13 @@ def spawn_mpv(args):
 class Player:
     """One connection to the persistent mpv."""
 
-    def __init__(self, ipc_path=None, spawn=True, spawner=spawn_mpv, **mpv_options):
+    def __init__(
+        self, ipc_path=None, spawn=True, spawner=spawn_mpv, timeout=REPLY_TIMEOUT, **mpv_options
+    ):
         self._ipc_path = ipc_path or default_ipc_path()
         self._mpv_options = mpv_options
+        #: None for a connection that sits in `observe()` indefinitely
+        self._timeout = timeout
         self._file = None
         self._request_id = 0
         self._connect(spawn=spawn, spawner=spawner)
@@ -162,7 +172,7 @@ class Player:
             return
         Path(self._ipc_path).parent.mkdir(parents=True, exist_ok=True)
         sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        sock.settimeout(REPLY_TIMEOUT)
+        sock.settimeout(self._timeout)
         sock.connect(self._ipc_path)
         self._file = sock.makefile("rwb", buffering=0)
 
@@ -213,6 +223,29 @@ class Player:
         except (OSError, socket.timeout) as exc:
             raise PlayerError(f"lost the connection to mpv: {exc}") from exc
 
+    def observe(self, *names):
+        """Yield ``(name, value)`` for every change to the given properties.
+
+        Blocks for as long as the caller iterates; build the Player with
+        ``timeout=None`` for this. mpv reports each property once right
+        after it is observed, so the first values arrive immediately.
+        """
+        for observe_id, name in enumerate(names, 1):
+            self.command("observe_property", observe_id, name)
+        while True:
+            try:
+                line = self._file.readline()
+            except (OSError, socket.timeout) as exc:
+                raise PlayerError(f"lost the connection to mpv: {exc}") from exc
+            if not line:
+                raise PlayerError("mpv closed the connection")
+            try:
+                message = json.loads(line)
+            except ValueError:
+                continue
+            if message.get("event") == "property-change":
+                yield message.get("name"), message.get("data")
+
     def get(self, name, default=None):
         """A property's value, or `default` if mpv says it is unavailable."""
         try:
@@ -228,8 +261,16 @@ class Player:
     # -- loading -------------------------------------------------------------
 
     def play(self, url, title=None):
-        """Append `url` and start playing it right away."""
-        self._loadfile(url, "append-play", title)
+        """Insert `url` right after the current entry and play it now.
+
+        mpv's ``*-play`` loadfile flags only start playback when it is idle,
+        so "play this" while something is playing needs an explicit jump to
+        the inserted entry; the rest of the queue stays behind it.
+        """
+        index = self.get("playlist-pos", -1)
+        index = -1 if index is None else index
+        self._loadfile(url, "insert-next", title)
+        self.command("playlist-play-index", index + 1 if index >= 0 else 0)
 
     def enqueue(self, url, title=None):
         """Append `url` to the end of the playlist without interrupting."""

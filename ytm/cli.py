@@ -47,14 +47,26 @@ def _js_runtime():
     return None
 
 
-def player(spawn=True):
+AUTOPLAY_SCRIPT = os.path.join(os.path.dirname(__file__), "mpv", "autoplay.lua")
+
+
+def player(spawn=True, **player_kwargs):
     """A connected Player, configured from config.toml and the stored auth."""
     from ytm import auth, config
 
     cfg = config.load()
     pot = cfg["pot"]
+    autoplay = cfg["behaviour"]["autoplay_radio"]
     return Player(
         spawn=spawn,
+        **player_kwargs,
+        # radio autoplay lives inside mpv: a Lua script asks `ytm radio` for
+        # more when the last queued track starts (see ytm/mpv/autoplay.lua)
+        scripts=[AUTOPLAY_SCRIPT] if autoplay else [],
+        script_opts={
+            "ytm_autoplay-python": sys.executable,
+            "ytm_autoplay-limit": "10",
+        } if autoplay else None,
         ytdlp_path=_ytdlp_path(),
         cookies_file=(
             auth.cookies_file() if cfg["behaviour"]["authenticated_streams"] else None

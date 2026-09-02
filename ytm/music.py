@@ -4,7 +4,7 @@ Owns nothing YouTube Music already owns. Every function takes an optional
 `yt` client so tests inject a fake; results come back as the small Track and
 Playlist records the CLI needs and nothing more.
 """
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 
 from ytmusicapi.exceptions import YTMusicError
 
@@ -299,7 +299,7 @@ def radio(video_id, limit=25, yt=None):
         track
         for track in to_tracks((watch or {}).get("tracks") or [])
         if track.video_id != video_id
-    ]
+    ][:limit]
 
 
 def like(video_id, yt=None):
@@ -309,3 +309,21 @@ def like(video_id, yt=None):
         return yt.rate_song(video_id, "LIKE")
     except YTMusicError as exc:
         raise _wrap_ytmusic_error(exc) from exc
+
+
+def track_to_dict(track):
+    return asdict(track)
+
+
+def track_from_dict(data):
+    """A Track from a stored dict, tolerating missing keys."""
+    data = data or {}
+    video_id = data.get("video_id") or ""
+    return Track(
+        video_id=video_id,
+        title=data.get("title") or video_id,
+        artist=data.get("artist") or "",
+        album=data.get("album") or "",
+        duration=data.get("duration") or "",
+        duration_seconds=int(data.get("duration_seconds") or 0),
+    )

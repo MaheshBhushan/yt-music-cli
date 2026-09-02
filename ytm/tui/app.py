@@ -12,7 +12,7 @@ from textual.message import Message
 from textual.widgets import Input, DataTable, Static
 
 from ytm import config as config_mod
-from ytm.client import Client, ClientError
+from ytm.tui.backend import Backend, BackendError
 from ytm.tui.lyrics import LyricsPane
 from ytm.tui.nowplaying import NowPlaying
 from ytm.tui.playlists import PlaylistsPane
@@ -40,6 +40,17 @@ class DaemonEvent(Message):
         super().__init__()
         self.event = event
         self.data = data
+
+
+class RequestDone(Message):
+    """A background request finished; `then` runs on the message loop."""
+
+    def __init__(self, cmd, data, error, then):
+        super().__init__()
+        self.cmd = cmd
+        self.data = data
+        self.error = error
+        self.then = then
 
 
 class LyricsFetched(Message):
@@ -73,7 +84,7 @@ class YTMApp(App):
         ("minus", "volume_down", "Vol -"),
         ("tab", "cycle_pane", "Cycle panes"),
         Binding("q", "quit_only", "Quit", priority=True),
-        Binding("Q", "quit_and_shutdown", "Quit + stop daemon", priority=True),
+        Binding("Q", "quit_and_shutdown", "Quit + stop player", priority=True),
     ]
 
     def __init__(self, client=None, config=None):
@@ -84,8 +95,8 @@ class YTMApp(App):
         self._bindings = BindingsMap(self._build_bindings(self._config["keys"]))
         self.theme = self._resolve_theme(self._config["ui"]["theme"])
         try:
-            self.client = client if client is not None else Client()
-        except ClientError as exc:
+            self.client = client if client is not None else Backend()
+        except BackendError as exc:
             self.client = None
             self._client_error = str(exc)
         self._listener_thread = None
@@ -124,7 +135,7 @@ class YTMApp(App):
             ("minus", "volume_down", "Vol -"),
             ("tab", "cycle_pane", "Cycle panes"),
             Binding(keys["quit"], "quit_only", "Quit", priority=True),
-            Binding("Q", "quit_and_shutdown", "Quit + stop daemon", priority=True),
+            Binding("Q", "quit_and_shutdown", "Quit + stop player", priority=True),
         ]
 
     # -- layout --------------------------------------------------------
@@ -155,15 +166,17 @@ class YTMApp(App):
     def _seed_volume(self):
         """One-time `status` fetch at startup, purely to seed the volume
         indicator -- not a poll, never repeated."""
-        data = self._request("status")
-        if data is not None and data.get("volume") is not None:
-            self._volume = data["volume"]
-            self.query_one(NowPlaying).set_volume(self._volume)
+        def seed(data):
+            if data is not None and data.get("volume") is not None:
+                self._volume = data["volume"]
+                self.query_one(NowPlaying).set_volume(self._volume)
+
+        self._request_async("status", then=seed)
 
     def _listen(self):
         try:
             self.client.listen()
-        except ClientError:
+        except BackendError:
             # the connection dropped or the daemon went away; nothing more
             # to do from a background thread than stop listening quietly
             pass
@@ -189,7 +202,7 @@ class YTMApp(App):
         def worker():
             try:
                 data = self.client.request("lyrics", {"video_id": video_id})
-            except ClientError as exc:
+            except BackendError as exc:
                 self.post_message(LyricsFetched(video_id, None, str(exc)))
             else:
                 self.post_message(LyricsFetched(video_id, data, None))
@@ -232,39 +245,67 @@ class YTMApp(App):
         self.query_one("#error-banner", Static).update("")
 
     def _request(self, cmd, args=None):
-        """Send one command, surfacing a `ClientError` as a visible banner."""
+        """Send one *local* command (mpv over IPC, milliseconds) and surface
+        a `BackendError` as a visible banner. Anything that goes to the
+        network must use `_request_async` so the cursor never waits on it."""
         if self.client is None:
             return None
         try:
             data = self.client.request(cmd, args)
             self._clear_error()
             return data
-        except ClientError as exc:
+        except BackendError as exc:
             self._show_error(str(exc))
             return None
 
+    def _request_async(self, cmd, args=None, then=None):
+        """Run a request on a worker thread; `then(data)` runs back on the
+        message loop once it completes. Keeps search, lyrics and playlist
+        calls -- the ones that hit YouTube -- off the UI thread."""
+        if self.client is None:
+            return
+
+        def work():
+            try:
+                data = self.client.request(cmd, args)
+            except BackendError as exc:
+                self.post_message(RequestDone(cmd, None, str(exc), then))
+            else:
+                self.post_message(RequestDone(cmd, data, None, then))
+
+        self.run_worker(work, thread=True, name=cmd, group="requests")
+
+    def on_request_done(self, message: RequestDone):
+        if message.error is not None:
+            self._show_error(message.error)
+            return
+        self._clear_error()
+        if message.then is not None:
+            message.then(message.data)
+
     def _refresh_queue(self):
-        data = self._request("queue_get")
-        if data is not None:
-            self.query_one(QueuePane).set_queue(data)
+        self._request_async(
+            "queue_get", then=lambda data: self.query_one(QueuePane).set_queue(data)
+        )
 
     def _refresh_playlists(self):
-        data = self._request("playlist_list")
-        if data is not None:
-            self.query_one(PlaylistsPane).set_playlists(data)
+        self._request_async(
+            "playlist_list",
+            then=lambda data: self.query_one(PlaylistsPane).set_playlists(data),
+        )
 
     # -- search --------------------------------------------------------
 
     def on_input_submitted(self, message: Input.Submitted):
         if message.input.id != "search-input":
             return
-        data = self._request("search", {"query": message.value})
-        if data is None:
-            return
-        tracks = data.get("tracks") or []
-        self.query_one(SearchPane).set_results(tracks)
-        if tracks:
-            self._request("play", self._track_args(tracks[0]))
+        def show(data):
+            tracks = (data or {}).get("tracks") or []
+            self.query_one(SearchPane).set_results(tracks)
+            if tracks:
+                self._request("play", self._track_args(tracks[0]))
+
+        self._request_async("search", {"query": message.value}, then=show)
 
     def on_data_table_row_selected(self, message: DataTable.RowSelected):
         if message.data_table.id != "search-results":
@@ -342,15 +383,15 @@ class YTMApp(App):
         playlist_id = self.query_one(PlaylistsPane).selected_playlist_id()
         if playlist_id is None:
             return
-        self._request(
+        self._request_async(
             "playlist_add",
             {
                 "playlist_id": playlist_id,
                 "video_ids": [track_args["video_id"]],
                 "tracks": [track_args],
             },
+            then=lambda data: self._refresh_playlists(),
         )
-        self._refresh_playlists()
 
     def action_cycle_pane(self):
         self.focus_next()
