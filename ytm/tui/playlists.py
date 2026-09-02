@@ -8,13 +8,15 @@ after any playlist-mutating action it performs).
 from textual.containers import Vertical
 from textual.widgets import DataTable, Static
 
+from ytm.tui.widgets import SelectOnClickTable
+
 
 class PlaylistsPane(Vertical):
     """The user's playlists, each marked `(local)` or `(remote)`."""
 
     def compose(self):
         yield Static("PLAYLISTS", id="playlists-title")
-        table = DataTable(id="playlists-table", cursor_type="row", show_header=False)
+        table = SelectOnClickTable(id="playlists-table", cursor_type="row", show_header=False)
         table.add_column("title")
         table.add_column("count")
         table.add_column("kind")

@@ -868,3 +868,167 @@ def test_art_off_hides_the_pane_and_fetches_nothing():
             assert art.display is False and art.image is None
 
     asyncio.run(scenario())
+
+
+# -- mouse and focus ------------------------------------------------------------------
+
+
+def test_enter_in_the_search_box_hands_focus_to_the_results_so_space_toggles():
+    async def scenario():
+        stub = StubClient()
+        app = YTMApp(client=stub)
+        async with app.run_test() as pilot:
+            await settle(pilot)
+            await pilot.click("#search-input")
+            for char in "am":
+                await pilot.press(char)
+            await pilot.press("enter")
+            await settle(pilot)
+            assert app.focused.id == "search-results"
+            await pilot.press("space")
+            await settle(pilot)
+            assert ("toggle", None) in stub.calls
+            assert app.query_one("#search-input").value == "am"
+
+    asyncio.run(scenario())
+
+
+def test_arrow_keys_move_the_text_cursor_inside_the_search_box():
+    async def scenario():
+        stub = StubClient()
+        app = YTMApp(client=stub)
+        async with app.run_test() as pilot:
+            await settle(pilot)
+            await pilot.click("#search-input")
+            for char in "ab":
+                await pilot.press(char)
+            await pilot.press("left")
+            await pilot.press("x")
+            await settle(pilot)
+            assert app.query_one("#search-input").value == "axb"
+            assert not any(c[0] == "seek" for c in stub.calls)
+            # escape leaves the box; now the arrows seek
+            await pilot.press("escape")
+            await pilot.press("right")
+            await settle(pilot)
+            assert app.focused.id == "search-results"
+            assert ("seek", {"seconds": 5}) in stub.calls
+
+    asyncio.run(scenario())
+
+
+def test_clicking_a_queue_row_jumps_to_it():
+    async def scenario():
+        stub = StubClient()
+        app = YTMApp(client=stub)
+        async with app.run_test() as pilot:
+            await settle(pilot)
+            queue = app.query_one(QueuePane)
+            queue.set_queue({"tracks": [TRACK, dict(TRACK, video_id="second", title="Second")], "index": 0})
+            await settle(pilot)
+            await pilot.click("#queue-table", offset=(2, 1))
+            await settle(pilot)
+            assert ("queue_play", {"index": 1}) in stub.calls
+
+    asyncio.run(scenario())
+
+
+def test_clicking_a_playlist_plays_it():
+    async def scenario():
+        stub = StubClient()
+        app = YTMApp(client=stub)
+        async with app.run_test() as pilot:
+            await settle(pilot)
+            await pilot.click("#playlists-table", offset=(2, 1))
+            await settle(pilot)
+            assert ("playlist_play", {"playlist_id": "local-1"}) in stub.calls
+
+    asyncio.run(scenario())
+
+
+def test_clicking_the_progress_bar_seeks_there():
+    async def scenario():
+        stub = StubClient()
+        app = YTMApp(client=stub)
+        async with app.run_test(size=(120, 40)) as pilot:
+            await settle(pilot)
+            stub.push("track_changed", TRACK)
+            stub.push("position", {"position": 10, "video_id": "abc123", "duration_seconds": 200})
+            await settle(pilot)
+            bar = app.query_one("#now-playing-progress")
+            assert bar.region.width > 0
+            await pilot.click("#now-playing-progress", offset=(bar.region.width // 2, 0))
+            await settle(pilot)
+            seeks = [args for cmd, args in stub.calls if cmd == "seek"]
+            assert seeks and seeks[-1]["absolute"] is True
+            assert 90 <= seeks[-1]["seconds"] <= 110
+
+    asyncio.run(scenario())
+
+
+def test_clicking_the_shortcut_bar_runs_the_action():
+    async def scenario():
+        stub = StubClient()
+        app = YTMApp(client=stub)
+        async with app.run_test(size=(120, 40)) as pilot:
+            await settle(pilot)
+            # "e exit  / s search  space play/pause": `space` starts at column 20,
+            # plus the bar's one cell of padding
+            await pilot.click("#shortcut-bar", offset=(22, 0))
+            await settle(pilot)
+            assert ("toggle", None) in stub.calls
+
+    asyncio.run(scenario())
+
+
+def test_error_banner_only_takes_a_row_while_there_is_an_error():
+    async def scenario():
+        stub = StubClient()
+        app = YTMApp(client=stub)
+        async with app.run_test() as pilot:
+            await settle(pilot)
+            banner = app.query_one("#error-banner")
+            assert banner.display is False
+            app._show_error("boom")
+            await settle(pilot)
+            assert banner.display is True
+            app._clear_error()
+            assert banner.display is False
+
+    asyncio.run(scenario())
+
+
+def test_now_playing_text_sits_at_the_bottom_of_the_strip():
+    async def scenario():
+        stub = StubClient()
+        app = YTMApp(client=stub)
+        async with app.run_test(size=(120, 40)) as pilot:
+            await settle(pilot)
+            strip = app.query_one("#now-playing").region
+            bar = app.query_one("#now-playing-bar").region
+            shortcut = app.query_one("#shortcut-bar").region
+            assert bar.y + bar.height == strip.y + strip.height
+            assert strip.y + strip.height == shortcut.y
+
+    asyncio.run(scenario())
+
+
+def test_startup_focuses_the_queue_when_something_is_already_loaded():
+    class Playing(StubClient):
+        def request(self, cmd, args=None):
+            if cmd == "status":
+                self.calls.append((cmd, args))
+                return {"current": TRACK, "paused": True, "volume": 70, "index": 0, "count": 1, "position": 3.0}
+            return super().request(cmd, args)
+
+    async def scenario():
+        stub = Playing()
+        app = YTMApp(client=stub)
+        async with app.run_test() as pilot:
+            await settle(pilot)
+            assert app.focused.id == "queue-table"
+            await pilot.press("space")
+            await settle(pilot)
+            assert ("toggle", None) in stub.calls
+
+    asyncio.run(scenario())

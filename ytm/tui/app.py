@@ -84,6 +84,7 @@ class YTMApp(App):
         ("plus", "volume_up", "Vol +"),
         ("minus", "volume_down", "Vol -"),
         ("tab", "cycle_pane", "Cycle panes"),
+        Binding("escape", "focus_results", "Results", show=False),
         ("e", "quit_only", "Exit"),
         ("Q", "quit_and_shutdown", "Exit + stop player"),
     ]
@@ -133,11 +134,14 @@ class YTMApp(App):
             (keys["toggle"], "toggle", "Play/Pause"),
             (keys["next"], "next", "Next"),
             (keys["prev"], "prev", "Prev"),
+            # priority so they seek from any pane, but `check_action` hands
+            # them back to the search box while it has focus
             Binding("left", "seek_back", "Seek -5s", priority=True),
             Binding("right", "seek_forward", "Seek +5s", priority=True),
             ("plus", "volume_up", "Vol +"),
             ("minus", "volume_down", "Vol -"),
             ("tab", "cycle_pane", "Cycle panes"),
+            Binding("escape", "focus_results", "Results", show=False),
             # no priority on any letter key: while the search box has focus
             # every letter is text, so "queen" or "eels" can be searched
             (keys["quit"], "quit_only", "Exit"),
@@ -146,22 +150,36 @@ class YTMApp(App):
 
     @staticmethod
     def _shortcut_text(keys):
-        """One line naming every shortcut, in the order people reach for them."""
-        pairs = [
-            (keys["quit"], "exit"),
-            (f"{keys['search']} {'s' if keys['search'] != 's' else ''}".strip(), "search"),
-            (keys["toggle"], "play/pause"),
-            (keys["next"], "next"),
-            (keys["prev"], "prev"),
-            ("a", "enqueue"),
-            ("←/→", "seek"),
-            ("+/-", "volume"),
-            ("P", "playlists"),
-            ("A", "add to playlist"),
-            ("Tab", "panes"),
-            ("Q", "exit+stop"),
-        ]
-        return "  ".join(f"[b]{key}[/b] {label}" for key, label in pairs)
+        """One line naming every shortcut, in the order people reach for them.
+
+        Each entry is also a mouse target: clicking it runs the same action
+        the key would.
+        """
+        def link(key, label, action):
+            return f"[@click=app.{action}][b]{key}[/b] {label}[/]"
+
+        search_key = f"{keys['search']} {'s' if keys['search'] != 's' else ''}".strip()
+        return "  ".join([
+            link(keys["quit"], "exit", "quit_only"),
+            link(search_key, "search", "focus_search"),
+            link(keys["toggle"], "play/pause", "toggle"),
+            link(keys["next"], "next", "next"),
+            link(keys["prev"], "prev", "prev"),
+            link("a", "enqueue", "enqueue_selected"),
+            f"[@click=app.seek_back][b]←[/b][/]/[@click=app.seek_forward][b]→[/b][/] seek",
+            f"[@click=app.volume_up][b]+[/b][/]/[@click=app.volume_down][b]-[/b][/] volume",
+            link("P", "playlists", "focus_playlists"),
+            link("A", "add to playlist", "add_to_playlist"),
+            link("Tab", "panes", "cycle_pane"),
+            link("Q", "exit+stop", "quit_and_shutdown"),
+        ])
+
+    def check_action(self, action, parameters):
+        # the seek arrows are priority bindings; while the search box has
+        # focus they must move the text cursor instead
+        if action in ("seek_back", "seek_forward") and isinstance(self.focused, Input):
+            return False
+        return True
 
     # -- layout --------------------------------------------------------
 
@@ -192,12 +210,20 @@ class YTMApp(App):
         self.query_one("#search-input", Input).focus()
 
     def _seed_volume(self):
-        """One-time `status` fetch at startup, purely to seed the volume
-        indicator -- not a poll, never repeated."""
+        """One-time `status` fetch at startup -- not a poll, never repeated.
+
+        Seeds the volume indicator and picks the starting focus: when mpv
+        already has a track loaded the queue gets it, so space/arrows drive
+        playback straight away; an empty player starts in the search box.
+        """
         def seed(data):
-            if data is not None and data.get("volume") is not None:
+            if data is None:
+                return
+            if data.get("volume") is not None:
                 self._volume = data["volume"]
                 self.query_one(NowPlaying).set_volume(self._volume)
+            if data.get("current"):
+                self.query_one("#queue-table", DataTable).focus()
 
         self._request_async("status", then=seed)
 
@@ -267,10 +293,14 @@ class YTMApp(App):
     # -- helpers ---------------------------------------------------------
 
     def _show_error(self, message):
-        self.query_one("#error-banner", Static).update(f"error: {message}")
+        banner = self.query_one("#error-banner", Static)
+        banner.update(f"error: {message}")
+        banner.display = True
 
     def _clear_error(self):
-        self.query_one("#error-banner", Static).update("")
+        banner = self.query_one("#error-banner", Static)
+        banner.update("")
+        banner.display = False
 
     def _request(self, cmd, args=None):
         """Send one *local* command (mpv over IPC, milliseconds) and surface
@@ -332,18 +362,37 @@ class YTMApp(App):
             self.query_one(SearchPane).set_results(tracks)
             if tracks:
                 self._request("play", self._track_args(tracks[0]))
+            # hand focus to the results: from here space toggles, arrows
+            # seek and Enter/click plays, instead of typing into the box
+            self.action_focus_results()
 
         self._request_async("search", {"query": message.value}, then=show)
 
     def on_data_table_row_selected(self, message: DataTable.RowSelected):
-        if message.data_table.id != "search-results":
-            return
-        self.action_play_selected()
+        """Enter or a mouse click on any of the three tables."""
+        table_id = message.data_table.id
+        if table_id == "search-results":
+            self.action_play_selected()
+        elif table_id == "queue-table":
+            self._request("queue_play", {"index": message.cursor_row})
+        elif table_id == "playlists-table":
+            playlist_id = self.query_one(PlaylistsPane).selected_playlist_id()
+            if playlist_id is not None:
+                self._request_async(
+                    "playlist_play", {"playlist_id": playlist_id},
+                    then=lambda data: self.query_one(QueuePane).set_queue(data),
+                )
+
+    def on_now_playing_seek_requested(self, message: NowPlaying.SeekRequested):
+        self._request("seek", {"seconds": message.seconds, "absolute": True})
 
     # -- actions ---------------------------------------------------------
 
     def action_focus_search(self):
         self.query_one("#search-input", Input).focus()
+
+    def action_focus_results(self):
+        self.query_one("#search-results", DataTable).focus()
 
     @staticmethod
     def _track_args(track):

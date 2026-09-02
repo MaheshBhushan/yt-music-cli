@@ -27,6 +27,8 @@ Screen {
     height: 1fr;
 }
 
+/* the now-playing strip sits directly on the shortcut bar: cover on the
+   left, text bottom-aligned so it lines up with the foot of the cover */
 #now-playing {
     height: 8;
 }
@@ -39,11 +41,35 @@ Screen {
 
 #now-playing-text {
     height: 8;
+    align-vertical: bottom;
 }
 
+#now-playing-track, #now-playing-artist {
+    height: auto;
+}
+
+#now-playing-bar {
+    height: 1;
+}
+
+#now-playing-progress {
+    width: 1fr;
+}
+
+#now-playing-progress Bar {
+    width: 1fr;
+}
+
+#now-playing-time, #now-playing-volume {
+    width: auto;
+    margin-left: 1;
+}
+
+/* only takes up a row while there is an error to show */
 #error-banner {
     color: red;
     height: auto;
+    display: none;
 }
 
 #shortcut-bar {

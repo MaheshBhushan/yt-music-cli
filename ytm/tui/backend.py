@@ -75,11 +75,13 @@ class Backend:
             "queue_clear": self._queue_clear,
             "queue_remove": self._queue_remove,
             "queue_move": self._queue_move,
+            "queue_play": self._queue_play,
             "radio": self._radio,
             "lyrics": self._lyrics,
             "playlist_list": self._playlist_list,
             "playlist_get": self._playlist_get,
             "playlist_add": self._playlist_add,
+            "playlist_play": self._playlist_play,
             "shutdown": self._shutdown,
         }
 
@@ -174,6 +176,11 @@ class Backend:
         self._player.move(int(args["from_index"]), int(args["to_index"]))
         return self._queue()
 
+    def _queue_play(self, args):
+        """Jump to queue entry `index` (a click or Enter on the queue pane)."""
+        self._player.play_index(int(args["index"]))
+        return self._status(args)
+
     def _radio(self, args):
         seed = _from_args(args)
         tracks = music.radio(seed.video_id)
@@ -217,6 +224,19 @@ class Backend:
             music.add_playlist_items(playlist_id, video_ids)
         return {"playlist_id": playlist_id, "added": len(video_ids)}
 
+    def _playlist_play(self, args):
+        """Replace the queue with a playlist's tracks and start the first."""
+        tracks = self._playlist_get(args)["tracks"]
+        if not tracks:
+            raise BackendError("that playlist is empty")
+        tracks = [_from_args(entry) for entry in tracks]
+        state.remember_tracks(tracks)
+        self._player.stop()
+        self._player.play(watch_url(tracks[0].video_id), title=_label(tracks[0]))
+        for track in tracks[1:]:
+            self._player.enqueue(watch_url(track.video_id), title=_label(track))
+        return self._queue()
+
     def _shutdown(self, args):
         self._player.quit()
         return {"stopping": True}
@@ -243,19 +263,31 @@ class Backend:
             raise BackendError(str(exc)) from exc
         current_id = None
         duration = 0
+        position = None
+
+        def emit_position():
+            self._emit("position", {
+                "position": position, "video_id": current_id, "duration_seconds": duration,
+            })
+
         try:
+            # duration is observed before time-pos so the initial burst of
+            # values arrives in a usable order; a duration that turns up
+            # later (mpv learns it after the first time-pos of a new file)
+            # re-announces the position so the bar gets its total
             for name, value in observer.observe(
-                "playlist-pos", "playlist-count", "pause", "volume", "time-pos", "duration"
+                "playlist-pos", "playlist-count", "pause", "volume", "duration", "time-pos"
             ):
                 if self._closed:
                     return
                 if name == "duration":
                     duration = value or 0
+                    if position is not None:
+                        emit_position()
                 elif name == "time-pos":
                     if value is not None:
-                        self._emit("position", {
-                            "position": value, "video_id": current_id, "duration_seconds": duration,
-                        })
+                        position = value
+                        emit_position()
                 elif name in ("pause", "volume"):
                     with self._lock:
                         s = self._player.status()
