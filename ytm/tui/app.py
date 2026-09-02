@@ -9,7 +9,7 @@ from textual.app import App, ComposeResult
 from textual.binding import Binding, BindingsMap
 from textual.containers import Horizontal, Vertical
 from textual.message import Message
-from textual.widgets import Input, DataTable, Static
+from textual.widgets import DataTable, Input, Static
 
 from ytm import config as config_mod
 from ytm.tui.backend import Backend, BackendError
@@ -84,9 +84,8 @@ class YTMApp(App):
         ("plus", "volume_up", "Vol +"),
         ("minus", "volume_down", "Vol -"),
         ("tab", "cycle_pane", "Cycle panes"),
-        Binding("q", "quit_only", "Quit", priority=True),
         ("e", "quit_only", "Exit"),
-        Binding("Q", "quit_and_shutdown", "Quit + stop player", priority=True),
+        ("Q", "quit_and_shutdown", "Exit + stop player"),
     ]
 
     def __init__(self, client=None, config=None):
@@ -119,7 +118,7 @@ class YTMApp(App):
     def _build_bindings(keys):
         """The BINDINGS table with the five customisable keys from config.
 
-        Any other binding (`a`, `+`, `-`, `Tab`, `P`, `A`, arrows, `Q`) keeps
+        Any other binding (`a`, `s`, `+`, `-`, `Tab`, `P`, `A`, arrows, `Q`) keeps
         its hardcoded default -- only `toggle`, `next`, `prev`, `search` and
         `quit` are user-configurable.
         """
@@ -139,10 +138,30 @@ class YTMApp(App):
             ("plus", "volume_up", "Vol +"),
             ("minus", "volume_down", "Vol -"),
             ("tab", "cycle_pane", "Cycle panes"),
-            Binding(keys["quit"], "quit_only", "Quit", priority=True),
-            ("e", "quit_only", "Exit"),
-            Binding("Q", "quit_and_shutdown", "Quit + stop player", priority=True),
+            # no priority on any letter key: while the search box has focus
+            # every letter is text, so "queen" or "eels" can be searched
+            (keys["quit"], "quit_only", "Exit"),
+            ("Q", "quit_and_shutdown", "Exit + stop player"),
         ]
+
+    @staticmethod
+    def _shortcut_text(keys):
+        """One line naming every shortcut, in the order people reach for them."""
+        pairs = [
+            (keys["quit"], "exit"),
+            (f"{keys['search']} {'s' if keys['search'] != 's' else ''}".strip(), "search"),
+            (keys["toggle"], "play/pause"),
+            (keys["next"], "next"),
+            (keys["prev"], "prev"),
+            ("a", "enqueue"),
+            ("←/→", "seek"),
+            ("+/-", "volume"),
+            ("P", "playlists"),
+            ("A", "add to playlist"),
+            ("Tab", "panes"),
+            ("Q", "exit+stop"),
+        ]
+        return "  ".join(f"[b]{key}[/b] {label}" for key, label in pairs)
 
     # -- layout --------------------------------------------------------
 
@@ -154,6 +173,9 @@ class YTMApp(App):
             yield LyricsPane(id="lyrics-pane")
         yield NowPlaying(id="now-playing")
         yield Static("", id="error-banner")
+        # the shortcut bar: every key, always, whatever has focus (Textual's
+        # Footer hides letter keys while the search box is focused)
+        yield Static(self._shortcut_text(self._config["keys"]), id="shortcut-bar")
 
     def on_mount(self):
         if self._client_error is not None:

@@ -24,7 +24,7 @@ startup. The shape and defaults are::
     next = "n"
     prev = "p"
     search = "/"
-    quit = "q"
+    quit = "e"
 
 A missing file yields exactly these defaults. A partial file overrides only
 the keys it specifies -- every other key, and every key in a section that
@@ -62,7 +62,7 @@ DEFAULTS = {
         "next": "n",
         "prev": "p",
         "search": "/",
-        "quit": "q",
+        "quit": "e",
     },
 }
 

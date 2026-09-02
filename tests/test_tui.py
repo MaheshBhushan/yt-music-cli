@@ -307,7 +307,7 @@ def test_lowercase_q_quits_without_shutdown():
         async with app.run_test() as pilot:
             app.query_one("#queue-table").focus()
             await settle(pilot)
-            await pilot.press("q")
+            await pilot.press("e")
             await settle(pilot)
         assert not any(c[0] == "shutdown" for c in stub.calls)
         assert stub.closed

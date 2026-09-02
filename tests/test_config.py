@@ -23,7 +23,7 @@ def test_missing_file_yields_documented_defaults(tmp_path):
             "next": "n",
             "prev": "p",
             "search": "/",
-            "quit": "q",
+            "quit": "e",
         },
     }
 
@@ -46,7 +46,7 @@ def test_partial_config_overrides_only_its_own_keys(tmp_path):
     assert config["keys"]["next"] == "n"
     assert config["keys"]["prev"] == "p"
     assert config["keys"]["search"] == "/"
-    assert config["keys"]["quit"] == "q"
+    assert config["keys"]["quit"] == "e"
     assert config["behaviour"] == {
         "autoplay_radio": True,
         "confirm_remote_delete": True,
