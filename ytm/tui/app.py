@@ -72,6 +72,7 @@ class YTMApp(App):
 
     BINDINGS = [
         ("/", "focus_search", "Search"),
+        ("s", "focus_search", "Search"),
         ("a", "enqueue_selected", "Enqueue"),
         ("P", "focus_playlists", "Playlists"),
         ("A", "add_to_playlist", "Add to playlist"),
@@ -84,6 +85,7 @@ class YTMApp(App):
         ("minus", "volume_down", "Vol -"),
         ("tab", "cycle_pane", "Cycle panes"),
         Binding("q", "quit_only", "Quit", priority=True),
+        ("e", "quit_only", "Exit"),
         Binding("Q", "quit_and_shutdown", "Quit + stop player", priority=True),
     ]
 
@@ -123,6 +125,9 @@ class YTMApp(App):
         """
         return [
             (keys["search"], "focus_search", "Search"),
+            # `s`/`e` are plain (non-priority) bindings: they act from any
+            # pane but stay ordinary letters while the search box has focus
+            ("s", "focus_search", "Search"),
             ("a", "enqueue_selected", "Enqueue"),
             ("P", "focus_playlists", "Playlists"),
             ("A", "add_to_playlist", "Add to playlist"),
@@ -135,6 +140,7 @@ class YTMApp(App):
             ("minus", "volume_down", "Vol -"),
             ("tab", "cycle_pane", "Cycle panes"),
             Binding(keys["quit"], "quit_only", "Quit", priority=True),
+            ("e", "quit_only", "Exit"),
             Binding("Q", "quit_and_shutdown", "Quit + stop player", priority=True),
         ]
 
