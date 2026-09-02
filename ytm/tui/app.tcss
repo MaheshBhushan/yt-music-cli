@@ -35,3 +35,11 @@ Screen {
     color: red;
     height: auto;
 }
+
+#shortcut-bar {
+    dock: bottom;
+    height: 1;
+    padding: 0 1;
+    color: $text-muted;
+    background: $surface;
+}

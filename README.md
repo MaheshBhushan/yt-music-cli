@@ -151,7 +151,7 @@ Those formats are SABR-delivered and are not plain progressive HTTP. So on such 
 ytm
 ```
 
-The TUI will auto-spawn the daemon (`ytmd`) if it is not already running. Close with `q` (quit) or `Q` (quit + stop daemon).
+The TUI will auto-spawn the daemon (`ytmd`) if it is not already running. Close with `e` (exit) or `Q` (exit + stop the player). The shortcut bar at the bottom lists every key.
 
 To explicitly manage the daemon:
 
@@ -198,16 +198,15 @@ ytm cache list                 # List all cached tracks (video_id, size, path)
 | `+` | Volume up 5% | Hardcoded |
 | `-` | Volume down 5% | Hardcoded |
 | `tab` | Cycle panes | Hardcoded |
-| `q` | Quit TUI (playback keeps running) | Customizable via config (`keys.quit`) |
-| `e` | Exit TUI (playback keeps running) | Hardcoded; typed as a letter while the search box has focus |
-| `Q` | Quit TUI and stop daemon | Hardcoded |
+| `e` | Exit TUI (playback keeps running) | Customizable via config (`keys.quit`) |
+| `Q` | Exit TUI and stop the player | Hardcoded |
 
 Five keys are customizable:
 - `keys.search` (default: `/`)
 - `keys.toggle` (default: `space`)
 - `keys.next` (default: `n`)
 - `keys.prev` (default: `p`)
-- `keys.quit` (default: `q`)
+- `keys.quit` (default: `e`)
 
 All other keys are hardcoded and cannot be changed.
 
@@ -238,7 +237,7 @@ toggle = "space"
 next = "n"
 prev = "p"
 search = "/"
-quit = "q"
+quit = "e"
 ```
 
 ### Schema and defaults
@@ -256,7 +255,7 @@ quit = "q"
 | `keys` | `next` | string | `"n"` | Key to skip to next. |
 | `keys` | `prev` | string | `"p"` | Key to go to previous. |
 | `keys` | `search` | string | `"/"` | Key to focus search. |
-| `keys` | `quit` | string | `"q"` | Key to quit the TUI. |
+| `keys` | `quit` | string | `"e"` | Key to quit the TUI. |
 
 ### Behavior
 
