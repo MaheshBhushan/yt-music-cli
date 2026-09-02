@@ -32,6 +32,7 @@ class FakeMpv:
         }
         self.playlist = []
         self.fail_next = None
+        self.pending_events = []
         self._server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         self._server.bind(path)
         self._server.listen(1)
@@ -51,6 +52,9 @@ class FakeMpv:
                     reply["request_id"] = request["request_id"]
                     # an unsolicited event first, to prove replies are matched
                     f.write(b'{"event":"property-change","name":"x"}\n')
+                    for event in self.pending_events:
+                        f.write((json.dumps(event) + "\n").encode())
+                    self.pending_events.clear()
                     f.write((json.dumps(reply) + "\n").encode())
                     if request["command"][0] == "quit":
                         return
@@ -68,7 +72,12 @@ class FakeMpv:
             if prop not in self.props:
                 return {"error": "property unavailable"}
             return {"error": "success", "data": self.props[prop]}
-        if name == "set_property":
+        if name == "observe_property":
+            prop = command[2]
+            self.pending_events.append(
+                {"event": "property-change", "id": command[1], "name": prop, "data": self.props.get(prop)}
+            )
+        elif name == "set_property":
             self.props[command[1]] = command[2]
         elif name == "cycle" and command[1] == "pause":
             self.props["pause"] = not self.props["pause"]
@@ -331,3 +340,16 @@ def test_video_id_of():
     assert video_id_of("https://music.youtube.com/watch?v=dQw4w9WgXcQ") == "dQw4w9WgXcQ"
     assert video_id_of("https://youtu.be/x") is None
     assert video_id_of(None) is None
+
+
+def test_observe_delivers_every_initial_value(mpv):
+    """mpv reports each observed property once immediately. Registering
+    several must not lose the early ones while later replies are awaited."""
+    with Player(ipc_path=mpv.path, spawner=no_spawn, timeout=2.0) as p:
+        seen = {}
+        for name, value in p.observe("pause", "volume", "playlist-pos", "playlist-count"):
+            if name != "x":
+                seen[name] = value
+            if len(seen) == 4:
+                break
+    assert seen == {"pause": False, "volume": 70.0, "playlist-pos": -1, "playlist-count": 0}

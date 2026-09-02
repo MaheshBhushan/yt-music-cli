@@ -24,6 +24,24 @@ class Track:
     album: str
     duration: str
     duration_seconds: int
+    #: URL of a small cover image, or "" when the result carried none
+    thumbnail: str = ""
+
+
+#: cover art this wide is plenty for a terminal and keeps the fetch small
+THUMBNAIL_MIN_WIDTH = 120
+
+
+def pick_thumbnail(thumbnails):
+    """The smallest thumbnail at least THUMBNAIL_MIN_WIDTH wide, else the largest."""
+    candidates = [t for t in (thumbnails or []) if isinstance(t, dict) and t.get("url")]
+    if not candidates:
+        return ""
+    candidates.sort(key=lambda t: t.get("width") or 0)
+    for thumb in candidates:
+        if (thumb.get("width") or 0) >= THUMBNAIL_MIN_WIDTH:
+            return thumb["url"]
+    return candidates[-1]["url"]
 
 
 @dataclass
@@ -80,6 +98,8 @@ def to_track(result):
         album=_album_name(result),
         duration=display,
         duration_seconds=seconds,
+        # search results say "thumbnails", watch-playlist (radio) items "thumbnail"
+        thumbnail=pick_thumbnail(result.get("thumbnails") or result.get("thumbnail")),
     )
 
 
@@ -285,6 +305,7 @@ def song(video_id, yt=None):
         album="",
         duration=f"{seconds // 60}:{seconds % 60:02d}" if seconds else "0:00",
         duration_seconds=seconds,
+        thumbnail=pick_thumbnail((details.get("thumbnail") or {}).get("thumbnails")),
     )
 
 
@@ -326,4 +347,5 @@ def track_from_dict(data):
         album=data.get("album") or "",
         duration=data.get("duration") or "",
         duration_seconds=int(data.get("duration_seconds") or 0),
+        thumbnail=data.get("thumbnail") or "",
     )

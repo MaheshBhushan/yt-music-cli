@@ -146,3 +146,30 @@ def test_cookies_file_is_none_without_cookies(tmp_path):
     oauth = tmp_path / "auth.json"
     oauth.write_text(json.dumps({"access_token": "t", "refresh_token": "r", "expires_at": 1, "expires_in": 1, "scope": "s", "token_type": "Bearer"}))
     assert auth.cookies_file(oauth, tmp_path / "c.txt") is None
+
+
+# -- thumbnails ----------------------------------------------------------------------
+
+
+def test_pick_thumbnail_prefers_the_smallest_usable_size():
+    thumbs = [
+        {"url": "tiny", "width": 60, "height": 60},
+        {"url": "small", "width": 120, "height": 120},
+        {"url": "big", "width": 544, "height": 544},
+    ]
+    assert music.pick_thumbnail(thumbs) == "small"
+    assert music.pick_thumbnail(thumbs[:1]) == "tiny"  # nothing big enough: the largest
+    assert music.pick_thumbnail([]) == ""
+    assert music.pick_thumbnail(None) == ""
+
+
+def test_to_track_carries_a_thumbnail_and_old_state_without_one_still_loads(tmp_path):
+    t = music.to_track({"videoId": "v", "title": "T", "thumbnails": [{"url": "u", "width": 200}]})
+    assert t.thumbnail == "u"
+    radio_item = music.to_track({"videoId": "r", "title": "R", "thumbnail": [{"url": "ru", "width": 200}]})
+    assert radio_item.thumbnail == "ru"
+    # a session file written before the field existed
+    path = tmp_path / "s.json"
+    path.write_text(json.dumps({"last_search": [], "tracks": {"v": {
+        "video_id": "v", "title": "T", "artist": "", "album": "", "duration": "", "duration_seconds": 0}}}))
+    assert state.track_for("v", path).thumbnail == ""

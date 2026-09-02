@@ -12,6 +12,7 @@ the formatting entirely, which is what makes the TUI a client of this CLI.
 
 import argparse
 import json
+from dataclasses import asdict
 import os
 import re
 import shutil
@@ -147,14 +148,7 @@ def _clock(seconds):
 
 
 def fmt_track(track):
-    return {
-        "video_id": track.video_id,
-        "title": track.title,
-        "artist": track.artist,
-        "album": track.album,
-        "duration": track.duration,
-        "duration_seconds": track.duration_seconds,
-    }
+    return asdict(track)
 
 
 def render_status(status, track):

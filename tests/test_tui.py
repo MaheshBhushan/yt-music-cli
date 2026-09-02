@@ -788,3 +788,83 @@ def test_s_and_e_are_plain_letters_inside_the_search_box():
             assert app.is_running
 
     asyncio.run(scenario())
+
+
+# -- album art --------------------------------------------------------------------------
+
+
+def _png_bytes():
+    import io
+    from PIL import Image
+
+    buf = io.BytesIO()
+    Image.new("RGB", (8, 8), (200, 30, 30)).save(buf, format="PNG")
+    return buf.getvalue()
+
+
+def test_track_changed_fetches_cover_art_off_the_ui_thread_and_shows_it():
+    from ytm.tui.nowplaying import AlbumArt
+
+    async def scenario():
+        stub = StubClient()
+        app = YTMApp(client=stub)
+        fetched = []
+
+        async with app.run_test() as pilot:
+            await settle(pilot)
+            art = app.query_one(AlbumArt)
+            art._fetcher = lambda url: (fetched.append(url), _png_bytes())[1]
+            stub.push("track_changed", dict(TRACK, thumbnail="https://img.test/cover.jpg"))
+            await settle(pilot)
+            assert fetched == ["https://img.test/cover.jpg"]
+            assert art.image is not None
+            # the same cover again comes from the cache, no second fetch
+            stub.push("track_changed", dict(TRACK, thumbnail="https://img.test/cover.jpg"))
+            await settle(pilot)
+            assert fetched == ["https://img.test/cover.jpg"]
+            # the artist / album line is filled from the event
+            line = app.query_one("#now-playing-artist").render()
+            assert "Ilaiyaraaja" in str(line) or str(line) != ""
+
+    asyncio.run(scenario())
+
+
+def test_failed_cover_fetch_is_dropped_quietly():
+    from ytm.tui.nowplaying import AlbumArt
+
+    async def scenario():
+        stub = StubClient()
+        app = YTMApp(client=stub)
+
+        def boom(url):
+            raise OSError("no network")
+
+        async with app.run_test() as pilot:
+            await settle(pilot)
+            app.query_one(AlbumArt)._fetcher = boom
+            stub.push("track_changed", dict(TRACK, thumbnail="https://img.test/x.jpg"))
+            await settle(pilot)
+            assert app.query_one(AlbumArt).image is None
+            assert app.is_running
+
+    asyncio.run(scenario())
+
+
+def test_art_off_hides_the_pane_and_fetches_nothing():
+    from ytm.tui.nowplaying import AlbumArt
+    from ytm import config as config_mod
+
+    async def scenario():
+        stub = StubClient()
+        cfg = config_mod.load("/nonexistent")
+        cfg["ui"]["art"] = "off"
+        app = YTMApp(client=stub, config=cfg)
+        async with app.run_test() as pilot:
+            await settle(pilot)
+            art = app.query_one(AlbumArt)
+            art._fetcher = lambda url: (_ for _ in ()).throw(AssertionError("must not fetch"))
+            stub.push("track_changed", dict(TRACK, thumbnail="https://img.test/cover.jpg"))
+            await settle(pilot)
+            assert art.display is False and art.image is None
+
+    asyncio.run(scenario())

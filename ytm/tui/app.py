@@ -171,7 +171,7 @@ class YTMApp(App):
             yield QueuePane(id="queue-pane")
             yield PlaylistsPane(id="playlists-pane")
             yield LyricsPane(id="lyrics-pane")
-        yield NowPlaying(id="now-playing")
+        yield NowPlaying(id="now-playing", art=self._config["ui"]["art"])
         yield Static("", id="error-banner")
         # the shortcut bar: every key, always, whatever has focus (Textual's
         # Footer hides letter keys while the search box is focused)
@@ -354,6 +354,7 @@ class YTMApp(App):
             "album": track.get("album"),
             "duration": track.get("duration"),
             "duration_seconds": track.get("duration_seconds"),
+            "thumbnail": track.get("thumbnail"),
         }
 
     def _selected_track_args(self):

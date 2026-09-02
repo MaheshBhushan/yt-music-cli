@@ -118,3 +118,11 @@ def test_listen_translates_property_changes_into_events(backend, monkeypatch):
     assert names == ["state_changed", "state_changed", "queue_changed", "track_changed", "position"]
     assert events[3][1]["title"] == "A"
     assert events[4][1] == {"position": 12.5, "video_id": "a", "duration_seconds": 200.0}
+
+
+def test_play_keeps_the_remembered_thumbnail_when_the_client_omits_it(backend, catalogue):
+    backend.request("search", {"query": "x"})  # remembers s1 with its thumbnail
+    state.remember_tracks([track("s1", "Song", "Band", "LP", 200).__class__(
+        "s1", "Song", "Band", "LP", "3:20", 200, thumbnail="https://img/s1.jpg")])
+    backend.request("play", {"video_id": "s1", "title": "Song"})
+    assert state.track_for("s1").thumbnail == "https://img/s1.jpg"

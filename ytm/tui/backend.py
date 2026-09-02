@@ -32,6 +32,7 @@ def _from_args(args):
         album=args.get("album") or "",
         duration=args.get("duration") or "",
         duration_seconds=int(args.get("duration_seconds") or 0),
+        thumbnail=args.get("thumbnail") or "",
     )
 
 
@@ -124,6 +125,12 @@ class Backend:
         track = _from_args(args)
         if not track.video_id:
             raise BackendError("'video_id' is required")
+        if not track.thumbnail:
+            # a client that only knows the basics must not erase what a
+            # search already told us about this track
+            known = state.track_for(track.video_id)
+            if known and known.thumbnail:
+                track.thumbnail = known.thumbnail
         state.remember_tracks([track])
         method = self._player.play if play else self._player.enqueue
         method(watch_url(track.video_id), title=_label(track))
