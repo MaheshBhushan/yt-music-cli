@@ -25,6 +25,10 @@ logger = logging.getLogger(__name__)
 
 MPV_BIN = "/usr/bin/mpv"
 
+#: observe_property ids, echoed back on every property-change event
+TIME_POS_OBSERVE_ID = 1
+PAUSE_OBSERVE_ID = 2
+
 
 class Player:
     """Headless mpv player controlled via JSON IPC."""
@@ -47,14 +51,19 @@ class Player:
         self._on_eof: Optional[Callable[[], None]] = None
         self._on_error: Optional[Callable[[str], None]] = None
 
-        #: mpv owns pause state; this mirrors it and is only ever written
-        #: from the same call that tells mpv to change it, so it never
-        #: drifts from what was actually sent over IPC.
+        #: mpv owns the pause state. This mirrors it: pause/resume/toggle/
+        #: load write it optimistically so a read straight after a command
+        #: sees the intended value, and mpv's own `pause` property-change
+        #: settles it. Without the observation this is a shadow copy that
+        #: drifts -- `toggle()` derives its value from the previous one, and
+        #: the writes happen on both the asyncio thread (commands) and the
+        #: IPC reader thread (a queue skip inside `load()`).
         self._paused = False
 
         self._start_mpv()
         self._connect()
-        self._observe_property("time-pos")
+        self._observe_property("time-pos", TIME_POS_OBSERVE_ID)
+        self._observe_property("pause", PAUSE_OBSERVE_ID)
 
     # -- lifecycle -----------------------------------------------------
 
@@ -140,7 +149,9 @@ class Player:
                 raise RuntimeError("player is closed")
             self._sock.sendall((payload + "\n").encode("utf-8"))
 
-    def _observe_property(self, name: str, observe_id: int = 1) -> None:
+    def _observe_property(self, name: str, observe_id: int) -> None:
+        # `observe_id` is required: mpv echoes it on every property-change,
+        # and two properties sharing an id are indistinguishable.
         self._send(["observe_property", observe_id, name])
 
     def _read_loop(self) -> None:
@@ -185,6 +196,12 @@ class Player:
             value = msg.get("data")
             if value is not None and self._on_position is not None:
                 self._on_position(value)
+        elif event == "property-change" and msg.get("name") == "pause":
+            # mpv is the authority: this corrects the optimistic mirror
+            # written by pause/resume/toggle/load, whichever thread wrote it.
+            value = msg.get("data")
+            if value is not None:
+                self._paused = bool(value)
         elif event == "end-file":
             # mpv fires end-file for every reason a file stops playing, not
             # just a genuine end-of-track: `loadfile ... replace` (what
