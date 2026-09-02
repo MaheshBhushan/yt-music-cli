@@ -27,11 +27,13 @@ import asyncio
 import contextlib
 import errno
 import json
+import logging
 import os
 import signal
 import socket
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 from ytm import api, auth, cache, config as config_mod, playlists_local, pot
@@ -42,8 +44,16 @@ from ytm.daemon.queue import Queue
 
 SOCKET_NAME = "ytmd.sock"
 
+logger = logging.getLogger(__name__)
+
 #: minimum seconds between two pushed `position` events
 POSITION_INTERVAL = 1.0
+
+#: minimum seconds between two position updates forwarded to the Queue. The
+#: Queue only uses position to decide when to prefetch the next track, with
+#: a lead of several seconds, so forwarding every mpv tick would only queue
+#: up work behind the daemon lock for nothing.
+QUEUE_POSITION_INTERVAL = 1.0
 
 #: max distinct video_ids kept in the in-memory lyrics cache
 LYRICS_CACHE_LIMIT = 100
@@ -142,6 +152,13 @@ class _PlayerTap:
     the daemon can push events without the Queue or the Player knowing about
     it. Running after the Queue matters: the Queue's error handler skips to
     the next track, and the daemon must report the track it skipped *to*.
+
+    The player fires these observers on its mpv IPC reader thread. The Queue
+    is not thread-safe, and command handlers mutate it too, so the chain is
+    never run on that thread directly: it is handed to `dispatch`, which the
+    daemon points at its own lock (see `Daemon._dispatch_player_event`). The
+    reader thread therefore only ever schedules work, and a slow stream
+    resolution inside an end-of-track never stops mpv events being read.
     """
 
     def __init__(self, player):
@@ -152,6 +169,8 @@ class _PlayerTap:
         self._tap_position = None
         self._tap_eof = None
         self._tap_error = None
+        self._dispatch = _run_inline
+        self._last_queue_position = None
         player.on_position(self._position)
         player.on_eof(self._eof)
         player.on_error(self._error)
@@ -174,20 +193,48 @@ class _PlayerTap:
         self._tap_eof = on_eof
         self._tap_error = on_error
 
+    def dispatch(self, dispatcher):
+        """Route every observer chain through `dispatcher(callback, *args)`."""
+        self._dispatch = dispatcher
+
+    # -- player thread: schedule only ---------------------------------------
+
     def _position(self, value):
-        for callback in (self._queue_position, self._tap_position):
-            if callback is not None:
-                callback(value)
+        # The daemon's own position handler only reads and emits, and is
+        # throttled itself; it stays immediate so the UI tracks mpv closely.
+        if self._tap_position is not None:
+            self._tap_position(value)
+        if self._queue_position is None:
+            return
+        now = time.monotonic()
+        last = self._last_queue_position
+        if last is not None and now - last < QUEUE_POSITION_INTERVAL:
+            return
+        self._last_queue_position = now
+        self._dispatch(self._queue_position, value)
 
     def _eof(self):
+        self._dispatch(self._run_eof)
+
+    def _error(self, message=None):
+        self._dispatch(self._run_error, message)
+
+    # -- serialised: the Queue's handler, then the daemon's -----------------
+
+    def _run_eof(self):
         for callback in (self._queue_eof, self._tap_eof):
             if callback is not None:
                 callback()
 
-    def _error(self, message=None):
+    def _run_error(self, message=None):
         for callback in (self._queue_error, self._tap_error):
             if callback is not None:
                 callback(message)
+
+
+def _run_inline(callback, *args):
+    """The dispatcher before the daemon's loop exists: run it right here."""
+    callback(*args)
 
 
 class Daemon:
@@ -236,6 +283,7 @@ class Daemon:
             on_eof=self._pushed_eof,
             on_error=self._pushed_skip,
         )
+        self._player.dispatch(self._dispatch_player_event)
         self._queue.on_error(self._pushed_error)
 
         self._clients = set()
@@ -295,11 +343,9 @@ class Daemon:
             self._volume = loaded["volume"]
         self._last_played = loaded["last_played"]
         if loaded["tracks"]:
-            # Set the queue's cursor and tracks directly: enqueue() would
-            # start playback and resolve a stream URL, which restoring must
-            # not do.
-            self._queue._tracks = list(loaded["tracks"])
-            self._queue._index = loaded["index"]
+            # Not enqueue(): that would start playback and resolve a stream
+            # URL, which restoring must not do.
+            self._queue.restore(loaded["tracks"], loaded["index"])
         with contextlib.suppress(Exception):
             self._player.set_volume(self._volume)
         # Nothing was loaded, so the restored session is not playing. Say so
@@ -319,6 +365,41 @@ class Daemon:
         }
         with contextlib.suppress(OSError):
             state_mod.save(snapshot, self._state_path)
+
+    # -- player events -----------------------------------------------------
+
+    def _dispatch_player_event(self, callback, *args):
+        """Run a player observer chain where queue mutation is serialised.
+
+        Command handlers run in worker threads under `self._lock`; player
+        observers used to run on the mpv IPC reader thread with nothing
+        between them and a concurrent `enqueue`/`remove`/`move`. Now they
+        are scheduled onto the event loop and take the same lock, so the
+        Queue has exactly one writer at a time. The resolve that an
+        end-of-track triggers also moves off the reader thread with it.
+
+        Before `start()` there is no loop, so the chain runs inline -- that
+        is also what keeps the Queue directly drivable in tests.
+        """
+        loop = self._loop
+        if loop is None or loop.is_closed():
+            callback(*args)
+            return
+
+        def schedule():
+            loop.create_task(self._run_player_event(callback, *args))
+
+        with contextlib.suppress(RuntimeError):
+            loop.call_soon_threadsafe(schedule)
+
+    async def _run_player_event(self, callback, *args):
+        async with self._lock:
+            try:
+                await asyncio.to_thread(callback, *args)
+            except Exception:
+                # A bug in an observer must not take the loop down; it is
+                # logged exactly as the player's own backstop would have.
+                logger.exception("error handling player event %r", callback)
 
     # -- events ------------------------------------------------------------
 

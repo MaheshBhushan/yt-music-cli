@@ -104,6 +104,10 @@ class FakeQueue:
     def on_error(self, callback):
         self._on_error = callback
 
+    def restore(self, tracks, index):
+        self._tracks = list(tracks)
+        self._index = index if self._tracks else -1
+
     @property
     def tracks(self):
         return list(self._tracks)
@@ -1342,3 +1346,139 @@ def test_restore_reports_a_paused_session(tmp_path, sock_path):
     )
     daemon.restore()
     assert daemon._status_data()["paused"] is True
+
+
+# -- player events are serialised with command handlers ---------------------
+#
+# Regression for the queue being mutated from two threads (issue #9): the mpv
+# IPC reader thread fired end-of-track and error observers straight into the
+# Queue while command handlers ran under the daemon lock in worker threads.
+
+
+def test_player_events_run_off_the_reader_thread_and_under_the_lock(
+    tmp_path, sock_path
+):
+    """With the daemon running, an end-of-track raised on some other thread
+    must not run the Queue there. It is scheduled onto the loop and run
+    while the daemon lock is held, like any command handler."""
+    import threading
+
+    async def scenario():
+        daemon, player, queue = _daemon_with_real_queue(tmp_path, sock_path)
+        seen_threads = []
+        lock_was_held = []
+
+        def resolver(video_id):
+            seen_threads.append(threading.current_thread())
+            lock_was_held.append(daemon._lock.locked())
+            return f"url-{video_id}"
+
+        queue._resolver = resolver
+        queue.enqueue([make_track("a"), make_track("b")])
+        await daemon.start()
+        client = await connect(sock_path)
+
+        reader = threading.Thread(target=player.emit_eof, name="fake-mpv-reader")
+        reader.start()
+        reader.join()
+        event = await client.next_event("track_changed")
+
+        await client.close()
+        await daemon.stop()
+        return event, queue.current.video_id, seen_threads, lock_was_held
+
+    event, current, seen_threads, lock_was_held = asyncio.run(scenario())
+    assert current == "b"
+    assert event["data"]["video_id"] == "b"
+    # resolves: "a" at enqueue (inline, before start), "b" at eof
+    assert len(seen_threads) == 2
+    assert seen_threads[1].name != "fake-mpv-reader"
+    assert lock_was_held[1] is True
+
+
+def test_end_of_track_waits_for_an_in_flight_command(tmp_path, sock_path):
+    """A handler holding the lock and an end-of-track arriving mid-way must
+    not interleave: the eof advances the queue only after the handler is
+    done, so the handler's view of the queue stays consistent."""
+    import threading
+
+    async def scenario():
+        daemon, player, queue = _daemon_with_real_queue(tmp_path, sock_path)
+        queue.enqueue([make_track("a"), make_track("b"), make_track("c")])
+        await daemon.start()
+        client = await connect(sock_path)
+
+        entered = threading.Event()
+        release = threading.Event()
+        order = []
+
+        def slow_move(args):
+            entered.set()
+            release.wait(2.0)
+            order.append(("move", queue.index))
+            return daemon._cmd_queue_move(args)
+
+        daemon._routes["queue_move"] = slow_move
+        original_eof = queue._handle_eof
+
+        def observed_eof():
+            order.append(("eof", queue.index))
+            original_eof()
+
+        daemon._player._queue_eof = observed_eof
+
+        move = asyncio.ensure_future(
+            client.call(1, "queue_move", from_index=2, to_index=1)
+        )
+        await asyncio.to_thread(entered.wait, 2.0)
+        player.emit_eof()  # arrives while the handler holds the lock
+        await asyncio.sleep(0.05)
+        release.set()
+        await move
+        await client.next_event("track_changed")
+
+        await client.close()
+        await daemon.stop()
+        return order, [t.video_id for t in queue.tracks], queue.index
+
+    order, tracks, index = asyncio.run(scenario())
+    assert [name for name, _ in order] == ["move", "eof"]
+    assert tracks == ["a", "c", "b"]
+    assert index == 1
+
+
+def test_player_events_run_inline_before_the_loop_exists(tmp_path, sock_path):
+    """Without a running daemon there is nothing to schedule onto, so the
+    chain runs where it is fired -- which is what lets the Queue be driven
+    synchronously."""
+    daemon, player, queue = _daemon_with_real_queue(tmp_path, sock_path)
+    queue.enqueue([make_track("a"), make_track("b")])
+    player.emit_eof()
+    assert queue.current.video_id == "b"
+
+
+def test_queue_position_updates_are_throttled_but_daemon_ones_are_not(
+    tmp_path, sock_path
+):
+    """Every mpv tick reaches the daemon's own position handler; the Queue
+    only needs one every QUEUE_POSITION_INTERVAL to decide on a prefetch."""
+    daemon, player, queue = _daemon_with_real_queue(tmp_path, sock_path)
+    queue_seen = []
+    daemon._player._queue_position = queue_seen.append
+    daemon_seen = []
+    daemon._player._tap_position = daemon_seen.append
+    for value in (1.0, 1.1, 1.2):
+        player.emit_position(value)
+    assert daemon_seen == [1.0, 1.1, 1.2]
+    assert queue_seen == [1.0]
+
+
+def test_restore_uses_the_queue_api_and_clamps_the_cursor(tmp_path, sock_path):
+    from ytm.daemon.queue import Queue
+
+    queue = Queue(FakePlayer(), resolver=lambda video_id: f"url-{video_id}")
+    queue.restore([make_track("a"), make_track("b")], 7)
+    assert queue.index == 1
+    queue.restore([], 3)
+    assert queue.index == -1
+    assert queue.current is None
