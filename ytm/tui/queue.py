@@ -3,13 +3,15 @@
 from textual.containers import Vertical
 from textual.widgets import DataTable, Static
 
+from ytm.tui.widgets import SelectOnClickTable
+
 
 class QueuePane(Vertical):
     """The current play queue, with the playing track marked."""
 
     def compose(self):
         yield Static("QUEUE", id="queue-title")
-        table = DataTable(id="queue-table", cursor_type="row", show_header=False)
+        table = SelectOnClickTable(id="queue-table", cursor_type="row", show_header=False)
         table.add_column("#")
         table.add_column("track")
         yield table

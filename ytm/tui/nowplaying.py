@@ -4,6 +4,8 @@ import io
 import urllib.request
 
 from textual.containers import Container, Horizontal, Vertical
+from textual.markup import escape
+from textual.message import Message
 from textual.widgets import ProgressBar, Static
 
 # Imported at module level on purpose: textual-image probes the terminal for
@@ -103,12 +105,24 @@ class AlbumArt(Container):
 
 
 class NowPlaying(Vertical):
-    """Track line, seek progress and volume, driven purely by player events."""
+    """Track line, seek progress and volume, driven purely by player events.
+
+    Mouse: clicking the track line toggles pause, clicking anywhere on the
+    progress bar asks the app to seek there (`SeekRequested`).
+    """
+
+    class SeekRequested(Message):
+        """The user clicked the progress bar at `seconds` into the track."""
+
+        def __init__(self, seconds):
+            super().__init__()
+            self.seconds = seconds
 
     def __init__(self, *args, art="auto", **kwargs):
         super().__init__(*args, **kwargs)
         self._art = art
         self._duration_seconds = 0
+        self._position = 0
         self._video_id = None
         self._title = "nothing playing"
         self._paused = False
@@ -116,17 +130,33 @@ class NowPlaying(Vertical):
     def compose(self):
         with Horizontal():
             yield AlbumArt(id="now-playing-art", renderer=self._art)
+            # bottom-aligned (see app.tcss) so the text sits level with the
+            # foot of the cover, right above the shortcut bar
             with Vertical(id="now-playing-text"):
                 yield Static("nothing playing", id="now-playing-track")
                 yield Static("", id="now-playing-artist")
                 with Horizontal(id="now-playing-bar"):
-                    yield ProgressBar(id="now-playing-progress", show_eta=False)
+                    yield ProgressBar(
+                        id="now-playing-progress", show_eta=False, show_percentage=False
+                    )
                     yield Static("0:00 / 0:00", id="now-playing-time")
                     yield Static("vol 100", id="now-playing-volume")
 
     def _render_track_line(self):
         icon = "||" if self._paused else ">"
-        self.query_one("#now-playing-track", Static).update(f"{icon} {self._title}")
+        self.query_one("#now-playing-track", Static).update(
+            f"[@click=app.toggle]{icon} {escape(self._title)}[/]"
+        )
+
+    def on_click(self, event):
+        bar = self.query_one("#now-playing-progress", ProgressBar)
+        region = bar.region
+        if not region.contains(event.screen_x, event.screen_y):
+            return
+        if not self._duration_seconds or region.width <= 0:
+            return
+        fraction = min(1.0, max(0.0, (event.screen_x - region.x) / region.width))
+        self.post_message(self.SeekRequested(fraction * self._duration_seconds))
 
     def on_track_changed(self, data):
         data = data or {}
@@ -136,7 +166,7 @@ class NowPlaying(Vertical):
         artist = data.get("artist") or ""
         album = data.get("album") or ""
         self.query_one("#now-playing-artist", Static).update(
-            " · ".join(part for part in (artist, album) if part)
+            escape(" · ".join(part for part in (artist, album) if part))
         )
         self.query_one(AlbumArt).show(data.get("thumbnail"))
 
@@ -151,6 +181,7 @@ class NowPlaying(Vertical):
         data = data or {}
         position = data.get("position") or 0
         duration = data.get("duration_seconds") or self._duration_seconds
+        self._position = position
         self._duration_seconds = duration
         bar = self.query_one("#now-playing-progress", ProgressBar)
         bar.update(total=duration or None, progress=position)

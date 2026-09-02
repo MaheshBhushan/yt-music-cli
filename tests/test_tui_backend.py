@@ -126,3 +126,47 @@ def test_play_keeps_the_remembered_thumbnail_when_the_client_omits_it(backend, c
         "s1", "Song", "Band", "LP", "3:20", 200, thumbnail="https://img/s1.jpg")])
     backend.request("play", {"video_id": "s1", "title": "Song"})
     assert state.track_for("s1").thumbnail == "https://img/s1.jpg"
+
+
+def test_listen_reannounces_position_once_the_duration_is_known(backend):
+    backend.request("play", {"video_id": "a", "title": "A"})
+    changes = [("time-pos", 3.0), ("duration", 200.0), ("time-pos", 4.0)]
+
+    class Observer:
+        def observe(self, *names):
+            assert names.index("duration") < names.index("time-pos")
+            yield from changes
+            backend.close()
+            from ytm.player import PlayerError
+            raise PlayerError("closed")
+
+        def close(self):
+            pass
+
+    backend._make_player = lambda spawn=True, timeout=None: Observer()
+    events = []
+    backend.on_event(lambda e, d: events.append((e, d)))
+    backend._closed = False
+    backend.listen()
+    positions = [d for e, d in events if e == "position"]
+    assert [(p["position"], p["duration_seconds"]) for p in positions] == [(3.0, 0), (3.0, 200.0), (4.0, 200.0)]
+
+
+def test_queue_play_jumps_to_the_index(backend):
+    backend.request("play", {"video_id": "a", "title": "A"})
+    backend.request("enqueue", {"video_id": "b", "title": "B"})
+    backend.request("queue_play", {"index": 1})
+    assert ("play_index", 1) in backend.fake.calls
+
+
+def test_playlist_play_replaces_the_queue(backend, monkeypatch):
+    from ytm.music import Playlist
+
+    monkeypatch.setattr(
+        music, "get_playlist",
+        lambda pid, limit=100, yt=None: (Playlist(pid, "Mix", 2), [track("p1", "P1", "X"), track("p2", "P2", "Y")]),
+    )
+    q = backend.request("playlist_play", {"playlist_id": "PLx"})
+    names = [c[0] for c in backend.fake.calls]
+    assert names == ["stop", "play", "enqueue"]
+    assert [t["title"] for t in q["tracks"]] == ["P1", "P2"]
