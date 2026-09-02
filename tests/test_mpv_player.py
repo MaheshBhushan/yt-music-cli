@@ -75,16 +75,21 @@ class FakeMpv:
         elif name == "loadfile":
             url, flags = command[1], command[2]
             title = command[4].removeprefix("force-media-title=") or None
-            self.playlist.append({"filename": url, "title": title})
+            entry = {"filename": url, "title": title}
+            if flags == "insert-next" and self.props["playlist-pos"] >= 0:
+                self.playlist.insert(self.props["playlist-pos"] + 1, entry)
+            else:
+                self.playlist.append(entry)
             self.props["playlist-count"] = len(self.playlist)
-            if flags == "append-play" or self.props["playlist-pos"] < 0:
-                self.props["playlist-pos"] = len(self.playlist) - 1
-                self.props["idle-active"] = False
-                self.props["media-title"] = title or url
-                self.props["playback-time"] = 0.0
-                self.props["duration"] = 200.0
-                for i, entry in enumerate(self.playlist):
-                    entry["current"] = i == self.props["playlist-pos"]
+        elif name == "playlist-play-index":
+            self.props["playlist-pos"] = command[1]
+            self.props["idle-active"] = False
+            entry = self.playlist[command[1]]
+            self.props["media-title"] = entry["title"] or entry["filename"]
+            self.props["playback-time"] = 0.0
+            self.props["duration"] = 200.0
+            for i, e in enumerate(self.playlist):
+                e["current"] = i == command[1]
         return {"error": "success", "data": None}
 
     def close(self):
@@ -201,13 +206,26 @@ def test_default_ipc_path_is_a_socket_on_posix_and_a_pipe_on_windows(monkeypatch
 def test_play_appends_and_starts_with_a_forced_title(mpv):
     with Player(ipc_path=mpv.path, spawner=no_spawn) as p:
         p.play("https://music.youtube.com/watch?v=abc", title="505 / Arctic Monkeys")
-    assert mpv.commands[-1] == [
-        "loadfile",
-        "https://music.youtube.com/watch?v=abc",
-        "append-play",
-        -1,
-        "force-media-title=505 / Arctic Monkeys",
+    assert mpv.commands[-2:] == [
+        [
+            "loadfile",
+            "https://music.youtube.com/watch?v=abc",
+            "insert-next",
+            -1,
+            "force-media-title=505 / Arctic Monkeys",
+        ],
+        ["playlist-play-index", 0],
     ]
+
+
+def test_play_while_playing_inserts_next_and_jumps_to_it(mpv):
+    with Player(ipc_path=mpv.path, spawner=no_spawn) as p:
+        p.play("u1", title="one")
+        p.enqueue("u3", title="three")
+        p.play("u2", title="two")
+        assert [e["title"] for e in p.playlist()] == ["one", "two", "three"]
+        assert [e["current"] for e in p.playlist()] == [False, True, False]
+    assert ["playlist-play-index", 1] in mpv.commands
 
 
 def test_enqueue_appends_without_interrupting(mpv):
