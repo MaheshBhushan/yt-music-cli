@@ -9,6 +9,7 @@ without depending on real mpv or audio.
 """
 
 import json
+import logging
 import os
 import socket
 import subprocess
@@ -419,3 +420,73 @@ def test_pause_observation_does_not_disturb_position_reporting(fake_player):
     )
     assert _wait_for(lambda: seen == [12.5])
     assert player.paused is True
+
+
+# -- the reader thread must outlive a failing observer ---------------------
+
+
+_poll_until = _wait_for
+
+
+def _raise(message):
+    def observer(*args):
+        raise RuntimeError(message)
+
+    return observer
+
+
+def test_reader_thread_survives_an_observer_that_raises(fake_player):
+    """Regression: observers do real work on the IPC reader thread -- the
+    queue resolves a stream URL inside `on_eof`, and yt-dlp raises when it
+    gives up. Letting that escape killed the reader, and the daemon went
+    deaf to mpv for the rest of its life: no position, no end-of-track, no
+    errors, playback silently stuck with nothing reported."""
+    player, server = fake_player
+    server.wait_for_commands(1)
+    player.on_eof(_raise("resolver gave up"))
+    positions = []
+    player.on_position(positions.append)
+
+    server.send_event({"event": "end-file", "reason": "eof"})
+    server.send_event(
+        {"event": "property-change", "id": 1, "name": "time-pos", "data": 42.0}
+    )
+    assert _poll_until(lambda: positions == [42.0])
+    assert player._reader_thread.is_alive()
+
+
+def test_observer_failure_is_logged_with_its_traceback(fake_player, caplog):
+    """Anything reaching the backstop is a bug in an observer, not a
+    playback failure, so it must not be reshaped into one -- the queue would
+    respond to our own crash by skipping the user's music. It is logged
+    instead, with the traceback, so it does not vanish."""
+    player, server = fake_player
+    server.wait_for_commands(1)
+    errors = []
+    player.on_error(errors.append)
+    player.on_eof(_raise("observer is buggy"))
+
+    with caplog.at_level(logging.ERROR, logger="ytm.daemon.player"):
+        server.send_event({"event": "end-file", "reason": "eof"})
+        assert _poll_until(lambda: "observer is buggy" in caplog.text)
+
+    assert "Traceback" in caplog.text
+    assert errors == []  # not reported as a playback error
+
+
+def test_reader_thread_survives_a_failing_error_observer(fake_player):
+    """The error observer runs the same queue code that just failed, so it
+    can fail too. That second failure must not kill the reader either."""
+    player, server = fake_player
+    server.wait_for_commands(1)
+    player.on_error(_raise("skip failed too"))
+    player.on_eof(_raise("resolver gave up"))
+    positions = []
+    player.on_position(positions.append)
+
+    server.send_event({"event": "end-file", "reason": "eof"})
+    server.send_event(
+        {"event": "property-change", "id": 1, "name": "time-pos", "data": 7.0}
+    )
+    assert _poll_until(lambda: positions == [7.0])
+    assert player._reader_thread.is_alive()
