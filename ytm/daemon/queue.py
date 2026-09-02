@@ -20,9 +20,12 @@ discarded and re-resolved if it has gone stale or if it no longer belongs to
 the track that is actually next -- e.g. after a reorder or a skip.
 """
 
+import logging
 import time
 
 from ytm import api, resolve
+
+logger = logging.getLogger(__name__)
 
 #: how long before the end of the current track to resolve the next one
 PREFETCH_LEAD_SECONDS = 15.0
@@ -148,6 +151,21 @@ class Queue:
         self._index = -1
         self._invalidate_prefetch()
 
+    def restore(self, tracks, index):
+        """Reinstate a persisted queue and cursor without starting playback.
+
+        The cursor is clamped into the restored list (or -1 for an empty
+        one), so a state file that outlived a shorter queue cannot leave it
+        pointing past the end.
+        """
+        self._tracks = list(tracks)
+        if not self._tracks:
+            self._index = -1
+        else:
+            self._index = max(0, min(len(self._tracks) - 1, index))
+        self._prefetch = None
+        self._consecutive_failures = 0
+
     def next(self):
         """Advance to the next track and play it; returns the new current.
 
@@ -262,11 +280,20 @@ class Queue:
             return
         if self._prefetch is not None and self._prefetch_valid(upcoming.video_id):
             return
-        self._prefetch = (
-            upcoming.video_id,
-            self._resolver(upcoming.video_id),
-            time.monotonic(),
-        )
+        try:
+            url = self._resolver(upcoming.video_id)
+        except Exception:
+            # Prefetching is an optimisation: a failure here is not a
+            # playback failure yet. `_play_current` resolves again when the
+            # track is actually reached and reports it properly then.
+            logger.warning(
+                "could not prefetch %s; will resolve at play time",
+                upcoming.video_id,
+                exc_info=True,
+            )
+            self._prefetch = None
+            return
+        self._prefetch = (upcoming.video_id, url, time.monotonic())
 
     def _prefetch_valid(self, video_id):
         """Whether the held prefetch is fresh and for `video_id`."""
