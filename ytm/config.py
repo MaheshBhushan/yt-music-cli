@@ -10,6 +10,7 @@ startup. The shape and defaults are::
     [behaviour]
     autoplay_radio = true
     confirm_remote_delete = true
+    authenticated_streams = false
 
     [ui]
     theme = "dark"
@@ -43,7 +44,17 @@ CONFIG_PATH = Path.home() / ".config" / "ytm" / "config.toml"
 
 DEFAULTS = {
     "audio": {"volume": 70, "device": "auto"},
-    "behaviour": {"autoplay_radio": True, "confirm_remote_delete": True},
+    # authenticated_streams: hand the account cookies to yt-dlp when mpv
+    # resolves a stream. Off by default: with cookies YouTube serves URLs
+    # that need an account-bound PO token, which the provider does not
+    # currently supply, and the audio server then answers 403. Anonymous
+    # resolution plays the same catalogue; only private or age-gated tracks
+    # need this on.
+    "behaviour": {
+        "autoplay_radio": True,
+        "confirm_remote_delete": True,
+        "authenticated_streams": False,
+    },
     "ui": {"theme": "dark"},
     "pot": {"enabled": True, "base_url": "http://127.0.0.1:4416"},
     "keys": {
@@ -62,6 +73,7 @@ _TYPES = {
     ("audio", "device"): str,
     ("behaviour", "autoplay_radio"): bool,
     ("behaviour", "confirm_remote_delete"): bool,
+    ("behaviour", "authenticated_streams"): bool,
     ("ui", "theme"): str,
     ("pot", "enabled"): bool,
     ("pot", "base_url"): str,
