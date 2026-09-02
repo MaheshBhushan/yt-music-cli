@@ -737,3 +737,54 @@ def test_search_results_with_duplicate_video_id_renders_without_crashing():
             assert table.row_count == 2
 
     asyncio.run(scenario())
+
+
+# -- s / e shortcuts ------------------------------------------------------------
+
+
+def test_s_focuses_search_from_another_pane():
+    async def scenario():
+        stub = StubClient()
+        app = YTMApp(client=stub)
+        async with app.run_test() as pilot:
+            await settle(pilot)
+            app.query_one("#queue-table").focus()
+            await settle(pilot)
+            assert app.focused.id != "search-input"
+            await pilot.press("s")
+            await settle(pilot)
+            assert app.focused.id == "search-input"
+
+    asyncio.run(scenario())
+
+
+def test_e_exits_without_stopping_playback():
+    async def scenario():
+        stub = StubClient()
+        app = YTMApp(client=stub)
+        async with app.run_test() as pilot:
+            await settle(pilot)
+            app.query_one("#queue-table").focus()
+            await settle(pilot)
+            await pilot.press("e")
+            await settle(pilot)
+        assert stub.closed
+        assert not any(c[0] == "shutdown" for c in stub.calls)
+
+    asyncio.run(scenario())
+
+
+def test_s_and_e_are_plain_letters_inside_the_search_box():
+    async def scenario():
+        stub = StubClient()
+        app = YTMApp(client=stub)
+        async with app.run_test() as pilot:
+            await settle(pilot)
+            await pilot.click("#search-input")
+            for char in "sesame":
+                await pilot.press(char)
+            await settle(pilot)
+            assert app.query_one("#search-input").value == "sesame"
+            assert app.is_running
+
+    asyncio.run(scenario())

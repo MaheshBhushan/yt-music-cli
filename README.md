@@ -186,6 +186,7 @@ ytm cache list                 # List all cached tracks (video_id, size, path)
 | Key | Action | Notes |
 |-----|--------|-------|
 | `/` | Search | Customizable via config (`keys.search`) |
+| `s` | Search | Hardcoded; typed as a letter while the search box has focus |
 | `a` | Enqueue selected | Hardcoded |
 | `P` | Focus Playlists pane | Hardcoded |
 | `A` | Add selected track to playlist | Hardcoded |
@@ -197,7 +198,8 @@ ytm cache list                 # List all cached tracks (video_id, size, path)
 | `+` | Volume up 5% | Hardcoded |
 | `-` | Volume down 5% | Hardcoded |
 | `tab` | Cycle panes | Hardcoded |
-| `q` | Quit TUI (daemon keeps running) | Customizable via config (`keys.quit`) |
+| `q` | Quit TUI (playback keeps running) | Customizable via config (`keys.quit`) |
+| `e` | Exit TUI (playback keeps running) | Hardcoded; typed as a letter while the search box has focus |
 | `Q` | Quit TUI and stop daemon | Hardcoded |
 
 Five keys are customizable:
