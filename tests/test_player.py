@@ -23,7 +23,7 @@ import pytest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from ytm import cache
-from ytm.daemon.player import Player
+from ytm.daemon.player import PAUSE_OBSERVE_ID, TIME_POS_OBSERVE_ID, Player
 
 
 class FakeMpvServer:
@@ -119,7 +119,7 @@ def fake_player(monkeypatch):
 def test_load_issues_loadfile_command(fake_player):
     player, server = fake_player
     player.load("https://example.com/stream.m4a")
-    cmds = server.wait_for_commands(2)  # observe_property + loadfile
+    cmds = server.wait_for_commands(3)  # 2 observes + loadfile
     assert ["loadfile", "https://example.com/stream.m4a", "replace"] in cmds
 
 
@@ -128,7 +128,7 @@ def test_pause_resume_toggle_issue_correct_commands(fake_player):
     player.pause()
     player.resume()
     player.toggle()
-    cmds = server.wait_for_commands(4)  # observe + 3 above
+    cmds = server.wait_for_commands(5)  # 2 observes + 3 above
     assert ["set_property", "pause", True] in cmds
     assert ["set_property", "pause", False] in cmds
     assert ["cycle", "pause"] in cmds
@@ -141,9 +141,9 @@ def test_load_unpauses_mpv_when_paused(fake_player):
     track means the caller intends to play it now."""
     player, server = fake_player
     player.pause()
-    server.wait_for_commands(2)  # observe + pause
+    server.wait_for_commands(3)  # 2 observes + pause
     player.load("https://example.com/stream.m4a")
-    cmds = server.wait_for_commands(4)  # observe + pause + loadfile + unpause
+    cmds = server.wait_for_commands(5)  # 2 observes + pause + loadfile + unpause
     load_index = cmds.index(
         ["loadfile", "https://example.com/stream.m4a", "replace"]
     )
@@ -172,7 +172,7 @@ def test_seek_relative_and_absolute(fake_player):
     player, server = fake_player
     player.seek(10)
     player.seek(30, absolute=True)
-    cmds = server.wait_for_commands(3)
+    cmds = server.wait_for_commands(4)
     assert ["seek", 10, "relative"] in cmds
     assert ["seek", 30, "absolute"] in cmds
 
@@ -181,7 +181,7 @@ def test_volume_clamped_low_and_high(fake_player):
     player, server = fake_player
     player.set_volume(-50)
     player.set_volume(500)
-    cmds = server.wait_for_commands(3)
+    cmds = server.wait_for_commands(4)
     assert ["set_property", "volume", 0] in cmds
     assert ["set_property", "volume", 100] in cmds
 
@@ -248,7 +248,7 @@ def test_position_observer_dispatched(fake_player):
     player.on_position(on_pos)
     time.sleep(0.1)
     server.send_event(
-        {"event": "property-change", "id": 1, "name": "time-pos", "data": 42.5}
+        {"event": "property-change", "id": TIME_POS_OBSERVE_ID, "name": "time-pos", "data": 42.5}
     )
     deadline = time.time() + 2.0
     while time.time() < deadline and not positions:
@@ -263,7 +263,7 @@ def test_load_plays_cached_file_when_video_id_cached(fake_player, monkeypatch, t
     monkeypatch.setattr(cache, "get_cached_path", lambda video_id, **kw: cached_path)
 
     player.load("https://example.com/should-be-ignored.m4a", video_id="cached123")
-    cmds = server.wait_for_commands(2)
+    cmds = server.wait_for_commands(3)
     assert ["loadfile", str(cached_path), "replace"] in cmds
     assert ["loadfile", "https://example.com/should-be-ignored.m4a", "replace"] not in cmds
 
@@ -273,7 +273,7 @@ def test_load_falls_through_to_url_when_not_cached(fake_player, monkeypatch):
     monkeypatch.setattr(cache, "get_cached_path", lambda video_id, **kw: None)
 
     player.load("https://example.com/stream.m4a", video_id="uncached123")
-    cmds = server.wait_for_commands(2)
+    cmds = server.wait_for_commands(3)
     assert ["loadfile", "https://example.com/stream.m4a", "replace"] in cmds
 
 
@@ -327,7 +327,7 @@ while True:
         obj._start_mpv()
         pid = obj._proc.pid
         obj._connect()
-        obj._observe_property("time-pos")
+        obj._observe_property("time-pos", TIME_POS_OBSERVE_ID)
 
         # confirm process alive before close
         assert obj._proc.poll() is None
@@ -354,10 +354,7 @@ while True:
             pass
 
 
-# -- the reader thread must outlive a failing observer ---------------------
-
-
-def _poll_until(predicate, timeout=2.0):
+def _wait_for(predicate, timeout=2.0):
     """Poll until `predicate` holds; the reader thread applies events async."""
     deadline = time.time() + timeout
     while time.time() < deadline:
@@ -365,6 +362,70 @@ def _poll_until(predicate, timeout=2.0):
             return True
         time.sleep(0.01)
     return False
+
+
+def test_player_observes_the_pause_property(fake_player):
+    player, server = fake_player
+    cmds = server.wait_for_commands(2)
+    assert ["observe_property", PAUSE_OBSERVE_ID, "pause"] in cmds
+
+
+def test_pause_state_follows_mpv_not_only_our_own_commands(fake_player):
+    """mpv owns the pause state. The mirror kept inside Player is written
+    optimistically by pause/resume/toggle/load so reads are immediate, but
+    mpv's own report is what settles it."""
+    player, server = fake_player
+    server.wait_for_commands(2)
+    assert player.paused is False
+
+    server.send_event(
+        {"event": "property-change", "id": PAUSE_OBSERVE_ID, "name": "pause", "data": True}
+    )
+    assert _wait_for(lambda: player.paused is True)
+
+    server.send_event(
+        {"event": "property-change", "id": PAUSE_OBSERVE_ID, "name": "pause", "data": False}
+    )
+    assert _wait_for(lambda: player.paused is False)
+
+
+def test_mpv_report_overrides_a_locally_derived_pause_value(fake_player):
+    """`toggle()` cannot know mpv's state -- it flips whatever the mirror
+    already held, so a wrong value stays wrong and inverts on every toggle.
+    mpv's own report has to win over that derived value."""
+    player, server = fake_player
+    server.wait_for_commands(2)
+    player.toggle()
+    assert player.paused is True  # derived from the mirror, not from mpv
+
+    # mpv reports it is in fact still playing.
+    server.send_event(
+        {"event": "property-change", "id": PAUSE_OBSERVE_ID, "name": "pause", "data": False}
+    )
+    assert _wait_for(lambda: player.paused is False)
+
+
+def test_pause_observation_does_not_disturb_position_reporting(fake_player):
+    """Both properties are observed; the pause branch must not swallow
+    time-pos updates."""
+    player, server = fake_player
+    seen = []
+    player.on_position(seen.append)
+    server.wait_for_commands(2)
+    server.send_event(
+        {"event": "property-change", "id": PAUSE_OBSERVE_ID, "name": "pause", "data": True}
+    )
+    server.send_event(
+        {"event": "property-change", "id": TIME_POS_OBSERVE_ID, "name": "time-pos", "data": 12.5}
+    )
+    assert _wait_for(lambda: seen == [12.5])
+    assert player.paused is True
+
+
+# -- the reader thread must outlive a failing observer ---------------------
+
+
+_poll_until = _wait_for
 
 
 def _raise(message):
