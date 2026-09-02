@@ -302,6 +302,12 @@ class Daemon:
             self._queue._index = loaded["index"]
         with contextlib.suppress(Exception):
             self._player.set_volume(self._volume)
+        # Nothing was loaded, so the restored session is not playing. Say so
+        # by pausing mpv rather than by setting a flag: `status` reads the
+        # player's real state, and shutdown pauses too, so this is also what
+        # the previous session left behind. `load()` clears it on first play.
+        with contextlib.suppress(Exception):
+            self._player.pause()
 
     def save(self):
         """Persist the queue, cursor, volume and last-played track."""
