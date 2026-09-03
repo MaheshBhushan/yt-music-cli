@@ -74,9 +74,9 @@ class YTMApp(App):
     BINDINGS = [
         ("/", "focus_search", "Search"),
         ("s", "focus_search", "Search"),
-        ("a", "enqueue_selected", "Enqueue"),
-        ("P", "focus_playlists", "Playlists"),
-        ("A", "add_to_playlist", "Add to playlist"),
+        ("q", "enqueue_selected", "Enqueue"),
+        ("l", "focus_playlists", "Playlists"),
+        ("a", "add_to_playlist", "Add to playlist"),
         ("space", "toggle", "Play/Pause"),
         ("n", "next", "Next"),
         ("p", "prev", "Prev"),
@@ -87,7 +87,7 @@ class YTMApp(App):
         ("tab", "cycle_pane", "Cycle panes"),
         Binding("escape", "focus_results", "Results", show=False),
         ("e", "quit_only", "Exit"),
-        ("Q", "quit_and_shutdown", "Exit + stop player"),
+        ("x", "quit_and_shutdown", "Exit + stop player"),
     ]
 
     def __init__(self, client=None, config=None):
@@ -96,6 +96,9 @@ class YTMApp(App):
         self._volume = 100
         self._armed = None  # song chosen with A, waiting for a playlist
         self._return_to = None
+        self._search_timer = None  # pending debounced live search
+        self._search_seq = 0  # rises per search; late replies for older ones are dropped
+        self._results_query = None  # query the results table currently shows
         self._config = config if config is not None else config_mod.load()
         self._bindings = BindingsMap(self._build_bindings(self._config["keys"]))
         self.theme = self._resolve_theme(self._config["ui"]["theme"])
@@ -122,7 +125,7 @@ class YTMApp(App):
     def _build_bindings(keys):
         """The BINDINGS table with the five customisable keys from config.
 
-        Any other binding (`a`, `s`, `+`, `-`, `Tab`, `P`, `A`, arrows, `Q`) keeps
+        Any other binding (`q`, `s`, `+`, `-`, `Tab`, `l`, `a`, arrows, `x`) keeps
         its hardcoded default -- only `toggle`, `next`, `prev`, `search` and
         `quit` are user-configurable.
         """
@@ -131,9 +134,9 @@ class YTMApp(App):
             # `s`/`e` are plain (non-priority) bindings: they act from any
             # pane but stay ordinary letters while the search box has focus
             ("s", "focus_search", "Search"),
-            ("a", "enqueue_selected", "Enqueue"),
-            ("P", "focus_playlists", "Playlists"),
-            ("A", "add_to_playlist", "Add to playlist"),
+            ("q", "enqueue_selected", "Enqueue"),
+            ("l", "focus_playlists", "Playlists"),
+            ("a", "add_to_playlist", "Add to playlist"),
             (keys["toggle"], "toggle", "Play/Pause"),
             (keys["next"], "next", "Next"),
             (keys["prev"], "prev", "Prev"),
@@ -148,7 +151,7 @@ class YTMApp(App):
             # no priority on any letter key: while the search box has focus
             # every letter is text, so "queen" or "eels" can be searched
             (keys["quit"], "quit_only", "Exit"),
-            ("Q", "quit_and_shutdown", "Exit + stop player"),
+            ("x", "quit_and_shutdown", "Exit + stop player"),
         ]
 
     @staticmethod
@@ -168,13 +171,13 @@ class YTMApp(App):
             link(keys["toggle"], "play/pause", "toggle"),
             link(keys["next"], "next", "next"),
             link(keys["prev"], "prev", "prev"),
-            link("a", "enqueue", "enqueue_selected"),
+            link("q", "enqueue", "enqueue_selected"),
             f"[@click=app.seek_back][b]←[/b][/]/[@click=app.seek_forward][b]→[/b][/] seek",
             f"[@click=app.volume_up][b]+[/b][/]/[@click=app.volume_down][b]-[/b][/] volume",
-            link("P", "playlists", "focus_playlists"),
-            link("A", "add to playlist", "add_to_playlist"),
+            link("l", "playlists", "focus_playlists"),
+            link("a", "add to playlist", "add_to_playlist"),
             link("Tab", "panes", "cycle_pane"),
-            link("Q", "exit+stop", "quit_and_shutdown"),
+            link("x", "exit+stop", "quit_and_shutdown"),
         ])
 
     def check_action(self, action, parameters):
@@ -232,6 +235,10 @@ class YTMApp(App):
 
     #: seconds between reconnect attempts after the event connection drops
     LISTEN_RETRY = 1.0
+    #: live search: wait this long after the last keystroke before asking YouTube
+    SEARCH_DEBOUNCE = 0.35
+    #: and only once the query is at least this long
+    SEARCH_MIN_CHARS = 2
 
     def _listen(self):
         """Run the event listener until the app closes, reconnecting if the
@@ -366,22 +373,72 @@ class YTMApp(App):
 
     # -- search --------------------------------------------------------
 
+    def on_input_changed(self, message: Input.Changed):
+        """Search as you type: results appear after a short pause in typing,
+        no Enter needed. Enter still plays the first result."""
+        if message.input.id != "search-input":
+            return
+        if self._search_timer is not None:
+            self._search_timer.stop()
+            self._search_timer = None
+        query = message.value.strip()
+        if len(query) < self.SEARCH_MIN_CHARS:
+            return
+        self._search_timer = self.set_timer(
+            self.SEARCH_DEBOUNCE, lambda: self._live_search(query), name="live-search"
+        )
+
+    def _live_search(self, query):
+        """Fetch results for `query`; a slower, older search can never
+        overwrite a newer one (the sequence number guards that)."""
+        self._search_timer = None
+        self._search_seq += 1
+        seq = self._search_seq
+        self._request_async(
+            "search", {"query": query},
+            then=lambda data: self._show_search_results(seq, query, data),
+        )
+
+    def _show_search_results(self, seq, query, data):
+        if seq != self._search_seq:
+            return  # stale: the user has typed more since
+        tracks = (data or {}).get("tracks") or []
+        self.query_one(SearchPane).set_results(tracks)
+        self._results_query = query
+
     def on_input_submitted(self, message: Input.Submitted):
         if message.input.id == "playlist-name":
             self._create_playlist(message.value)
             return
         if message.input.id != "search-input":
             return
-        def show(data):
-            tracks = (data or {}).get("tracks") or []
-            self.query_one(SearchPane).set_results(tracks)
+        query = message.value.strip()
+        if not query:
+            return
+
+        def play_first(tracks):
             if tracks:
                 self._request("play", self._track_args(tracks[0]))
             # hand focus to the results: from here space toggles, arrows
             # seek and Enter/click plays, instead of typing into the box
             self.action_focus_results()
 
-        self._request_async("search", {"query": message.value}, then=show)
+        if self._results_query == query:
+            # the live search already fetched these; don't ask YouTube again
+            play_first(getattr(self.query_one(SearchPane), "_tracks", []))
+            return
+        if self._search_timer is not None:
+            self._search_timer.stop()
+            self._search_timer = None
+        self._search_seq += 1
+        seq = self._search_seq
+
+        def show(data):
+            self._show_search_results(seq, query, data)
+            if seq == self._search_seq:
+                play_first((data or {}).get("tracks") or [])
+
+        self._request_async("search", {"query": query}, then=show)
 
     def on_data_table_row_selected(self, message: DataTable.RowSelected):
         """Enter or a mouse click on any of the three tables."""
@@ -424,8 +481,8 @@ class YTMApp(App):
         self.query_one("#search-results", DataTable).focus()
 
     def on_descendant_focus(self, message):
-        # remember which list the user was last in, so `A` adds the track
-        # they were looking at even after `P` moved focus to playlists.
+        # remember which list the user was last in, so `a` adds the track
+        # they were looking at even after `l` moved focus to playlists.
         # (Focus, not RowHighlighted: a queue refresh re-adds rows and fires
         # highlights the user never made.)
         widget_id = getattr(message.widget, "id", None)
@@ -479,9 +536,6 @@ class YTMApp(App):
         self._request("play", args)
 
     def action_enqueue_selected(self):
-        if self._armed is not None and self._in_playlists():
-            self._add_armed_to_highlighted()
-            return
         args = self._selected_track_args()
         if args is None:
             return
@@ -518,10 +572,10 @@ class YTMApp(App):
         self.query_one("#playlists-table", DataTable).focus()
 
     def action_add_to_playlist(self):
-        """Two-step add: `A` on a song arms it and jumps to the playlists pane;
-        up/down picks a playlist; `A` (or `a`, or Enter) drops it in. Escape
-        cancels. `A` in the playlists pane with nothing armed adds the song
-        the user was last on, so the old one-key flow still works."""
+        """Two-step add: `a` on a song arms it and jumps to the playlists pane;
+        up/down picks a playlist; `a` (or Enter) drops it in. Escape cancels.
+        `a` in the playlists pane with nothing armed adds the song the user
+        was last on, so the old one-key flow still works."""
         pane = self.query_one(PlaylistsPane)
         if self._in_playlists():
             if pane.new_selected():
@@ -555,7 +609,7 @@ class YTMApp(App):
         pane = self.query_one(PlaylistsPane)
         playlist_id = pane.selected_playlist_id()
         if playlist_id is None:
-            self._show_error("highlight a playlist first, then press A")
+            self._show_error("highlight a playlist first, then press a")
             return
         track_args = self._armed or self._selected_track_args()
         if track_args is None:

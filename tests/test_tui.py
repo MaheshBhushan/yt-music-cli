@@ -198,7 +198,7 @@ def test_enqueue_key_sends_enqueue():
             table = app.query_one("#search-results", DataTable)
             table.focus()
             await settle(pilot)
-            await pilot.press("a")
+            await pilot.press("q")
             await settle(pilot)
             enqueue_calls = [c for c in stub.calls if c[0] == "enqueue"]
             assert len(enqueue_calls) == 1
@@ -325,7 +325,7 @@ def test_uppercase_q_quits_and_shuts_down_daemon():
         async with app.run_test() as pilot:
             app.query_one("#queue-table").focus()
             await settle(pilot)
-            await pilot.press("Q")
+            await pilot.press("x")
             await settle(pilot)
         assert any(c[0] == "shutdown" for c in stub.calls)
         assert stub.closed
@@ -404,9 +404,9 @@ def test_add_to_playlist_key_sends_playlist_add():
             table = app.query_one("#search-results", DataTable)
             table.focus()
             await settle(pilot)
-            await pilot.press("P")
+            await pilot.press("l")
             await settle(pilot)
-            await pilot.press("A")
+            await pilot.press("a")
             await settle(pilot)
             add_calls = [c for c in stub.calls if c[0] == "playlist_add"]
             assert len(add_calls) == 1
@@ -1083,9 +1083,9 @@ def test_add_to_playlist_takes_the_highlighted_queue_row():
             queue = app.query_one("#queue-table", DataTable)
             queue.focus()
             await pilot.press("down")  # highlight "Second"
-            await pilot.press("P")     # move to playlists, cursor on the first one
+            await pilot.press("l")     # move to playlists, cursor on the first one
             await settle(pilot)
-            await pilot.press("A")
+            await pilot.press("a")
             await settle(pilot)
             adds = [c for c in stub.calls if c[0] == "playlist_add"]
             assert adds and adds[0][1]["video_ids"] == ["q2"]
@@ -1107,9 +1107,9 @@ def test_add_to_playlist_falls_back_to_the_playing_track():
         app = YTMApp(client=stub)
         async with app.run_test() as pilot:
             await settle(pilot)
-            await pilot.press("P")
+            await pilot.press("l")
             await settle(pilot)
-            await pilot.press("A")
+            await pilot.press("a")
             await settle(pilot)
             adds = [c for c in stub.calls if c[0] == "playlist_add"]
             assert adds and adds[0][1]["video_ids"] == ["abc123"]
@@ -1171,12 +1171,12 @@ def test_add_to_playlist_updates_the_count_and_keeps_the_cursor():
             await _search(pilot)
             app.query_one("#search-results", DataTable).focus()
             await settle(pilot)
-            await pilot.press("P")
+            await pilot.press("l")
             await settle(pilot)
             table = app.query_one("#playlists-table", DataTable)
             table.move_cursor(row=1)  # "scratch", the local one
             await settle(pilot)
-            await pilot.press("A")
+            await pilot.press("a")
             await settle(pilot)
             add_calls = [c for c in stub.calls if c[0] == "playlist_add"]
             assert add_calls[0][1]["playlist_id"] == "local-1"
@@ -1252,9 +1252,9 @@ def test_add_to_playlist_after_a_search_takes_the_search_result_not_the_queue():
             await _search(pilot)  # Enter plays the first result and refreshes the queue
             await settle(pilot)
             assert isinstance(app.focused, DataTable) and app.focused.id == "search-results"
-            await pilot.press("P")
+            await pilot.press("l")
             await settle(pilot)
-            await pilot.press("A")
+            await pilot.press("a")
             await settle(pilot)
             add_calls = [c for c in stub.calls if c[0] == "playlist_add"]
             assert add_calls[-1][1]["video_ids"] == [TRACK["video_id"]]
@@ -1273,14 +1273,14 @@ def test_add_flow_arm_song_pick_playlist_confirm():
             results = app.query_one("#search-results", DataTable)
             results.focus()
             await settle(pilot)
-            await pilot.press("A")
+            await pilot.press("a")
             await settle(pilot)
             assert app.focused.id == "playlists-table"
             header = str(app.query_one("#playlists-title").render())
             assert "adding" in header and TRACK["title"] in header
             assert not [c for c in stub.calls if c[0] == "playlist_add"]  # nothing sent yet
             await pilot.press("down")  # "scratch"
-            await pilot.press("A")
+            await pilot.press("a")
             await settle(pilot)
             add_calls = [c for c in stub.calls if c[0] == "playlist_add"]
             assert len(add_calls) == 1
@@ -1292,16 +1292,16 @@ def test_add_flow_arm_song_pick_playlist_confirm():
     asyncio.run(scenario())
 
 
-def test_add_flow_enter_and_lowercase_a_also_confirm():
+def test_add_flow_enter_also_confirms():
     async def scenario():
-        for confirm in ("enter", "a"):
+        for confirm in ("enter",):
             stub = StubClient()
             app = YTMApp(client=stub)
             async with app.run_test() as pilot:
                 await _search(pilot)
                 app.query_one("#search-results", DataTable).focus()
                 await settle(pilot)
-                await pilot.press("A")
+                await pilot.press("a")
                 await settle(pilot)
                 await pilot.press(confirm)
                 await settle(pilot)
@@ -1323,16 +1323,86 @@ def test_add_flow_escape_cancels_and_returns_focus():
             results = app.query_one("#search-results", DataTable)
             results.focus()
             await settle(pilot)
-            await pilot.press("A")
+            await pilot.press("a")
             await settle(pilot)
             await pilot.press("escape")
             await settle(pilot)
             assert app.focused is results
             assert str(app.query_one("#playlists-title").render()) == "PLAYLISTS"
-            await pilot.press("P")
+            await pilot.press("l")
             await pilot.press("enter")  # with nothing armed, Enter plays the playlist again
             await settle(pilot)
             assert not [c for c in stub.calls if c[0] == "playlist_add"]
             assert [c for c in stub.calls if c[0] == "playlist_play"]
+
+    asyncio.run(scenario())
+
+
+def test_live_search_shows_results_without_enter():
+    async def scenario():
+        stub = StubClient()
+        app = YTMApp(client=stub)
+        async with app.run_test() as pilot:
+            await pilot.click("#search-input")
+            for char in "kaanave":
+                await pilot.press(char)
+            await settle(pilot, delay=app.SEARCH_DEBOUNCE + 0.2)
+            searches = [c for c in stub.calls if c[0] == "search"]
+            assert len(searches) == 1  # one search for the whole burst, not one per key
+            assert searches[0][1]["query"] == "kaanave"
+            table = app.query_one("#search-results", DataTable)
+            assert table.row_count == 1
+            # results only: nothing starts playing until Enter
+            assert not [c for c in stub.calls if c[0] == "play"]
+            assert isinstance(app.focused, type(app.query_one("#search-input")))
+
+    asyncio.run(scenario())
+
+
+def test_live_search_waits_for_two_characters():
+    async def scenario():
+        stub = StubClient()
+        app = YTMApp(client=stub)
+        async with app.run_test() as pilot:
+            await pilot.click("#search-input")
+            await pilot.press("k")
+            await settle(pilot, delay=app.SEARCH_DEBOUNCE + 0.2)
+            assert not [c for c in stub.calls if c[0] == "search"]
+
+    asyncio.run(scenario())
+
+
+def test_enter_after_live_results_plays_without_searching_again():
+    async def scenario():
+        stub = StubClient()
+        app = YTMApp(client=stub)
+        async with app.run_test() as pilot:
+            await pilot.click("#search-input")
+            for char in "kaanave":
+                await pilot.press(char)
+            await settle(pilot, delay=app.SEARCH_DEBOUNCE + 0.2)
+            await pilot.press("enter")
+            await settle(pilot)
+            assert len([c for c in stub.calls if c[0] == "search"]) == 1
+            plays = [c for c in stub.calls if c[0] == "play"]
+            assert plays and plays[-1][1]["video_id"] == TRACK["video_id"]
+            assert app.focused.id == "search-results"
+
+    asyncio.run(scenario())
+
+
+def test_stale_live_search_reply_cannot_overwrite_newer_results():
+    async def scenario():
+        stub = StubClient()
+        app = YTMApp(client=stub)
+        async with app.run_test() as pilot:
+            await settle(pilot)
+            app._search_seq = 5
+            newer = [dict(TRACK, title="Newer")]
+            app._show_search_results(5, "new", {"tracks": newer})
+            app._show_search_results(4, "old", {"tracks": [dict(TRACK, title="Older")] * 3})
+            pane = app.query_one(SearchPane)
+            assert [t["title"] for t in pane._tracks] == ["Newer"]
+            assert app._results_query == "new"
 
     asyncio.run(scenario())
