@@ -7,3 +7,4 @@ __pycache__/
 .cache/
 *.egg-info/
 .pytest_cache/
+cookies.txt

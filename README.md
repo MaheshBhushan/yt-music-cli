@@ -151,7 +151,7 @@ Those formats are SABR-delivered and are not plain progressive HTTP. So on such 
 ytm
 ```
 
-The TUI will auto-spawn the daemon (`ytmd`) if it is not already running. Close with `q` (quit) or `Q` (quit + stop daemon).
+The TUI will auto-spawn the daemon (`ytmd`) if it is not already running. Close with `e` (exit) or `Q` (exit + stop the player). The shortcut bar at the bottom lists every key.
 
 To explicitly manage the daemon:
 
@@ -186,6 +186,7 @@ ytm cache list                 # List all cached tracks (video_id, size, path)
 | Key | Action | Notes |
 |-----|--------|-------|
 | `/` | Search | Customizable via config (`keys.search`) |
+| `s` | Search | Hardcoded; typed as a letter while the search box has focus |
 | `a` | Enqueue selected | Hardcoded |
 | `P` | Focus Playlists pane | Hardcoded |
 | `A` | Add selected track to playlist | Hardcoded |
@@ -197,15 +198,15 @@ ytm cache list                 # List all cached tracks (video_id, size, path)
 | `+` | Volume up 5% | Hardcoded |
 | `-` | Volume down 5% | Hardcoded |
 | `tab` | Cycle panes | Hardcoded |
-| `q` | Quit TUI (daemon keeps running) | Customizable via config (`keys.quit`) |
-| `Q` | Quit TUI and stop daemon | Hardcoded |
+| `e` | Exit TUI (playback keeps running) | Customizable via config (`keys.quit`) |
+| `Q` | Exit TUI and stop the player | Hardcoded |
 
 Five keys are customizable:
 - `keys.search` (default: `/`)
 - `keys.toggle` (default: `space`)
 - `keys.next` (default: `n`)
 - `keys.prev` (default: `p`)
-- `keys.quit` (default: `q`)
+- `keys.quit` (default: `e`)
 
 All other keys are hardcoded and cannot be changed.
 
@@ -236,7 +237,7 @@ toggle = "space"
 next = "n"
 prev = "p"
 search = "/"
-quit = "q"
+quit = "e"
 ```
 
 ### Schema and defaults
@@ -249,12 +250,13 @@ quit = "q"
 | `behaviour` | `confirm_remote_delete` | bool | `true` | Require explicit `confirm=true` for deleting/removing tracks from remote playlists. |
 | `pot` | `enabled` | bool | `true` | Whether to use the PO token provider (start it, and point yt-dlp at it). |
 | `pot` | `base_url` | string | `"http://127.0.0.1:4416"` | Where the PO token service listens. The port is also the one the container publishes. |
+| `ui` | `art` | string | `"blocks"` | Cover art in the TUI: `blocks` (coloured half-cell glyphs, works everywhere), `kitty` or `sixel` (the terminal's pixel graphics protocol), `auto` (probe for one), `ascii`, or `off`. Sixel is known to freeze the pane in Konsole. |
 | `ui` | `theme` | string | `"dark"` | Textual theme: `"dark"` or `"light"`. Unknown themes fall back to dark with a warning. |
 | `keys` | `toggle` | string | `"space"` | Key to toggle play/pause. |
 | `keys` | `next` | string | `"n"` | Key to skip to next. |
 | `keys` | `prev` | string | `"p"` | Key to go to previous. |
 | `keys` | `search` | string | `"/"` | Key to focus search. |
-| `keys` | `quit` | string | `"q"` | Key to quit the TUI. |
+| `keys` | `quit` | string | `"e"` | Key to quit the TUI. |
 
 ### Behavior
 

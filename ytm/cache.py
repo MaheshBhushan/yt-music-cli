@@ -28,7 +28,7 @@ from pathlib import Path
 
 import yt_dlp
 
-from ytm import resolve
+from ytm import config as config_mod
 
 #: default location for cached track audio
 DEFAULT_CACHE_DIR = Path.home() / ".cache" / "ytm" / "tracks"
@@ -121,22 +121,8 @@ def download(video_id, cache_dir=None, cap_bytes=DEFAULT_CAP_BYTES, ydl_class=yt
     try:
         outtmpl = str(work_dir / f"{video_id}.%(ext)s")
         url = _WATCH_URL.format(video_id=video_id)
-        attempts = resolve.cookie_attempts()
-        for attempt, cookie_header in enumerate(attempts):
-            last = attempt == len(attempts) - 1
-            try:
-                opts = resolve.ydl_opts(cookie_header, silent=not last, outtmpl=outtmpl)
-                with ydl_class(opts) as ydl:
-                    ydl.extract_info(url, download=True)
-            except yt_dlp.utils.DownloadError:
-                if last:
-                    raise
-                # discard anything a failed attempt left behind, so the next
-                # attempt cannot mistake it for its own output
-                for leftover in work_dir.glob("*"):
-                    leftover.unlink()
-                continue
-            break
+        with ydl_class(_ydl_opts(outtmpl)) as ydl:
+            ydl.extract_info(url, download=True)
 
         downloaded = [p for p in work_dir.glob(f"{video_id}.*") if p.is_file()]
         if not downloaded:
@@ -178,19 +164,21 @@ def enforce_cap(cap_bytes, cache_dir=None):
 # -- playback integration -----------------------------------------------------
 
 
-def cache_aware_resolver(fallback=None, cache_dir=None):
-    """A resolver callable: cached local path if available, else `fallback`.
+def _ydl_opts(outtmpl):
+    """yt-dlp options for an anonymous audio download into `outtmpl`.
 
-    Meant to be handed to ``ytm.daemon.queue.Queue(..., resolver=...)`` so
-    that a cached track is played from disk without ever calling
-    ``resolve.resolve_stream_url``.
+    Anonymous on purpose: with account cookies YouTube serves URLs that need
+    an account-bound PO token, and the download then fails with 403 (the
+    same reason ``behaviour.authenticated_streams`` defaults to off).
     """
-    fallback = fallback or resolve.resolve_stream_url
-
-    def resolver(video_id):
-        cached = get_cached_path(video_id, cache_dir=cache_dir)
-        if cached is not None:
-            return str(cached)
-        return fallback(video_id)
-
-    return resolver
+    opts = {
+        "format": "bestaudio",
+        "quiet": True,
+        "no_warnings": True,
+        "noplaylist": True,
+        "outtmpl": outtmpl,
+    }
+    pot = config_mod.load()["pot"]
+    if pot["enabled"]:
+        opts["extractor_args"] = {"youtubepot-bgutilhttp": {"base_url": [pot["base_url"]]}}
+    return opts
