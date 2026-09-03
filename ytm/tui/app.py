@@ -354,7 +354,7 @@ class YTMApp(App):
             if volume is not None:
                 self._volume = volume
         elif event == "queue_changed":
-            self.query_one(QueuePane).set_queue(data)
+            self._set_queue(data)
         elif event == "error":
             self._show_error((data or {}).get("error") or "daemon error")
 
@@ -409,10 +409,12 @@ class YTMApp(App):
         if message.then is not None:
             message.then(message.data)
 
+    def _set_queue(self, data):
+        self.query_one(QueuePane).set_queue(data)
+        self.query_one(NowPlaying).set_queue(data)
+
     def _refresh_queue(self):
-        self._request_async(
-            "queue_get", then=lambda data: self.query_one(QueuePane).set_queue(data)
-        )
+        self._request_async("queue_get", then=self._set_queue)
 
     def _refresh_playlists(self):
         self._request_async(
@@ -507,8 +509,7 @@ class YTMApp(App):
             playlist_id = pane.selected_playlist_id()
             if playlist_id is not None:
                 self._request_async(
-                    "playlist_play", {"playlist_id": playlist_id},
-                    then=lambda data: self.query_one(QueuePane).set_queue(data),
+                    "playlist_play", {"playlist_id": playlist_id}, then=self._set_queue,
                 )
 
     def on_now_playing_seek_requested(self, message: NowPlaying.SeekRequested):

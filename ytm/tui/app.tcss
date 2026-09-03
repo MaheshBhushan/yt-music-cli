@@ -60,6 +60,15 @@ Screen {
     height: auto;
 }
 
+#now-playing-queue {
+    height: auto;
+    color: $text-muted;
+}
+
+#now-playing-played, #now-playing-upnext {
+    width: 1fr;
+}
+
 #now-playing-bar {
     height: 1;
 }
