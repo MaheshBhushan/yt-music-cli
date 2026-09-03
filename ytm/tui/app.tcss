@@ -66,7 +66,7 @@ Screen {
 }
 
 #now-playing-played, #now-playing-upnext {
-    width: 1fr;
+    width: 24;
 }
 
 #now-playing-bar {

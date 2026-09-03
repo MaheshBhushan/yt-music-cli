@@ -9,7 +9,7 @@
   <img alt="Python 3.11+" src="https://img.shields.io/badge/python-3.11%2B-blue">
 </p>
 
-![ytm's TUI: search results on top, queue, playlists and lyrics in the middle, the current track with its cover at the bottom](docs/screenshot.png)
+![ytm's TUI: search results on top, queue, playlists with your daily mixes and lyrics in the middle, the current track with its cover, what just played and what is up next at the bottom](docs/screenshot.png)
 
 ## Overview
 
