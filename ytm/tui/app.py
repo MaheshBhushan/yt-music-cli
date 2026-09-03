@@ -14,7 +14,7 @@ from textual.widgets import DataTable, Input, Static
 from ytm import config as config_mod
 from ytm.tui.backend import Backend, BackendError
 from ytm.tui.lyrics import LyricsPane
-from ytm.tui.nowplaying import NowPlaying
+from ytm.tui.nowplaying import DEFAULT_ART, NowPlaying
 from ytm.tui.playlists import PlaylistsPane
 from ytm.tui.queue import QueuePane
 from ytm.tui.search import SearchPane
@@ -189,7 +189,7 @@ class YTMApp(App):
             yield QueuePane(id="queue-pane")
             yield PlaylistsPane(id="playlists-pane")
             yield LyricsPane(id="lyrics-pane")
-        yield NowPlaying(id="now-playing", art=self._config["ui"].get("art", "auto"))
+        yield NowPlaying(id="now-playing", art=self._config["ui"].get("art", DEFAULT_ART))
         yield Static("", id="error-banner")
         # the shortcut bar: every key, always, whatever has focus (Textual's
         # Footer hides letter keys while the search box is focused)

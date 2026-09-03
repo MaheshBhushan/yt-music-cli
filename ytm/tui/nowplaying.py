@@ -12,10 +12,22 @@ from textual.widgets import ProgressBar, Static
 # its cell size and graphics support when it loads, which only works before
 # Textual takes the terminal over. Importing it inside compose() stalled the
 # whole app for seconds. Only the TUI imports this module, never the CLI.
-from textual_image.widget import HalfcellImage, Image as AutoImage
+from textual_image.widget import (
+    HalfcellImage, Image as AutoImage, SixelImage, TGPImage, UnicodeImage,
+)
 
-#: `[ui] art` values mapped onto textual-image widgets; None means no art
-ART_RENDERERS = {"auto": AutoImage, "blocks": HalfcellImage, "off": None}
+#: `[ui] art` values mapped onto textual-image widgets; None means no art.
+#: "blocks" is the default: the pixel protocols are opt-in because Sixel in
+#: Konsole drew nothing and froze repaints of the whole now-playing strip.
+ART_RENDERERS = {
+    "blocks": HalfcellImage,
+    "auto": AutoImage,
+    "sixel": SixelImage,
+    "kitty": TGPImage,
+    "ascii": UnicodeImage,
+    "off": None,
+}
+DEFAULT_ART = "blocks"
 
 #: how long to wait for a cover image before giving up on it
 ART_TIMEOUT = 5.0
@@ -44,10 +56,10 @@ class AlbumArt(Container):
     the track has changed again is simply dropped.
     """
 
-    def __init__(self, *args, fetcher=fetch_bytes, renderer="auto", **kwargs):
+    def __init__(self, *args, fetcher=fetch_bytes, renderer=DEFAULT_ART, **kwargs):
         super().__init__(*args, **kwargs)
         self._fetcher = fetcher
-        self._renderer = ART_RENDERERS.get(renderer, AutoImage)
+        self._renderer = ART_RENDERERS.get(renderer, ART_RENDERERS[DEFAULT_ART])
         self._url = None
         self._cache = {}
         self._image_widget = None
@@ -107,8 +119,8 @@ class AlbumArt(Container):
 class NowPlaying(Vertical):
     """Track line, seek progress and volume, driven purely by player events.
 
-    Mouse: clicking the track line toggles pause, clicking anywhere on the
-    progress bar asks the app to seek there (`SeekRequested`).
+    Mouse: clicking anywhere on the progress bar asks the app to seek there
+    (`SeekRequested`).
     """
 
     class SeekRequested(Message):
@@ -118,7 +130,7 @@ class NowPlaying(Vertical):
             super().__init__()
             self.seconds = seconds
 
-    def __init__(self, *args, art="auto", **kwargs):
+    def __init__(self, *args, art=DEFAULT_ART, **kwargs):
         super().__init__(*args, **kwargs)
         self._art = art
         self._duration_seconds = 0
@@ -144,9 +156,7 @@ class NowPlaying(Vertical):
 
     def _render_track_line(self):
         icon = "||" if self._paused else ">"
-        self.query_one("#now-playing-track", Static).update(
-            f"[@click=app.toggle]{icon} {escape(self._title)}[/]"
-        )
+        self.query_one("#now-playing-track", Static).update(f"{icon} {escape(self._title)}")
 
     def on_click(self, event):
         bar = self.query_one("#now-playing-progress", ProgressBar)

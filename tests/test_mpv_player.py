@@ -84,6 +84,8 @@ class FakeMpv:
         elif name == "loadfile":
             url, flags = command[1], command[2]
             title = command[4].removeprefix("force-media-title=") or None
+            if title and title.startswith("%"):
+                title = title.split("%", 2)[2]  # %n%literal
             entry = {"filename": url, "title": title}
             if flags == "insert-next" and self.props["playlist-pos"] >= 0:
                 self.playlist.insert(self.props["playlist-pos"] + 1, entry)
@@ -221,7 +223,7 @@ def test_play_appends_and_starts_with_a_forced_title(mpv):
             "https://music.youtube.com/watch?v=abc",
             "insert-next",
             -1,
-            "force-media-title=505 / Arctic Monkeys",
+            "force-media-title=%20%505 / Arctic Monkeys",
         ],
         ["playlist-play-index", 0],
     ]
@@ -353,3 +355,16 @@ def test_observe_delivers_every_initial_value(mpv):
             if len(seen) == 4:
                 break
     assert seen == {"pause": False, "volume": 70.0, "playlist-pos": -1, "playlist-count": 0}
+
+
+def test_option_list_quotes_values_so_commas_and_unicode_survive():
+    from ytm.player import option_list
+
+    assert option_list(**{"force-media-title": "Hello, World"}) == "force-media-title=%12%Hello, World"
+    assert option_list(**{"force-media-title": "Zoë"}) == "force-media-title=%4%Zoë"  # UTF-8 bytes
+
+
+def test_play_with_a_comma_in_the_title_keeps_the_title(mpv):
+    with Player(ipc_path=mpv.path, spawner=no_spawn) as p:
+        p.play("https://music.youtube.com/watch?v=abc", title="Hello, World / X")
+    assert mpv.playlist[-1]["title"] == "Hello, World / X"
