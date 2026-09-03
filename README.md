@@ -2,6 +2,8 @@
 <p align="center">YouTube Music in the terminal: search, queue, radio and lyrics, with mpv doing the playing.</p>
 
 <p align="center">
+  <img alt="PyPI" src="https://img.shields.io/pypi/v/ytm">
+  <img alt="Tests" src="https://github.com/MaheshBhushan/yt-music-cli/actions/workflows/tests.yml/badge.svg">
   <img alt="License" src="https://img.shields.io/github/license/MaheshBhushan/yt-music-cli">
   <img alt="Last commit" src="https://img.shields.io/github/last-commit/MaheshBhushan/yt-music-cli">
   <img alt="Python 3.11+" src="https://img.shields.io/badge/python-3.11%2B-blue">
@@ -18,14 +20,19 @@ mpv is the only long-running process. `ytm` starts it once, idle, with a JSON IP
 ## Quickstart
 
 ```bash
-git clone https://github.com/MaheshBhushan/yt-music-cli.git
-cd yt-music-cli
-python3 -m venv .venv && source .venv/bin/activate
-pip install -e .
+pipx install ytm              # or: uv tool install ytm   /   pip install ytm
 
 ytm auth                      # cookies from a logged-in browser, see Authentication
 ytm play "daft punk"          # search, play the first hit, radio follows
 ytm                           # the TUI
+```
+
+To hack on it instead:
+
+```bash
+git clone https://github.com/MaheshBhushan/yt-music-cli.git && cd yt-music-cli
+python3 -m venv .venv && source .venv/bin/activate
+pip install -e '.[dev]'
 ```
 
 > [!IMPORTANT]
@@ -120,7 +127,7 @@ The proof-of-origin token provider is a yt-dlp plugin installed with `ytm`. It a
 - **Offline cache.** `ytm cache add <video_id>` downloads a track into `~/.cache/ytm/tracks/`; `cache rm` and `cache list` manage it. 2 GB cap, least-recently-played evicted first.
 - **Local playlists** live in `~/.local/state/ytm/playlists.json` and show up next to your YouTube Music playlists in the TUI.
 - **Media keys.** `ytm` has no MPRIS of its own; install the [mpv-mpris](https://github.com/hoyon/mpv-mpris) plugin and mpv announces itself to your desktop.
-- **yt-dlp goes stale.** YouTube changes things; yt-dlp follows within days. `pip install -U yt-dlp` fixes most sudden resolution failures.
+- **yt-dlp goes stale.** YouTube changes things; yt-dlp follows within days. `pipx upgrade ytm` (or `pip install -U yt-dlp` in the same environment) fixes most sudden resolution failures.
 - **Windows** is supported in design (named-pipe IPC, no D-Bus) but has not been tested.
 - **Logs.** mpv writes to `~/.local/state/ytm/mpv.log`.
 
