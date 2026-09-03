@@ -314,7 +314,10 @@ class Backend:
 
 
 def _default_player(spawn=True, timeout=None):
+    """`timeout=None` really means no timeout: the observing connection
+    blocks for as long as mpv is silent, which while paused is forever.
+    (It used to fall back to the 5 s default, so the listener died quietly
+    after five seconds of pause and the pane froze.)"""
     from ytm import cli
 
-    kwargs = {} if timeout is None else {"timeout": timeout}
-    return cli.player(spawn=spawn, **kwargs)
+    return cli.player(spawn=spawn, timeout=timeout)

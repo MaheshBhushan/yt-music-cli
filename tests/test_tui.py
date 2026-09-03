@@ -1032,3 +1032,34 @@ def test_startup_focuses_the_queue_when_something_is_already_loaded():
             assert ("toggle", None) in stub.calls
 
     asyncio.run(scenario())
+
+
+def test_listener_drop_shows_a_banner_and_reconnects():
+    class Flaky(StubClient):
+        def __init__(self):
+            super().__init__()
+            self.listens = 0
+            self._closed = False
+
+        def listen(self):
+            self.listens += 1
+            if self.listens == 1:
+                raise ClientError("lost the connection to mpv")
+            return  # second attempt "runs" and returns
+
+        def close(self):
+            self._closed = True
+            super().close()
+
+    async def scenario():
+        stub = Flaky()
+        app = YTMApp(client=stub)
+        app.LISTEN_RETRY = 0.05
+        shown = []
+        app._show_error = shown.append  # startup requests clear the banner again, so record instead
+        async with app.run_test() as pilot:
+            await settle(pilot, 0.3)
+            assert stub.listens == 2
+            assert any("player events lost" in m for m in shown)
+
+    asyncio.run(scenario())
