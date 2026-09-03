@@ -1,6 +1,8 @@
 """Authentication module."""
 import getpass
 import json
+import re
+import sys
 import os
 import time
 from pathlib import Path
@@ -15,7 +17,14 @@ from ytmusicapi.exceptions import YTMusicError
 AUTH_PATH = Path.home() / ".config" / "ytm" / "auth.json"
 
 # Order in which --from-browser auto-detection tries local browser profiles.
-_AUTODETECT_BROWSERS = ("chrome", "chromium", "edge", "brave", "vivaldi", "opera", "firefox")
+# On Windows, Firefox goes first: Chromium browsers there (Chrome 127+, and
+# Edge/Brave/Vivaldi/Opera on the same engine) protect cookies with
+# App-Bound Encryption, which no outside program can undo, so they never
+# yield a usable session and only cost time.
+_CHROMIUM_BROWSERS = ("chrome", "chromium", "edge", "brave", "vivaldi", "opera")
+_AUTODETECT_BROWSERS = (
+    ("firefox", *_CHROMIUM_BROWSERS) if sys.platform == "win32" else (*_CHROMIUM_BROWSERS, "firefox")
+)
 
 _USER_AGENT = (
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -41,19 +50,36 @@ _OAUTH_CLIENT_MISSING_HINT = (
 
 
 class _QuietLogger:
-    """A yt-dlp logger that never prints anything (cookies must never be logged)."""
+    """A yt-dlp logger that never prints anything (cookies must never be logged).
+
+    It does remember yt-dlp's own status lines -- "Extracted 0 cookies from
+    chrome (312 could not be decrypted)", "could not find ..." -- so a failed
+    extraction can say *why* instead of a blanket "not logged in". Those
+    lines carry counts and paths, never cookie values.
+    """
+
+    def __init__(self):
+        self.messages = []
 
     def debug(self, message):
         pass
 
     def info(self, message):
-        pass
+        self.messages.append(str(message))
 
     def warning(self, message, only_once=False):
-        pass
+        self.messages.append(str(message))
 
     def error(self, message):
-        pass
+        self.messages.append(str(message))
+
+    def decrypt_failures(self):
+        """How many cookies yt-dlp could not decrypt, per its summary line."""
+        for message in self.messages:
+            match = re.search(r"\((\d+) could not be decrypted\)", message)
+            if match:
+                return int(match.group(1))
+        return 0
 
 
 class AuthError(Exception):
@@ -210,12 +236,47 @@ def _cookie_header_from_jar(jar):
 
 
 def _extract_browser_cookie_header(browser_name):
-    """Return a Cookie header value extracted from browser_name's profile, or None."""
+    """Return (cookie header or None, one-line reason when None).
+
+    The reason is what the user needs to fix it: the browser was not found,
+    its cookies could not be decrypted (App-Bound Encryption on Windows), or
+    it simply has no YouTube login.
+    """
+    logger = _QuietLogger()
     try:
-        jar = extract_cookies_from_browser(browser_name, logger=_QuietLogger())
-    except Exception:
-        return None
-    return _cookie_header_from_jar(jar)
+        jar = extract_cookies_from_browser(browser_name, logger=logger)
+    except Exception as exc:
+        text = str(exc)
+        if isinstance(exc, FileNotFoundError) or "could not find" in text:
+            return None, "not installed or no profile found"
+        if "locked" in text.lower():
+            return None, "cookie database locked; close the browser and retry"
+        return None, text.splitlines()[0] if text else type(exc).__name__
+    header = _cookie_header_from_jar(jar)
+    if header:
+        return header, None
+    failed = logger.decrypt_failures()
+    if failed:
+        return None, f"{failed} cookies could not be decrypted"
+    return None, "no YouTube login"
+
+
+def _windows_chromium_hint(reasons):
+    """Extra guidance when Chromium cookies failed to decrypt on Windows."""
+    if sys.platform != "win32":
+        return ""
+    if not any(
+        name in _CHROMIUM_BROWSERS and "decrypted" in (reason or "")
+        for name, reason in reasons.items()
+    ):
+        return ""
+    return (
+        " Chrome, Edge, Brave, Vivaldi and Opera on Windows protect their cookies "
+        "with App-Bound Encryption (Chrome 127 and newer), which other programs "
+        "cannot read. Options: log in at https://music.youtube.com in Firefox and "
+        "run 'ytm auth --from-browser firefox'; or 'ytm auth --manual' and paste "
+        "the request headers from the browser's DevTools; or 'ytm auth --oauth'."
+    )
 
 
 def from_browser(browser=None, path=AUTH_PATH, client_factory=None):
@@ -228,16 +289,20 @@ def from_browser(browser=None, path=AUTH_PATH, client_factory=None):
     """
     candidates = [browser] if browser else list(_AUTODETECT_BROWSERS)
     cookie_header = None
+    reasons = {}
     for name in candidates:
-        cookie_header = _extract_browser_cookie_header(name)
+        cookie_header, reason = _extract_browser_cookie_header(name)
         if cookie_header:
             break
+        reasons[name] = reason
     if cookie_header is None:
+        details = "; ".join(f"{name}: {reason}" for name, reason in reasons.items())
         raise AuthError(
-            "No logged-in YouTube session found in "
-            + ", ".join(candidates)
+            "No logged-in YouTube session found. "
+            + details
             + ". Log in at https://music.youtube.com in one of these browsers first, "
             "then run 'ytm auth --from-browser' again."
+            + _windows_chromium_hint(reasons)
         )
 
     headers = {

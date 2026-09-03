@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ytm"
-version = "0.3.1"
+version = "0.3.2"
 description = "YouTube Music in the terminal: a Textual TUI and CLI on top of mpv"
 readme = "README.md"
 license = { file = "LICENSE" }
