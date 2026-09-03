@@ -170,3 +170,13 @@ def test_playlist_play_replaces_the_queue(backend, monkeypatch):
     names = [c[0] for c in backend.fake.calls]
     assert names == ["stop", "play", "enqueue"]
     assert [t["title"] for t in q["tracks"]] == ["P1", "P2"]
+
+
+def test_default_player_passes_no_timeout_through_for_the_observer(monkeypatch):
+    from ytm import cli
+    from ytm.tui.backend import _default_player
+
+    seen = []
+    monkeypatch.setattr(cli, "player", lambda spawn=True, **kw: seen.append((spawn, kw)))
+    _default_player(spawn=False, timeout=None)
+    assert seen == [(False, {"timeout": None})]

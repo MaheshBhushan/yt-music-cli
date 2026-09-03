@@ -4,6 +4,7 @@ daemon events to widget updates without ever polling.
 
 import sys
 import threading
+import time
 
 from textual.app import App, ComposeResult
 from textual.binding import Binding, BindingsMap
@@ -227,13 +228,22 @@ class YTMApp(App):
 
         self._request_async("status", then=seed)
 
+    #: seconds between reconnect attempts after the event connection drops
+    LISTEN_RETRY = 1.0
+
     def _listen(self):
-        try:
-            self.client.listen()
-        except BackendError:
-            # the connection dropped or the daemon went away; nothing more
-            # to do from a background thread than stop listening quietly
-            pass
+        """Run the event listener until the app closes, reconnecting if the
+        connection to mpv drops (mpv restarted, socket hiccup). Each drop is
+        reported on the banner, so a stale pane is never silent."""
+        while not getattr(self.client, "_closed", False):
+            try:
+                self.client.listen()
+                return
+            except BackendError as exc:
+                if getattr(self.client, "_closed", False):
+                    return
+                self._dispatch_event("error", {"error": f"player events lost ({exc}); reconnecting"})
+                time.sleep(self.LISTEN_RETRY)
 
     def _dispatch_event(self, event, data):
         self.post_message(DaemonEvent(event, data))
