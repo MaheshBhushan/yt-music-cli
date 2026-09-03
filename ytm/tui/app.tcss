@@ -91,3 +91,16 @@ Screen {
     width: 100%;
     height: 100%;
 }
+
+/* scrollbars: one cell wide, muted, brighter only while dragged or hovered,
+   so they read as a gutter rather than a second widget */
+* {
+    scrollbar-size: 1 1;
+    scrollbar-background: $surface;
+    scrollbar-background-hover: $surface;
+    scrollbar-background-active: $surface;
+    scrollbar-color: $panel-lighten-2;
+    scrollbar-color-hover: $text-muted;
+    scrollbar-color-active: $accent;
+    scrollbar-corner-color: $surface;
+}
