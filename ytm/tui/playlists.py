@@ -7,6 +7,7 @@ after any playlist-mutating action it performs).
 """
 
 from textual.containers import Vertical
+from textual.markup import escape
 from textual.widgets import DataTable, Input, Static
 
 from ytm.tui.widgets import SelectOnClickTable
@@ -87,6 +88,15 @@ class PlaylistsPane(Vertical):
 
     def title_of(self, playlist_id):
         return getattr(self, "_titles", {}).get(playlist_id, "")
+
+    def arm(self, title):
+        """Show which song is waiting for a playlist."""
+        self.query_one("#playlists-title", Static).update(
+            f"PLAYLISTS  ·  adding: {escape(title)}   [dim]↑/↓ pick, A/Enter add, Esc cancel[/]"
+        )
+
+    def disarm(self):
+        self.query_one("#playlists-title", Static).update("PLAYLISTS")
 
     def prompt_new(self):
         """Show the name box and give it focus."""
