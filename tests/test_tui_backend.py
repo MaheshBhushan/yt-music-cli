@@ -23,6 +23,7 @@ def catalogue(monkeypatch):
     monkeypatch.setattr(music, "radio", lambda vid, limit=25, yt=None: [track("r1", "R1", "X"), track("r2", "R2", "Y")])
     monkeypatch.setattr(music, "get_lyrics", lambda vid, yt=None: ("words", "src"))
     monkeypatch.setattr(music, "library_playlists", lambda limit=25, yt=None: [music.Playlist("PL1", "Liked", 3)])
+    monkeypatch.setattr(music, "mixes", lambda yt=None: [])
 
 
 def test_status_idle_matches_the_daemon_shape(backend):
@@ -78,7 +79,7 @@ def test_lyrics_and_playlists(backend, catalogue, monkeypatch, tmp_path):
     monkeypatch.setattr(playlists_local, "DEFAULT_PATH", tmp_path / "pl.json")
     assert backend.request("lyrics", {"video_id": "v"})["lyrics"] == "words"
     lists = backend.request("playlist_list")["playlists"]
-    assert lists[-1] == {"playlist_id": "PL1", "title": "Liked", "track_count": 3, "local": False}
+    assert lists[-1] == {"playlist_id": "PL1", "title": "Liked", "track_count": 3, "local": False, "kind": "remote"}
 
 
 def test_unknown_command(backend):
@@ -231,6 +232,23 @@ def test_playlist_add_to_episodes_for_later_is_refused(backend, monkeypatch):
     monkeypatch.setattr(music, "add_playlist_items", lambda *a, **k: pytest.fail("must not insert into SE"))
     with pytest.raises(BackendError, match="podcast"):
         backend.request("playlist_add", {"playlist_id": "SE", "video_ids": ["v1"]})
+
+
+def test_playlist_add_to_a_mix_is_refused(backend, monkeypatch):
+    monkeypatch.setattr(music, "add_playlist_items", lambda *a, **k: pytest.fail("must not insert into a mix"))
+    with pytest.raises(BackendError, match="Mixes"):
+        backend.request("playlist_add", {"playlist_id": "RDTMAK5uy_kfoo", "video_ids": ["v1"]})
+
+
+def test_playlist_list_appends_mixes_after_library_playlists(backend, catalogue, monkeypatch, tmp_path):
+    from ytm import playlists_local
+
+    monkeypatch.setattr(playlists_local, "DEFAULT_PATH", tmp_path / "pl.json")
+    monkeypatch.setattr(music, "mixes", lambda yt=None: [music.Playlist("RDTMAKfoo", "Discover Mix", None)])
+    lists = backend.request("playlist_list")["playlists"]
+    assert lists[-1] == {
+        "playlist_id": "RDTMAKfoo", "title": "Discover Mix", "track_count": None, "local": False, "kind": "mix",
+    }
 
 
 def test_playlist_add_count_failure_does_not_undo_the_add(backend, monkeypatch):

@@ -1,0 +1,274 @@
+[
+ {
+  "title": "Fresh finds, old favorites",
+  "contents": [
+   {
+    "title": "Archive Mix",
+    "playlistId": "RDTMAK5uy_mZtXeU08kxXJOUhL0ETdAuZTh1z7aAFAo",
+    "thumbnails": [
+     {
+      "url": "https://music.youtube.com/image/mixart?r=EMgBGMgBMjoIDxoLRUFuTHlIc2MzLVkaC3VXaUl2RWFOUFdjGgs5MERLWExiekx0bxoLS2Y1cFhEaHg1VmMiAmVuYggKBgoECgJlbg",
+      "width": 200,
+      "height": 200
+     }
+    ],
+    "owned": false,
+    "description": "Elliot James Reay, Karthik, Lord Huron, Djo"
+   },
+   {
+    "title": "Liked Music",
+    "playlistId": "LM",
+    "thumbnails": [
+     {
+      "url": "https://www.gstatic.com/youtube/media/ytm/images/pbg/liked-songs-delhi-192.png",
+      "width": 192,
+      "height": 192
+     }
+    ],
+    "owned": false,
+    "description": "Auto playlist"
+   },
+   {
+    "title": "Replay Mix",
+    "playlistId": "RDTMAK5uy_nilrsVWxrKskY0ZUpVZ3zpB0u4LwWTVJ4",
+    "thumbnails": [
+     {
+      "url": "https://music.youtube.com/image/mixart?r=EMgBGMgBMjoIDRoLWERqQjlFM1l0VUUaC2pSM3JXQ0JlTzZNGgt0dFdRSzVWWHNrQRoLdndnUU9mQ0FGbjgiAmVuYggKBgoECgJlbg",
+      "width": 200,
+      "height": 200
+     }
+    ],
+    "owned": false,
+    "description": "Glass Animals, D12, Lipsika Bhashyam, Tame Impala"
+   },
+   {
+    "title": "Discover Mix",
+    "playlistId": "RDTMAK5uy_n_5IN6hzAOwdCnM8D8rzrs3vDl12UcZpA",
+    "thumbnails": [
+     {
+      "url": "https://music.youtube.com/image/mixart?r=EMgBGMgBMiQIBhoNL2cvMTFmazAyeDNwcxoNL2cvMTFnNl93eGpqaiICZW4",
+      "width": 200,
+      "height": 200
+     }
+    ],
+    "owned": false,
+    "description": "Tee, Lauv, Mano, Britt"
+   },
+   {
+    "title": "New Release Mix",
+    "playlistId": "RDTMAK5uy_lr0LWzGrq6FU9GIxWvFHTRPQD2LHMqlFA",
+    "thumbnails": [
+     {
+      "url": "https://music.youtube.com/image/mixart?r=EMgBGMgBMhwIBxoJL20vMGZxNGwyGgkvbS8wM3l4bjMiAmVu",
+      "width": 200,
+      "height": 200
+     }
+    ],
+    "owned": false,
+    "description": "Sara Bareilles, Train, Night Lovell, Kevin Sherwood"
+   }
+  ]
+ },
+ {
+  "title": "Quick picks",
+  "contents": [
+   {
+    "title": "My Band",
+    "videoId": "xwyOQp2Zrwg",
+    "videoType": "MUSIC_VIDEO_TYPE_ATV",
+    "thumbnails": [
+     {
+      "url": "https://yt3.googleusercontent.com/3exrnzyB75ECioNPn8oG9DkQByZHYwLzZeqhkzpzEplXPVnkL3UcQFnzL-airNS3nM00iTNXmSuzXCyB=w60-h60-s-l90-rj",
+      "width": 60,
+      "height": 60
+     }
+    ],
+    "isExplicit": true,
+    "artists": [
+     {
+      "name": "D12",
+      "id": "UCu8bzuEDvKGVNTUuANGPMwg"
+     }
+    ],
+    "views": "315M",
+    "album": {
+     "name": "D-12 World",
+     "id": "MPREb_ZaCfN85sioA"
+    }
+   },
+   {
+    "title": "Kaarmukilil",
+    "videoId": "t6CjwiINui4",
+    "videoType": "MUSIC_VIDEO_TYPE_ATV",
+    "thumbnails": [
+     {
+      "url": "https://yt3.googleusercontent.com/2LIb2hAuJTEJ_8lI5OVe-S6HsSsWQuRVPL6E2_ADmBZ8Xjiza4fPOfFPvW-0kDC2dU0nJPv__lrwQkUeiA=w60-h60-l90-rj",
+      "width": 60,
+      "height": 60
+     }
+    ],
+    "isExplicit": false,
+    "artists": [
+     {
+      "name": "Rahul Raj",
+      "id": "UCfNXnsuL_A5dTig3nGzVTgA"
+     },
+     {
+      "name": "Shreya Ghoshal",
+      "id": "UCrC-7fsdTCYeaRBpwA6j-Eg"
+     },
+     {
+      "name": "Nikhil Mathew",
+      "id": "UCcKVBoq519z8Mvli-F5TR0A"
+     },
+     {
+      "name": "Rafeeq Ahamed",
+      "id": "UCIoA2Y9vKbXS1594uY0yfJQ"
+     }
+    ],
+    "views": "16M",
+    "album": {
+     "name": "Bachelor Party (Original Motion Picture Soundtrack)",
+     "id": "MPREb_lYKXzJl92tn"
+    }
+   },
+   {
+    "title": "Kannukulla (Reprise)",
+    "videoId": "aZcW8KXPuC4",
+    "videoType": "MUSIC_VIDEO_TYPE_ATV",
+    "thumbnails": [
+     {
+      "url": "https://yt3.googleusercontent.com/Gyz6SC3fK-E9sLpS8J1w7QM7xAzwX3GEBQaAku7FuqxcJL8cU1tZ-EkXmdi34rwDhc4squYse_DZtrkQ=w60-h60-l90-rj",
+      "width": 60,
+      "height": 60
+     }
+    ],
+    "isExplicit": false,
+    "artists": [
+     {
+      "name": "Sai Abhyankkar",
+      "id": "UCJPuVnth4cFX-2QJ6HxciaA"
+     },
+     {
+      "name": "Adesh Krishna",
+      "id": "UC_tQgbwGSxz_eFqSOjPJsdw"
+     }
+    ],
+    "views": "8.3M",
+    "album": {
+     "name": "Dude (Original Motion Picture Soundtrack)",
+     "id": "MPREb_0pLalZ5yRHz"
+    }
+   }
+  ]
+ },
+ {
+  "title": "Mixed for you",
+  "contents": [
+   {
+    "title": "My Supermix",
+    "playlistId": "RDTMAK5uy_kset8DisdE7LSD4TNjEVvrKRTmG7a56sY",
+    "thumbnails": [
+     {
+      "url": "https://music.youtube.com/image/mixart?r=EMgBGMgBMj4IARoJL20vMDk4ODlnGg0vZy8xMXExbTk1N2c3Gg0vZy8xMWI3d3FxMDZuGg0vZy8xMXh6XzAzNDY4IgJlbg",
+      "width": 200,
+      "height": 200
+     }
+    ],
+    "owned": false,
+    "description": "Michael Jackson, vaultboy, Vivek, Semv.iii"
+   },
+   {
+    "title": "My Mix 1",
+    "playlistId": "RDTMAK5uy_nGQKSMIkpr4o9VI_2i56pkGliD6FQRo50",
+    "thumbnails": [
+     {
+      "url": "https://music.youtube.com/image/mixart?r=EMgBGMgBMiMICBABGg0vZy8xMWgwbWNudl9sGgovbS8wZnJwNTJwIgJlbg",
+      "width": 200,
+      "height": 200
+     }
+    ],
+    "owned": false,
+    "description": "Elliot James Reay, Lord Huron, Djo, Stephen Sanchez"
+   },
+   {
+    "title": "My Mix 2",
+    "playlistId": "RDTMAK5uy_lz2owBgwWf1mjzyn_NbxzMViQzIg8IAIg",
+    "thumbnails": [
+     {
+      "url": "https://music.youtube.com/image/mixart?r=EMgBGMgBMiIICBACGg0vZy8xMWdocHA5bDI1GgkvbS8wOGhyNzIiAmVu",
+      "width": 200,
+      "height": 200
+     }
+    ],
+    "owned": false,
+    "description": "Anuv Jain, Arijit Singh, Karthik, Alan Walker"
+   },
+   {
+    "title": "My Mix 5",
+    "playlistId": "RDTMAK5uy_lfZhS7zmIcmUhsKtkWylKzc0EN0LW90-s",
+    "thumbnails": [
+     {
+      "url": "https://music.youtube.com/image/mixart?r=EMgBGMgBMiIICBAFGgkvbS8wNXFfOXcaDS9nLzExajB2eWdiYnAiAmVu",
+      "width": 200,
+      "height": 200
+     }
+    ],
+    "owned": false,
+    "description": "Arctic Monkeys, Fujii Kaze, Chezile, yung kai"
+   },
+   {
+    "title": "My Mix 3",
+    "playlistId": "RDTMAK5uy_k5UUl0lmrrfrjMpsT0CoMpdcBz1ruAO1k",
+    "thumbnails": [
+     {
+      "url": "https://music.youtube.com/image/mixart?r=EMgBGMgBMiEICBADGgsvbS8wMTF2OTcweRoKL20vMGhodDVndCICZW4",
+      "width": 200,
+      "height": 200
+     }
+    ],
+    "owned": false,
+    "description": "Sid Sriram, Anirudh, Adnan Sami, K.S. Chithra"
+   },
+   {
+    "title": "My Mix 6",
+    "playlistId": "RDTMAK5uy_k78ni6Y4fyyl0r2eiKkBEICh9Q5wJdfXk",
+    "thumbnails": [
+     {
+      "url": "https://music.youtube.com/image/mixart?r=EMgBGMgBMiAICBAGGgovbS8wZ2pkbjRjGgovbS8wZzl4Njk4IgJlbg",
+      "width": 200,
+      "height": 200
+     }
+    ],
+    "owned": false,
+    "description": "The Weeknd, Kendrick Lamar, Tommy Richman, Eminem"
+   },
+   {
+    "title": "My Mix 4",
+    "playlistId": "RDTMAK5uy_nTsa0Irmcu2li2-qHBoZxtrpG9HuC3k_Q",
+    "thumbnails": [
+     {
+      "url": "https://music.youtube.com/image/mixart?r=EMgBGMgBMiYICBAEGg0vZy8xMWY3amtseHk0Gg0vZy8xMWhkdmxkNnM2IgJlbg",
+      "width": 200,
+      "height": 200
+     }
+    ],
+    "owned": false,
+    "description": "Artemas, Kenya Grace, Charlie Puth, Alan Walker"
+   },
+   {
+    "title": "My Mix 7",
+    "playlistId": "RDTMAK5uy_lfhhWWw9v71CPrR7MRMHgZzbH6Vku9iJc",
+    "thumbnails": [
+     {
+      "url": "https://music.youtube.com/image/mixart?r=EMgBGMgBMiYICBAHGg0vZy8xMXE4dzFnMDEzGg0vZy8xMXBxOWJuMTlzIgJlbg",
+      "width": 200,
+      "height": 200
+     }
+    ],
+    "owned": false,
+    "description": "INTERWORLD, Dxrk \u30c0\u30fc\u30af, Eternxlkz, gqtis"
+   }
+  ]
+ }
+]
