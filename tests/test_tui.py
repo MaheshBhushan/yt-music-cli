@@ -742,6 +742,33 @@ def test_search_results_with_duplicate_video_id_renders_without_crashing():
     asyncio.run(scenario())
 
 
+def test_long_title_is_truncated_to_the_title_column_width():
+    """A very long title must not push the other columns off screen: it
+    should be truncated to the TITLE column's width with an ellipsis."""
+
+    LONG_TITLE = "x" * 200
+
+    async def scenario():
+        class LongTitleClient(StubClient):
+            def request(self, cmd, args=None):
+                if cmd == "search":
+                    self.calls.append((cmd, args))
+                    return {"tracks": [dict(TRACK, title=LONG_TITLE)]}
+                return super().request(cmd, args)
+
+        stub = LongTitleClient()
+        app = YTMApp(client=stub)
+        async with app.run_test() as pilot:
+            await _search(pilot)
+            table = app.query_one("#search-results", DataTable)
+            title_width = table.columns["TITLE"].width
+            rendered = str(table.get_cell_at((0, 0)))
+            assert len(rendered) <= title_width
+            assert rendered.endswith("…")
+
+    asyncio.run(scenario())
+
+
 # -- s / e shortcuts ------------------------------------------------------------
 
 
