@@ -239,12 +239,24 @@ def cmd_radio(args):
             seed = current_track(p)
             if seed is None:
                 raise CliError("nothing is playing; give radio a song to start from")
-        tracks = music.radio(seed.video_id, limit=args.limit)
-        if not tracks:
+        # ask for more than needed, then drop what is already queued: a
+        # station keeps suggesting the same songs, and the queue must never
+        # hold a track twice
+        candidates = music.radio(seed.video_id, limit=args.limit * 2)
+        if not candidates:
             raise CliError(f"no radio available for {seed.title}")
-        state.remember_tracks([seed] + tracks)
         if args.what:
             p.stop()
+        queued = p.queued_ids() | {seed.video_id}
+        tracks = []
+        for track in candidates:
+            if track.video_id not in queued:
+                queued.add(track.video_id)
+                tracks.append(track)
+            if len(tracks) >= args.limit:
+                break
+        state.remember_tracks([seed] + tracks)
+        if args.what:
             p.play(watch_url(seed.video_id), title=_label(seed))
         for track in tracks:
             p.enqueue(watch_url(track.video_id), title=_label(track))

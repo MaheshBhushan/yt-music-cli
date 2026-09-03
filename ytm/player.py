@@ -281,14 +281,38 @@ class Player:
         so "play this" while something is playing needs an explicit jump to
         the inserted entry; the rest of the queue stays behind it.
         """
+        existing = self.index_of(url)
+        if existing is not None:
+            # already queued: jump to it rather than queue a second copy
+            self.play_index(existing)
+            return
         index = self.get("playlist-pos", -1)
         index = -1 if index is None else index
         self._loadfile(url, "insert-next", title)
         self.play_index(index + 1 if index >= 0 else 0)
 
     def enqueue(self, url, title=None):
-        """Append `url` to the end of the playlist without interrupting."""
+        """Append `url` to the end of the playlist without interrupting.
+
+        A track that is already queued is not added again; returns whether
+        anything was appended.
+        """
+        if self.index_of(url) is not None:
+            return False
         self._loadfile(url, "append", title)
+        return True
+
+    def index_of(self, url):
+        """Playlist position of `url` (matched on video id), or None."""
+        wanted = video_id_of(url) or url
+        for position, entry in enumerate(self.playlist()):
+            if (entry["video_id"] or entry["url"]) == wanted:
+                return position
+        return None
+
+    def queued_ids(self):
+        """The set of video ids currently in the playlist."""
+        return {e["video_id"] for e in self.playlist() if e["video_id"]}
 
     def _loadfile(self, url, flags, title):
         self.command("loadfile", url, flags, -1, option_list(**{"force-media-title": title}) if title else "")
