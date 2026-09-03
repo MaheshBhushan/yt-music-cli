@@ -25,6 +25,7 @@ def test_missing_file_yields_documented_defaults(tmp_path):
             "search": "/",
             "quit": "e",
         },
+        "update": {"check": True, "auto": False},
     }
 
 
