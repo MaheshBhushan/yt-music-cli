@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.4.0 — 2026-09-03
+
+- Play next: `u` in the TUI puts the highlighted song right after the one playing; `ytm add --next <song>` does the same from the shell. A song already in the queue is moved up instead of duplicated.
+
 ## 0.3.3 — 2026-09-03
 
 - Documentation release: the Authentication section covers all three sign-in methods, the manual-header steps, and the Google Cloud OAuth client walkthrough.

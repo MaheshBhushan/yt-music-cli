@@ -302,6 +302,25 @@ class Player:
         self._loadfile(url, "append", title)
         return True
 
+    def enqueue_next(self, url, title=None):
+        """Put `url` right after the current entry without interrupting.
+
+        A track already in the queue is moved there instead of added twice.
+        Returns whether the queue changed.
+        """
+        index = self.get("playlist-pos", -1)
+        index = -1 if index is None else index
+        existing = self.index_of(url)
+        if existing is not None:
+            if existing in (index, index + 1):
+                return False  # playing now, or already up next
+            # playlist-move puts the entry *before* the one at the target
+            # index, which is "right after current" for both directions
+            self.move(existing, index + 1)
+            return True
+        self._loadfile(url, "insert-next" if index >= 0 else "append", title)
+        return True
+
     def index_of(self, url):
         """Playlist position of `url` (matched on video id), or None."""
         wanted = video_id_of(url) or url
