@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.3 — 2026-09-03
+
+- Documentation release: the Authentication section covers all three sign-in methods, the manual-header steps, and the Google Cloud OAuth client walkthrough.
+
 ## 0.3.2 — 2026-09-03
 
 - `ytm auth --from-browser` explains why each browser failed (not installed, cookies could not be decrypted, database locked, no YouTube login) instead of a blanket "not logged in".
