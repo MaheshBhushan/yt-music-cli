@@ -233,10 +233,10 @@ class NowPlaying(Vertical):
         data = data or {}
         played, up_next = split_queue(data.get("tracks"), data.get("index"))
         self.query_one("#now-playing-played", Static).update(
-            self._render_column("played", played)
+            self._render_column("PLAYED", played)
         )
         self.query_one("#now-playing-upnext", Static).update(
-            self._render_column("up next", up_next)
+            self._render_column("UP NEXT", up_next)
         )
 
     @staticmethod
