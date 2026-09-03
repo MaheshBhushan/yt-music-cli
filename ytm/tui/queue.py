@@ -30,7 +30,7 @@ class QueuePane(Vertical):
             marker = ">" if position == index else " "
             label = f"{track.get('title', '')} — {track.get('artist', '')}"
             table.add_row(f"{marker}{position + 1}.", label, key=str(position))
-        # `clear()` parks the cursor on row 0, so `A`/`a` would always mean the
+        # `clear()` parks the cursor on row 0, so `a`/`q` would always mean the
         # first song. Follow the playing track unless the user moved the cursor
         # off it, in which case keep their row.
         following = previous_key is None or previous_key == str(previous_index)
