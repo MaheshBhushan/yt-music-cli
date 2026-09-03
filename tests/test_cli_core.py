@@ -55,6 +55,9 @@ class FakePlayer:
     def playlist(self):
         return list(self.entries)
 
+    def queued_ids(self):
+        return {e["video_id"] for e in self.entries}
+
     def status(self):
         cur = self._current()
         return {
@@ -340,3 +343,20 @@ def test_like_with_nothing_playing(fake, catalogue):
 def test_select_treats_eleven_char_tokens_as_ids_only_when_they_look_like_one(fake, catalogue):
     assert cli.select("dQw4w9WgXcQ").title == "By Id"
     assert cli.select("arctic monkeys").video_id == "id505"
+
+
+def test_radio_skips_tracks_already_in_the_queue(fake, catalogue, monkeypatch):
+    from ytm import music
+
+    run("play", "arctic monkeys")
+    run("add", "2")  # second hit of the last search -> queue: 505, I Wanna Be Yours
+    monkeypatch.setattr(music, "radio", lambda vid, limit=25, yt=None: [
+        track("idIWB", "I Wanna Be Yours", "Arctic Monkeys"),  # already queued
+        track("id505", "505", "Arctic Monkeys"),  # the seed itself
+        track("r1", "R1", "X"), track("r2", "R2", "Y"), track("r1", "R1", "X"),  # r1 twice
+    ])
+    code, out, _ = run("radio", "-n", "5")
+    assert code == 0
+    added = [c[1].rsplit("v=", 1)[-1] for c in fake.calls if c[0] == "enqueue"][1:]
+    assert added == ["r1", "r2"]
+    assert "2 tracks queued" in out

@@ -376,3 +376,26 @@ def test_play_with_a_comma_in_the_title_keeps_the_title(mpv):
     with Player(ipc_path=mpv.path, spawner=no_spawn) as p:
         p.play("https://music.youtube.com/watch?v=abc", title="Hello, World / X")
     assert mpv.playlist[-1]["title"] == "Hello, World / X"
+
+
+# -- no duplicates in the queue -------------------------------------------------
+
+
+def test_enqueue_skips_a_track_that_is_already_queued(mpv):
+    with Player(ipc_path=mpv.path, spawner=no_spawn) as p:
+        assert p.enqueue("https://music.youtube.com/watch?v=abc", title="A") is True
+        assert p.enqueue("https://music.youtube.com/watch?v=abc", title="A again") is False
+        assert p.enqueue("https://music.youtube.com/watch?v=def") is True
+    assert [e["filename"] for e in mpv.playlist] == [
+        "https://music.youtube.com/watch?v=abc", "https://music.youtube.com/watch?v=def",
+    ]
+
+
+def test_play_of_a_queued_track_jumps_to_it_instead_of_inserting(mpv):
+    mpv.playlist.extend({"filename": f"https://music.youtube.com/watch?v={v}", "title": None} for v in "abc")
+    mpv.props["playlist-pos"] = 0
+    with Player(ipc_path=mpv.path, spawner=no_spawn) as p:
+        p.play("https://music.youtube.com/watch?v=c")
+    assert len(mpv.playlist) == 3
+    assert ["playlist-play-index", 2] in mpv.commands
+    assert not any(c[0] == "loadfile" for c in mpv.commands)
