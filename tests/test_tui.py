@@ -12,7 +12,7 @@ from textual.widgets import DataTable
 from ytm.tui.backend import BackendError as ClientError
 from ytm.tui.app import YTMApp
 from ytm.tui.lyrics import LyricsPane, NO_LYRICS_TEXT
-from ytm.tui.nowplaying import NowPlaying
+from ytm.tui.nowplaying import NowPlaying, split_queue
 from ytm.tui.playlists import PlaylistsPane
 from ytm.tui.queue import QueuePane
 from ytm.tui.search import SearchPane
@@ -1206,6 +1206,32 @@ def test_playlists_pane_set_count_updates_one_row():
 def _queue(n, index):
     tracks = [dict(TRACK, video_id=f"q{i}", title=f"Song {i}") for i in range(n)]
     return {"tracks": tracks, "index": index}
+
+
+def test_split_queue_at_first_track_has_nothing_played():
+    tracks = _queue(5, 0)["tracks"]
+    played, up_next = split_queue(tracks, 0)
+    assert played == []
+    assert [t["title"] for t in up_next] == ["Song 1", "Song 2", "Song 3"]
+
+
+def test_split_queue_at_last_track_has_nothing_up_next():
+    tracks = _queue(5, 4)["tracks"]
+    played, up_next = split_queue(tracks, 4)
+    assert [t["title"] for t in played] == ["Song 2", "Song 3"]
+    assert up_next == []
+
+
+def test_split_queue_on_an_empty_queue():
+    assert split_queue([], None) == ([], [])
+    assert split_queue([], 0) == ([], [])
+
+
+def test_split_queue_in_the_middle():
+    tracks = _queue(6, 3)["tracks"]
+    played, up_next = split_queue(tracks, 3)
+    assert [t["title"] for t in played] == ["Song 1", "Song 2"]
+    assert [t["title"] for t in up_next] == ["Song 4", "Song 5"]
 
 
 def test_queue_cursor_follows_the_playing_track_across_refreshes():

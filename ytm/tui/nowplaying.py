@@ -41,6 +41,26 @@ def _format_time(seconds):
     return f"{seconds // 60}:{seconds % 60:02d}"
 
 
+#: title width in each played/up-next column
+QUEUE_COLUMN_WIDTH = 16
+
+
+def _truncate(title, width=QUEUE_COLUMN_WIDTH):
+    return title if len(title) <= width else title[:width - 1] + "…"
+
+
+def split_queue(tracks, index, before=2, after=3):
+    """Split `tracks` around `index` into the last `before` played tracks
+    and the next `after` up-next tracks. Falls back to an empty split when
+    there is no valid `index`."""
+    tracks = tracks or []
+    if index is None or not (0 <= index < len(tracks)):
+        return [], []
+    played = tracks[max(0, index - before):index]
+    up_next = tracks[index + 1:index + 1 + after]
+    return played, up_next
+
+
 def fetch_bytes(url, timeout=ART_TIMEOUT):
     with urllib.request.urlopen(url, timeout=timeout) as response:
         return response.read()
@@ -145,6 +165,11 @@ class NowPlaying(Vertical):
             # bottom-aligned (see app.tcss) so the text sits level with the
             # foot of the cover, right above the shortcut bar
             with Vertical(id="now-playing-text"):
+                # fills the dead space above the title/artist with what
+                # just played and what plays next
+                with Horizontal(id="now-playing-queue"):
+                    yield Static("", id="now-playing-played")
+                    yield Static("", id="now-playing-upnext")
                 yield Static("nothing playing", id="now-playing-track")
                 yield Static("", id="now-playing-artist")
                 with Horizontal(id="now-playing-bar"):
@@ -201,3 +226,22 @@ class NowPlaying(Vertical):
 
     def set_volume(self, level):
         self.query_one("#now-playing-volume", Static).update(f"vol {int(level)}")
+
+    def set_queue(self, data):
+        """Refresh the played/up-next columns from a `queue_get`/
+        `queue_changed` payload (same shape as `QueuePane.set_queue`)."""
+        data = data or {}
+        played, up_next = split_queue(data.get("tracks"), data.get("index"))
+        self.query_one("#now-playing-played", Static).update(
+            self._render_column("played", played)
+        )
+        self.query_one("#now-playing-upnext", Static).update(
+            self._render_column("up next", up_next)
+        )
+
+    @staticmethod
+    def _render_column(heading, tracks):
+        lines = [heading] + [
+            escape(_truncate(track.get("title", ""))) for track in tracks
+        ]
+        return "\n".join(lines)
