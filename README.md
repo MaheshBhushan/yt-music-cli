@@ -47,7 +47,7 @@ The TUI is `ytm` with no arguments. Results appear as you type; Enter plays the 
 |---|---|
 | `/` or `s` | Focus search |
 | `Enter` | Play the selected result, queue entry or playlist |
-| `q` | Enqueue the selected result |
+| `q` `u` | Enqueue the selected song at the end / play it next |
 | `space` | Play / pause |
 | `n` `p` | Next / previous |
 | `←` `→` | Seek 5 s |
@@ -63,7 +63,7 @@ One-shot commands talk to the same mpv. Add `--json` to any of them for machine-
 ```bash
 ytm search "song name" -n 10   # results are numbered
 ytm play 3                     # a number from the last search, an 11-char video id, or a query
-ytm add 4                      # enqueue
+ytm add 4                      # enqueue; add --next 4 puts it right after the current song
 ytm radio                      # replace the queue with a station for the current track
 ytm status | queue | lyrics | like
 ytm pause | resume | toggle | next | prev | stop

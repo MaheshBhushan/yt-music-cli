@@ -52,6 +52,14 @@ class FakePlayer:
         self.calls.append(("enqueue", url, title))
         self._add(url, title, not self.entries)
 
+    def enqueue_next(self, url, title=None):
+        self.calls.append(("enqueue_next", url, title))
+        cur = self._current()
+        self._add(url, title, cur is None)
+        if cur is not None:
+            entry = self.entries.pop()
+            self.entries.insert(self.entries.index(cur) + 1, entry)
+
     def playlist(self):
         return list(self.entries)
 
@@ -360,3 +368,13 @@ def test_radio_skips_tracks_already_in_the_queue(fake, catalogue, monkeypatch):
     added = [c[1].rsplit("v=", 1)[-1] for c in fake.calls if c[0] == "enqueue"][1:]
     assert added == ["r1", "r2"]
     assert "2 tracks queued" in out
+
+
+def test_add_next_puts_the_song_right_after_the_current_one(fake, catalogue):
+    run("search", "arctic monkeys")
+    run("play", "1")                      # 505 playing
+    run("add", "abcdefghijk")             # by id, goes to the end
+    code, out, _ = run("add", "--next", "2")
+    assert code == 0 and out.startswith("Up next:")
+    assert fake.calls[-1][0] == "enqueue_next"
+    assert [e["video_id"] for e in fake.entries] == ["id505", "idIWB", "abcdefghijk"]

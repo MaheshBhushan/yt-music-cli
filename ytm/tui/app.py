@@ -76,6 +76,7 @@ class YTMApp(App):
         ("/", "focus_search", "Search"),
         ("s", "focus_search", "Search"),
         ("q", "enqueue_selected", "Enqueue"),
+        ("u", "play_next_selected", "Up next"),
         ("l", "focus_playlists", "Playlists"),
         ("a", "add_to_playlist", "Add to playlist"),
         ("space", "toggle", "Play/Pause"),
@@ -126,7 +127,7 @@ class YTMApp(App):
     def _build_bindings(keys):
         """The BINDINGS table with the five customisable keys from config.
 
-        Any other binding (`q`, `s`, `+`, `-`, `Tab`, `l`, `a`, arrows, `x`) keeps
+        Any other binding (`q`, `u`, `s`, `+`, `-`, `Tab`, `l`, `a`, arrows, `x`) keeps
         its hardcoded default -- only `toggle`, `next`, `prev`, `search` and
         `quit` are user-configurable.
         """
@@ -136,6 +137,7 @@ class YTMApp(App):
             # pane but stay ordinary letters while the search box has focus
             ("s", "focus_search", "Search"),
             ("q", "enqueue_selected", "Enqueue"),
+            ("u", "play_next_selected", "Up next"),
             ("l", "focus_playlists", "Playlists"),
             ("a", "add_to_playlist", "Add to playlist"),
             (keys["toggle"], "toggle", "Play/Pause"),
@@ -173,6 +175,7 @@ class YTMApp(App):
             link(keys["next"], "next", "next"),
             link(keys["prev"], "prev", "prev"),
             link("q", "enqueue", "enqueue_selected"),
+            link("u", "play next", "play_next_selected"),
             f"[@click=app.seek_back][b]←[/b][/]/[@click=app.seek_forward][b]→[/b][/] seek",
             f"[@click=app.volume_up][b]+[/b][/]/[@click=app.volume_down][b]-[/b][/] volume",
             link("l", "playlists", "focus_playlists"),
@@ -573,6 +576,14 @@ class YTMApp(App):
         if args is None:
             return
         self._request("enqueue", args)
+
+    def action_play_next_selected(self):
+        """Put the highlighted song right after the one playing."""
+        args = self._selected_track_args()
+        if args is None:
+            return
+        self._request("enqueue_next", args)
+        self.notify(f"Up next: {args.get('title') or 'track'}", timeout=3)
 
     def action_toggle(self):
         self._request("toggle")
