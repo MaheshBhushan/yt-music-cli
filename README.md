@@ -65,6 +65,8 @@ ytm search "song name" -n 10   # results are numbered
 ytm play 3                     # a number from the last search, an 11-char video id, or a query
 ytm add 4                      # enqueue; add --next 4 puts it right after the current song
 ytm radio                      # replace the queue with a station for the current track
+ytm mix                        # list your daily mixes (Supermix, Discover Mix, ...)
+ytm mix discover               # replace the queue with a mix, matched by substring
 ytm status | queue | lyrics | like
 ytm pause | resume | toggle | next | prev | stop
 ytm seek -10 | seek --to 90 | volume 60 | clear | shuffle

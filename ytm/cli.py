@@ -268,6 +268,38 @@ def cmd_radio(args):
     )
 
 
+def cmd_mix(args):
+    """List personal mixes, or replace the queue with one and play it."""
+    from ytm import music, state
+
+    mixes = music.mixes()
+    if not args.name:
+        if not mixes:
+            return {"mixes": []}, "no mixes available"
+        return (
+            {"mixes": [asdict(m) for m in mixes]},
+            "\n".join(m.title for m in mixes),
+        )
+    match = args.name.lower()
+    hits = [m for m in mixes if match in m.title.lower()]
+    if not hits:
+        raise CliError(f"no mix matching '{args.name}'")
+    target = hits[0]
+    playlist, tracks = music.get_playlist(target.playlist_id)
+    if not tracks:
+        raise CliError(f"{playlist.title} is empty")
+    state.remember_tracks(tracks)
+    with player() as p:
+        p.stop()
+        p.play(watch_url(tracks[0].video_id), title=_label(tracks[0]))
+        for track in tracks[1:]:
+            p.enqueue(watch_url(track.video_id), title=_label(track))
+    return (
+        {"playlist": asdict(playlist), "tracks": [fmt_track(t) for t in tracks]},
+        f"Playing {playlist.title}: {len(tracks)} tracks queued",
+    )
+
+
 def _transport(method, text):
     def run(args):
         with player(spawn=False) as p:
@@ -466,6 +498,9 @@ def build_parser():
     p = add("radio", cmd_radio, "queue a radio from a song (default: the one playing)")
     p.add_argument("what", nargs="*")
     p.add_argument("-n", "--limit", type=int, default=25)
+
+    p = add("mix", cmd_mix, "list personal mixes, or play one by name")
+    p.add_argument("name", nargs="?")
 
     add("pause", cmd_pause, "pause")
     add("resume", cmd_resume, "resume")

@@ -41,7 +41,8 @@ class PlaylistsPane(Vertical):
         table.clear()
         self._titles = {}
         for playlist in (data or {}).get("playlists") or []:
-            kind = "(local)" if playlist.get("local") else "(remote)"
+            kind = playlist.get("kind") or ("local" if playlist.get("local") else "remote")
+            kind = kind if kind == "mix" else f"({kind})"
             self._titles[playlist.get("playlist_id")] = playlist.get("title", "")
             table.add_row(
                 f"▸ {playlist.get('title', '')}",
