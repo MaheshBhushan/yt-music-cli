@@ -167,6 +167,48 @@ def get_lyrics(video_id, yt=None):
     return result.get("lyrics"), result.get("source")
 
 
+#: personal daily mixes (My Supermix, Discover Mix, ...) all share this prefix
+MIX_ID_PREFIX = "RDTMAK"
+
+
+def is_mix_id(playlist_id):
+    """Whether `playlist_id` is one of YouTube's personal daily mixes."""
+    return (playlist_id or "").startswith(MIX_ID_PREFIX)
+
+
+def mixes(yt=None):
+    """Personal daily mixes (My Supermix, Discover Mix, ...) from the home feed.
+
+    These are scattered across several home shelves and change daily, so
+    they are never cached: read fresh every call, deduped by id and kept in
+    feed order. Track count is unknown until the mix itself is fetched.
+    """
+    yt = yt if yt is not None else client()
+    try:
+        shelves = yt.get_home(limit=40)
+    except YTMusicError as exc:
+        raise _wrap_ytmusic_error(exc) from exc
+    seen = set()
+    result = []
+    for shelf in shelves or []:
+        for item in (shelf or {}).get("contents") or []:
+            if not item:
+                continue
+            playlist_id = item.get("playlistId") or ""
+            if not is_mix_id(playlist_id) or playlist_id in seen:
+                continue
+            seen.add(playlist_id)
+            result.append(
+                Playlist(
+                    playlist_id=playlist_id,
+                    title=item.get("title") or "Untitled",
+                    track_count=None,
+                    local=False,
+                )
+            )
+    return result
+
+
 def library_playlists(limit=25, yt=None):
     """Return the user's remote playlists as Playlist objects."""
     yt = yt if yt is not None else client()
