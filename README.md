@@ -85,6 +85,9 @@ ytm auth --manual                 # paste request headers copied from DevTools
 ytm auth --oauth                  # device-code flow, for SSH and headless boxes
 ```
 
+> [!WARNING]
+> **Windows:** Chrome, Edge, Brave, Vivaldi and Opera encrypt their cookies with App-Bound Encryption (Chrome 127 and newer), which no other program can read, so `ytm auth` cannot take cookies from them. Log in at music.youtube.com in **Firefox** and run `ytm auth --from-browser firefox`, or use `--manual` or `--oauth`. When extraction fails, the error names the reason per browser.
+
 Browser cookies expire after a few weeks; re-run `ytm auth` when the app says so. OAuth needs your own Google Cloud client (YouTube removed the shared one in 2024): create an OAuth client of type *TVs and Limited Input devices* and pass `--client-id`/`--client-secret`, or set `YTM_OAUTH_CLIENT_ID`/`YTM_OAUTH_CLIENT_SECRET`.
 
 > [!NOTE]
@@ -134,7 +137,7 @@ The proof-of-origin token provider is a yt-dlp plugin installed with `ytm`. It a
 - **Local playlists** live in `~/.local/state/ytm/playlists.json` and show up next to your YouTube Music playlists in the TUI.
 - **Media keys.** `ytm` has no MPRIS of its own; install the [mpv-mpris](https://github.com/hoyon/mpv-mpris) plugin and mpv announces itself to your desktop.
 - **Updating.** `ytm update` upgrades ytm and yt-dlp through whatever installed them (pipx, `uv tool`, or pip), so the new version lands where the `ytm` command runs from. The TUI checks PyPI once a day and shows a toast when there is a newer release; set `auto = true` under `[update]` to have it install without asking. yt-dlp is why this matters: YouTube changes things and yt-dlp follows within days, so a stale copy is the usual cause of sudden "could not resolve" failures.
-- **Windows** is supported in design (named-pipe IPC, no D-Bus) but has not been tested.
+- **Windows** works over a named pipe to mpv. Cookie import needs Firefox there, see Authentication.
 - **Logs.** mpv writes to `~/.local/state/ytm/mpv.log`.
 
 ## Repository structure

@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.2 — 2026-09-03
+
+- `ytm auth --from-browser` explains why each browser failed (not installed, cookies could not be decrypted, database locked, no YouTube login) instead of a blanket "not logged in".
+- Windows: Chromium browsers (Chrome 127+, Edge, Brave, Vivaldi, Opera) use App-Bound Encryption and cannot be read. Firefox is tried first there and the error says to use Firefox, `--manual` or `--oauth`.
+
 ## 0.3.1 — 2026-09-03
 
 - `ytm update` works in environments without pip (for example `uv venv` + `uv pip install ytm`): it upgrades through `uv pip` aimed at the running interpreter, and says what to run if neither pip nor uv exists.
