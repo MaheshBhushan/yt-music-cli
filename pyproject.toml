@@ -4,9 +4,26 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ytm"
-version = "0.1.0"
-description = "YouTube Music CLI and daemon"
+version = "0.2.0"
+description = "YouTube Music in the terminal: a Textual TUI and CLI on top of mpv"
+readme = "README.md"
+license = { file = "LICENSE" }
+authors = [{ name = "Mahesh Koduri" }]
 requires-python = ">=3.11"
+keywords = ["youtube-music", "music", "player", "tui", "cli", "mpv", "textual"]
+classifiers = [
+    "Environment :: Console",
+    "Environment :: Console :: Curses",
+    "Intended Audience :: End Users/Desktop",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: MacOS",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Multimedia :: Sound/Audio :: Players",
+]
 dependencies = [
     "ytmusicapi",
     "yt-dlp",
@@ -20,6 +37,14 @@ dev = ["pytest"]
 
 [project.scripts]
 ytm = "ytm.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/MaheshBhushan/yt-music-cli"
+Source = "https://github.com/MaheshBhushan/yt-music-cli"
+Issues = "https://github.com/MaheshBhushan/yt-music-cli/issues"
+
+[tool.setuptools.packages.find]
+include = ["ytm*"]
 
 [tool.setuptools.package-data]
 ytm = ["mpv/*.lua", "tui/*.tcss"]
