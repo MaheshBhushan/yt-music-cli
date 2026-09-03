@@ -78,6 +78,13 @@ Screen {
     padding: 0 1;
     color: $text-muted;
     background: $surface;
+    /* the entries are click targets, but drawn as plain text */
+    link-style: none;
+    link-color: $text-muted;
+    link-background: $surface;
+    link-style-hover: bold;
+    link-color-hover: $text;
+    link-background-hover: $surface;
 }
 
 #now-playing-image {

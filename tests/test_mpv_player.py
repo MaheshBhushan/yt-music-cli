@@ -217,7 +217,7 @@ def test_default_ipc_path_is_a_socket_on_posix_and_a_pipe_on_windows(monkeypatch
 def test_play_appends_and_starts_with_a_forced_title(mpv):
     with Player(ipc_path=mpv.path, spawner=no_spawn) as p:
         p.play("https://music.youtube.com/watch?v=abc", title="505 / Arctic Monkeys")
-    assert mpv.commands[-2:] == [
+    assert mpv.commands[-3:] == [
         [
             "loadfile",
             "https://music.youtube.com/watch?v=abc",
@@ -226,6 +226,7 @@ def test_play_appends_and_starts_with_a_forced_title(mpv):
             "force-media-title=%20%505 / Arctic Monkeys",
         ],
         ["playlist-play-index", 0],
+        ["set_property", "pause", False],
     ]
 
 
@@ -283,14 +284,21 @@ def test_playlist_edits(mpv):
         p.move(3, 1)
         p.clear()
         p.shuffle()
-        p.play_index(4)
     assert mpv.commands == [
         ["playlist-remove", 2],
         ["playlist-move", 3, 1],
         ["playlist-clear"],
         ["playlist-shuffle"],
-        ["set_property", "playlist-pos", 4],
     ]
+
+
+def test_play_index_jumps_and_unpauses(mpv):
+    mpv.playlist.extend({"filename": f"u{i}", "title": None} for i in range(5))
+    mpv.props["pause"] = True
+    with Player(ipc_path=mpv.path, spawner=no_spawn) as p:
+        p.play_index(4)
+    assert mpv.commands == [["playlist-play-index", 4], ["set_property", "pause", False]]
+    assert mpv.props["pause"] is False
 
 
 # -- status -----------------------------------------------------------------
