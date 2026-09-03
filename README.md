@@ -41,7 +41,7 @@ pip install -e '.[dev]'
 
 ## Usage
 
-The TUI is `ytm` with no arguments. Results appear as you type; Enter plays the first one. Every key is listed in the bar at the bottom, and everything is clickable: results, queue rows, playlists, the progress bar, the shortcuts.
+The TUI is `ytm` with no arguments. Results appear as you type; Enter plays the first one. Every key is listed in the bar at the bottom, and everything is clickable: results, queue rows, playlists, the progress bar, the shortcuts. Your daily mixes (Supermix, Discover Mix, ...) sit below your playlists. In a terminal under 100 columns or 24 rows, such as a tmux pane, the layout collapses to the search box, the queue and the player strip.
 
 | Key | Action |
 |---|---|
