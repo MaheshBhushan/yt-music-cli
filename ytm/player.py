@@ -291,8 +291,7 @@ class Player:
         self._loadfile(url, "append", title)
 
     def _loadfile(self, url, flags, title):
-        options = f"force-media-title={title}" if title else ""
-        self.command("loadfile", url, flags, -1, options)
+        self.command("loadfile", url, flags, -1, option_list(**{"force-media-title": title}) if title else "")
 
     # -- transport -----------------------------------------------------------
 
@@ -383,6 +382,20 @@ class Player:
             "index": index,
             "count": int(self.get("playlist-count", 0) or 0),
         }
+
+
+def option_list(**options):
+    """mpv ``key=value,key=value`` option string with every value quoted.
+
+    mpv splits the list on commas, so a title like "Hello, World" is
+    rejected as an invalid parameter unless it is length-prefixed with the
+    parser's ``%n%`` form; the count is in UTF-8 bytes.
+    """
+    parts = []
+    for key, value in options.items():
+        text = str(value)
+        parts.append(f"{key}=%{len(text.encode('utf-8'))}%{text}")
+    return ",".join(parts)
 
 
 def watch_url(video_id):
