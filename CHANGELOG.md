@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.5.0 — 2026-09-04
+
+- Mixes: `ytm mix` lists your daily mixes (Supermix, Discover Mix, Replay Mix, ...), `ytm mix <name>` plays one, and they appear below your playlists in the TUI.
+- Compact layout: below 100 columns or 24 rows the TUI keeps only the search box, the queue and a 4-row player strip, so it fits a tmux pane. Restores itself when the terminal grows.
+- The player strip shows the last two played and the next three queued songs beside the cover.
+- Search columns take fixed proportions of the width and truncate with an ellipsis instead of scrolling sideways.
+
 ## 0.4.0 — 2026-09-03
 
 - Play next: `u` in the TUI puts the highlighted song right after the one playing; `ytm add --next <song>` does the same from the shell. A song already in the queue is moved up instead of duplicated.
