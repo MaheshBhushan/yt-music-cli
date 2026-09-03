@@ -39,15 +39,16 @@ The TUI is `ytm` with no arguments. Type a query and press Enter to play the fir
 |---|---|
 | `/` or `s` | Focus search |
 | `Enter` | Play the selected result, queue entry or playlist |
-| `a` | Enqueue the selected result |
+| `q` | Enqueue the selected result |
 | `space` | Play / pause |
 | `n` `p` | Next / previous |
 | `←` `→` | Seek 5 s |
 | `+` `-` | Volume |
-| `P` `A` | Focus playlists / add the selection to one |
+| `a` | Add the selected song to a playlist: `a`, pick the list with `↑` `↓`, `a` or `Enter` |
+| `l` | Focus playlists |
 | `Tab` | Cycle panes |
 | `e` | Exit, music keeps playing |
-| `Q` | Exit and stop mpv |
+| `x` | Exit and stop mpv |
 
 One-shot commands talk to the same mpv. Add `--json` to any of them for machine-readable output.
 
