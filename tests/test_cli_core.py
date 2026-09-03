@@ -121,6 +121,15 @@ def catalogue(monkeypatch):
     monkeypatch.setattr(music, "radio", lambda vid, limit=25, yt=None: (calls.append(("radio", vid)), [track("r1", "R1", "X"), track("r2", "R2", "Y")])[1])
     monkeypatch.setattr(music, "like", lambda vid, yt=None: calls.append(("like", vid)))
     monkeypatch.setattr(music, "get_lyrics", lambda vid, yt=None: (calls.append(("lyrics", vid)), ("la la", "Musixmatch"))[1])
+    from ytm.music import Playlist
+    monkeypatch.setattr(music, "mixes", lambda yt=None: (calls.append(("mixes",)), [
+        Playlist("RDTMAKsuper", "My Supermix", None),
+        Playlist("RDTMAKdisc", "Discover Mix", None),
+    ])[1])
+    monkeypatch.setattr(music, "get_playlist", lambda pid, limit=100, yt=None: (
+        calls.append(("get_playlist", pid)),
+        (Playlist(pid, "Discover Mix", 2), [track("m1", "M1", "X"), track("m2", "M2", "Y")]),
+    )[1])
     return calls
 
 
@@ -325,6 +334,28 @@ def test_radio_from_a_query_replaces_the_queue(fake, catalogue):
 def test_radio_with_nothing_playing_and_no_seed(fake, catalogue):
     code, _, err = run("radio")
     assert code == 1 and "nothing is playing" in err
+
+
+# -- mix ----------------------------------------------------------------------
+
+
+def test_mix_lists_names(fake, catalogue):
+    code, out, _ = run("mix")
+    assert code == 0
+    assert out.strip().splitlines() == ["My Supermix", "Discover Mix"]
+
+
+def test_mix_play_matches_case_insensitively_by_substring(fake, catalogue):
+    code, out, _ = run("mix", "discover")
+    assert code == 0
+    assert ("get_playlist", "RDTMAKdisc") in catalogue
+    assert [c[0] for c in fake.calls] == ["stop", "play", "enqueue"]
+    assert out.strip() == "Playing Discover Mix: 2 tracks queued"
+
+
+def test_mix_play_no_match(fake, catalogue):
+    code, _, err = run("mix", "nonexistent")
+    assert code == 1 and "no mix matching" in err
 
 
 def test_lyrics_for_the_current_track(fake, catalogue):
