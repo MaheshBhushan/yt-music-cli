@@ -130,6 +130,7 @@ Screen {
    box, the queue, the now-playing strip and the shortcut bar (see
    YTMApp.on_resize) */
 .compact #search-results,
+.compact #now-playing-queue,
 .compact #playlists-pane,
 .compact #lyrics-pane {
     display: none;
