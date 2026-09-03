@@ -116,3 +116,22 @@ Screen {
     scrollbar-color-active: $accent;
     scrollbar-corner-color: $surface;
 }
+
+/* compact layout: a terminal too small for everything keeps only the search
+   box, the queue, the now-playing strip and the shortcut bar (see
+   YTMApp.on_resize) */
+.compact #search-results,
+.compact #playlists-pane,
+.compact #lyrics-pane {
+    display: none;
+}
+
+.compact #search-pane {
+    height: auto;
+}
+
+.compact #now-playing,
+.compact #now-playing-art,
+.compact #now-playing-text {
+    height: 4;
+}
