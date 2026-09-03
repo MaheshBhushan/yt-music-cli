@@ -3,6 +3,8 @@
 from textual.containers import Vertical
 from textual.widgets import DataTable, Input
 
+from ytm.tui.widgets import SelectOnClickTable
+
 COLUMNS = ("TITLE", "ARTIST", "ALBUM", "TIME")
 
 
@@ -11,7 +13,7 @@ class SearchPane(Vertical):
 
     def compose(self):
         yield Input(placeholder="Search...", id="search-input")
-        table = DataTable(id="search-results", cursor_type="row")
+        table = SelectOnClickTable(id="search-results", cursor_type="row")
         for column in COLUMNS:
             table.add_column(column, key=column)
         yield table

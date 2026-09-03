@@ -3,14 +3,14 @@
 A parallel concept to remote (YouTube Music) playlists: instant, no network,
 safe to experiment against. Stored as one plain-JSON file, written
 atomically (temp file in the same directory, then rename), following the
-same pattern as ``ytm.daemon.state``.
+same atomic-write pattern as ``ytm.state``.
 
 Each local playlist id is prefixed ``local-`` so a caller can tell, from the
 id alone, whether an operation belongs here or against the remote API --
-this is how ``ytm.daemon.server`` routes ``playlist_*`` commands.
+this is how the TUI backend routes ``playlist_*`` commands.
 
 Tracks are stored by ``video_id`` plus the same display metadata
-``ytm.daemon.state`` persists for the queue, so a local playlist can be
+``ytm.state`` remembers for queued tracks, so a local playlist can be
 redisplayed without ever hitting the network.
 """
 
@@ -19,8 +19,8 @@ import os
 import uuid
 from pathlib import Path
 
-from ytm import api
-from ytm.daemon.state import track_from_dict, track_to_dict
+from ytm import music as api
+from ytm.music import track_from_dict, track_to_dict
 
 DEFAULT_PATH = Path.home() / ".local" / "state" / "ytm" / "playlists.json"
 

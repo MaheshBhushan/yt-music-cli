@@ -9,12 +9,12 @@ from textual.app import App, ComposeResult
 from textual.binding import Binding, BindingsMap
 from textual.containers import Horizontal, Vertical
 from textual.message import Message
-from textual.widgets import Input, DataTable, Static
+from textual.widgets import DataTable, Input, Static
 
 from ytm import config as config_mod
-from ytm.client import Client, ClientError
+from ytm.tui.backend import Backend, BackendError
 from ytm.tui.lyrics import LyricsPane
-from ytm.tui.nowplaying import NowPlaying
+from ytm.tui.nowplaying import DEFAULT_ART, NowPlaying
 from ytm.tui.playlists import PlaylistsPane
 from ytm.tui.queue import QueuePane
 from ytm.tui.search import SearchPane
@@ -42,6 +42,17 @@ class DaemonEvent(Message):
         self.data = data
 
 
+class RequestDone(Message):
+    """A background request finished; `then` runs on the message loop."""
+
+    def __init__(self, cmd, data, error, then):
+        super().__init__()
+        self.cmd = cmd
+        self.data = data
+        self.error = error
+        self.then = then
+
+
 class LyricsFetched(Message):
     """The result of a background `lyrics` request, handed back to the
     Textual message loop the same way `DaemonEvent` is."""
@@ -61,6 +72,7 @@ class YTMApp(App):
 
     BINDINGS = [
         ("/", "focus_search", "Search"),
+        ("s", "focus_search", "Search"),
         ("a", "enqueue_selected", "Enqueue"),
         ("P", "focus_playlists", "Playlists"),
         ("A", "add_to_playlist", "Add to playlist"),
@@ -72,8 +84,9 @@ class YTMApp(App):
         ("plus", "volume_up", "Vol +"),
         ("minus", "volume_down", "Vol -"),
         ("tab", "cycle_pane", "Cycle panes"),
-        Binding("q", "quit_only", "Quit", priority=True),
-        Binding("Q", "quit_and_shutdown", "Quit + stop daemon", priority=True),
+        Binding("escape", "focus_results", "Results", show=False),
+        ("e", "quit_only", "Exit"),
+        ("Q", "quit_and_shutdown", "Exit + stop player"),
     ]
 
     def __init__(self, client=None, config=None):
@@ -84,8 +97,8 @@ class YTMApp(App):
         self._bindings = BindingsMap(self._build_bindings(self._config["keys"]))
         self.theme = self._resolve_theme(self._config["ui"]["theme"])
         try:
-            self.client = client if client is not None else Client()
-        except ClientError as exc:
+            self.client = client if client is not None else Backend()
+        except BackendError as exc:
             self.client = None
             self._client_error = str(exc)
         self._listener_thread = None
@@ -106,26 +119,67 @@ class YTMApp(App):
     def _build_bindings(keys):
         """The BINDINGS table with the five customisable keys from config.
 
-        Any other binding (`a`, `+`, `-`, `Tab`, `P`, `A`, arrows, `Q`) keeps
+        Any other binding (`a`, `s`, `+`, `-`, `Tab`, `P`, `A`, arrows, `Q`) keeps
         its hardcoded default -- only `toggle`, `next`, `prev`, `search` and
         `quit` are user-configurable.
         """
         return [
             (keys["search"], "focus_search", "Search"),
+            # `s`/`e` are plain (non-priority) bindings: they act from any
+            # pane but stay ordinary letters while the search box has focus
+            ("s", "focus_search", "Search"),
             ("a", "enqueue_selected", "Enqueue"),
             ("P", "focus_playlists", "Playlists"),
             ("A", "add_to_playlist", "Add to playlist"),
             (keys["toggle"], "toggle", "Play/Pause"),
             (keys["next"], "next", "Next"),
             (keys["prev"], "prev", "Prev"),
+            # priority so they seek from any pane, but `check_action` hands
+            # them back to the search box while it has focus
             Binding("left", "seek_back", "Seek -5s", priority=True),
             Binding("right", "seek_forward", "Seek +5s", priority=True),
             ("plus", "volume_up", "Vol +"),
             ("minus", "volume_down", "Vol -"),
             ("tab", "cycle_pane", "Cycle panes"),
-            Binding(keys["quit"], "quit_only", "Quit", priority=True),
-            Binding("Q", "quit_and_shutdown", "Quit + stop daemon", priority=True),
+            Binding("escape", "focus_results", "Results", show=False),
+            # no priority on any letter key: while the search box has focus
+            # every letter is text, so "queen" or "eels" can be searched
+            (keys["quit"], "quit_only", "Exit"),
+            ("Q", "quit_and_shutdown", "Exit + stop player"),
         ]
+
+    @staticmethod
+    def _shortcut_text(keys):
+        """One line naming every shortcut, in the order people reach for them.
+
+        Each entry is also a mouse target: clicking it runs the same action
+        the key would.
+        """
+        def link(key, label, action):
+            return f"[@click=app.{action}][b]{key}[/b] {label}[/]"
+
+        search_key = f"{keys['search']} {'s' if keys['search'] != 's' else ''}".strip()
+        return "  ".join([
+            link(keys["quit"], "exit", "quit_only"),
+            link(search_key, "search", "focus_search"),
+            link(keys["toggle"], "play/pause", "toggle"),
+            link(keys["next"], "next", "next"),
+            link(keys["prev"], "prev", "prev"),
+            link("a", "enqueue", "enqueue_selected"),
+            f"[@click=app.seek_back][b]←[/b][/]/[@click=app.seek_forward][b]→[/b][/] seek",
+            f"[@click=app.volume_up][b]+[/b][/]/[@click=app.volume_down][b]-[/b][/] volume",
+            link("P", "playlists", "focus_playlists"),
+            link("A", "add to playlist", "add_to_playlist"),
+            link("Tab", "panes", "cycle_pane"),
+            link("Q", "exit+stop", "quit_and_shutdown"),
+        ])
+
+    def check_action(self, action, parameters):
+        # the seek arrows are priority bindings; while the search box has
+        # focus they must move the text cursor instead
+        if action in ("seek_back", "seek_forward") and isinstance(self.focused, Input):
+            return False
+        return True
 
     # -- layout --------------------------------------------------------
 
@@ -135,8 +189,11 @@ class YTMApp(App):
             yield QueuePane(id="queue-pane")
             yield PlaylistsPane(id="playlists-pane")
             yield LyricsPane(id="lyrics-pane")
-        yield NowPlaying(id="now-playing")
+        yield NowPlaying(id="now-playing", art=self._config["ui"].get("art", DEFAULT_ART))
         yield Static("", id="error-banner")
+        # the shortcut bar: every key, always, whatever has focus (Textual's
+        # Footer hides letter keys while the search box is focused)
+        yield Static(self._shortcut_text(self._config["keys"]), id="shortcut-bar")
 
     def on_mount(self):
         if self._client_error is not None:
@@ -153,17 +210,27 @@ class YTMApp(App):
         self.query_one("#search-input", Input).focus()
 
     def _seed_volume(self):
-        """One-time `status` fetch at startup, purely to seed the volume
-        indicator -- not a poll, never repeated."""
-        data = self._request("status")
-        if data is not None and data.get("volume") is not None:
-            self._volume = data["volume"]
-            self.query_one(NowPlaying).set_volume(self._volume)
+        """One-time `status` fetch at startup -- not a poll, never repeated.
+
+        Seeds the volume indicator and picks the starting focus: when mpv
+        already has a track loaded the queue gets it, so space/arrows drive
+        playback straight away; an empty player starts in the search box.
+        """
+        def seed(data):
+            if data is None:
+                return
+            if data.get("volume") is not None:
+                self._volume = data["volume"]
+                self.query_one(NowPlaying).set_volume(self._volume)
+            if data.get("current"):
+                self.query_one("#queue-table", DataTable).focus()
+
+        self._request_async("status", then=seed)
 
     def _listen(self):
         try:
             self.client.listen()
-        except ClientError:
+        except BackendError:
             # the connection dropped or the daemon went away; nothing more
             # to do from a background thread than stop listening quietly
             pass
@@ -189,7 +256,7 @@ class YTMApp(App):
         def worker():
             try:
                 data = self.client.request("lyrics", {"video_id": video_id})
-            except ClientError as exc:
+            except BackendError as exc:
                 self.post_message(LyricsFetched(video_id, None, str(exc)))
             else:
                 self.post_message(LyricsFetched(video_id, data, None))
@@ -226,55 +293,106 @@ class YTMApp(App):
     # -- helpers ---------------------------------------------------------
 
     def _show_error(self, message):
-        self.query_one("#error-banner", Static).update(f"error: {message}")
+        banner = self.query_one("#error-banner", Static)
+        banner.update(f"error: {message}")
+        banner.display = True
 
     def _clear_error(self):
-        self.query_one("#error-banner", Static).update("")
+        banner = self.query_one("#error-banner", Static)
+        banner.update("")
+        banner.display = False
 
     def _request(self, cmd, args=None):
-        """Send one command, surfacing a `ClientError` as a visible banner."""
+        """Send one *local* command (mpv over IPC, milliseconds) and surface
+        a `BackendError` as a visible banner. Anything that goes to the
+        network must use `_request_async` so the cursor never waits on it."""
         if self.client is None:
             return None
         try:
             data = self.client.request(cmd, args)
             self._clear_error()
             return data
-        except ClientError as exc:
+        except BackendError as exc:
             self._show_error(str(exc))
             return None
 
+    def _request_async(self, cmd, args=None, then=None):
+        """Run a request on a worker thread; `then(data)` runs back on the
+        message loop once it completes. Keeps search, lyrics and playlist
+        calls -- the ones that hit YouTube -- off the UI thread."""
+        if self.client is None:
+            return
+
+        def work():
+            try:
+                data = self.client.request(cmd, args)
+            except BackendError as exc:
+                self.post_message(RequestDone(cmd, None, str(exc), then))
+            else:
+                self.post_message(RequestDone(cmd, data, None, then))
+
+        self.run_worker(work, thread=True, name=cmd, group="requests")
+
+    def on_request_done(self, message: RequestDone):
+        if message.error is not None:
+            self._show_error(message.error)
+            return
+        self._clear_error()
+        if message.then is not None:
+            message.then(message.data)
+
     def _refresh_queue(self):
-        data = self._request("queue_get")
-        if data is not None:
-            self.query_one(QueuePane).set_queue(data)
+        self._request_async(
+            "queue_get", then=lambda data: self.query_one(QueuePane).set_queue(data)
+        )
 
     def _refresh_playlists(self):
-        data = self._request("playlist_list")
-        if data is not None:
-            self.query_one(PlaylistsPane).set_playlists(data)
+        self._request_async(
+            "playlist_list",
+            then=lambda data: self.query_one(PlaylistsPane).set_playlists(data),
+        )
 
     # -- search --------------------------------------------------------
 
     def on_input_submitted(self, message: Input.Submitted):
         if message.input.id != "search-input":
             return
-        data = self._request("search", {"query": message.value})
-        if data is None:
-            return
-        tracks = data.get("tracks") or []
-        self.query_one(SearchPane).set_results(tracks)
-        if tracks:
-            self._request("play", self._track_args(tracks[0]))
+        def show(data):
+            tracks = (data or {}).get("tracks") or []
+            self.query_one(SearchPane).set_results(tracks)
+            if tracks:
+                self._request("play", self._track_args(tracks[0]))
+            # hand focus to the results: from here space toggles, arrows
+            # seek and Enter/click plays, instead of typing into the box
+            self.action_focus_results()
+
+        self._request_async("search", {"query": message.value}, then=show)
 
     def on_data_table_row_selected(self, message: DataTable.RowSelected):
-        if message.data_table.id != "search-results":
-            return
-        self.action_play_selected()
+        """Enter or a mouse click on any of the three tables."""
+        table_id = message.data_table.id
+        if table_id == "search-results":
+            self.action_play_selected()
+        elif table_id == "queue-table":
+            self._request("queue_play", {"index": message.cursor_row})
+        elif table_id == "playlists-table":
+            playlist_id = self.query_one(PlaylistsPane).selected_playlist_id()
+            if playlist_id is not None:
+                self._request_async(
+                    "playlist_play", {"playlist_id": playlist_id},
+                    then=lambda data: self.query_one(QueuePane).set_queue(data),
+                )
+
+    def on_now_playing_seek_requested(self, message: NowPlaying.SeekRequested):
+        self._request("seek", {"seconds": message.seconds, "absolute": True})
 
     # -- actions ---------------------------------------------------------
 
     def action_focus_search(self):
         self.query_one("#search-input", Input).focus()
+
+    def action_focus_results(self):
+        self.query_one("#search-results", DataTable).focus()
 
     @staticmethod
     def _track_args(track):
@@ -285,6 +403,7 @@ class YTMApp(App):
             "album": track.get("album"),
             "duration": track.get("duration"),
             "duration_seconds": track.get("duration_seconds"),
+            "thumbnail": track.get("thumbnail"),
         }
 
     def _selected_track_args(self):
@@ -342,15 +461,15 @@ class YTMApp(App):
         playlist_id = self.query_one(PlaylistsPane).selected_playlist_id()
         if playlist_id is None:
             return
-        self._request(
+        self._request_async(
             "playlist_add",
             {
                 "playlist_id": playlist_id,
                 "video_ids": [track_args["video_id"]],
                 "tracks": [track_args],
             },
+            then=lambda data: self._refresh_playlists(),
         )
-        self._refresh_playlists()
 
     def action_cycle_pane(self):
         self.focus_next()

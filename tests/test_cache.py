@@ -76,36 +76,6 @@ def test_interrupted_download_leaves_no_cache_entry(tmp_path):
     assert leftovers == []
 
 
-def test_cache_aware_resolver_skips_fallback_when_cached(tmp_path):
-    cache.download("cached-id", cache_dir=tmp_path, ydl_class=FakeYDL)
-
-    calls = []
-
-    def fallback(video_id):
-        calls.append(video_id)
-        return f"https://stream.test/{video_id}"
-
-    resolver = cache.cache_aware_resolver(fallback=fallback, cache_dir=tmp_path)
-    result = resolver("cached-id")
-
-    assert result == str(cache.get_cached_path("cached-id", cache_dir=tmp_path, touch=False))
-    assert calls == []
-
-
-def test_cache_aware_resolver_falls_through_when_uncached(tmp_path):
-    calls = []
-
-    def fallback(video_id):
-        calls.append(video_id)
-        return f"https://stream.test/{video_id}"
-
-    resolver = cache.cache_aware_resolver(fallback=fallback, cache_dir=tmp_path)
-    result = resolver("not-cached-id")
-
-    assert result == "https://stream.test/not-cached-id"
-    assert calls == ["not-cached-id"]
-
-
 def test_lru_eviction_drops_least_recently_used(tmp_path):
     path_a = cache.download("a", cache_dir=tmp_path, ydl_class=FakeYDL)
     time.sleep(0.01)

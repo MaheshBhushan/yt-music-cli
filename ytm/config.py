@@ -10,9 +10,11 @@ startup. The shape and defaults are::
     [behaviour]
     autoplay_radio = true
     confirm_remote_delete = true
+    authenticated_streams = false
 
     [ui]
     theme = "dark"
+    art = "blocks"
 
     [pot]
     enabled = true
@@ -23,7 +25,7 @@ startup. The shape and defaults are::
     next = "n"
     prev = "p"
     search = "/"
-    quit = "q"
+    quit = "e"
 
 A missing file yields exactly these defaults. A partial file overrides only
 the keys it specifies -- every other key, and every key in a section that
@@ -43,15 +45,30 @@ CONFIG_PATH = Path.home() / ".config" / "ytm" / "config.toml"
 
 DEFAULTS = {
     "audio": {"volume": 70, "device": "auto"},
-    "behaviour": {"autoplay_radio": True, "confirm_remote_delete": True},
-    "ui": {"theme": "dark"},
+    # authenticated_streams: hand the account cookies to yt-dlp when mpv
+    # resolves a stream. Off by default: with cookies YouTube serves URLs
+    # that need an account-bound PO token, which the provider does not
+    # currently supply, and the audio server then answers 403. Anonymous
+    # resolution plays the same catalogue; only private or age-gated tracks
+    # need this on.
+    "behaviour": {
+        "autoplay_radio": True,
+        "confirm_remote_delete": True,
+        "authenticated_streams": False,
+    },
+    # art: cover art in the TUI. "blocks" (default) draws coloured half-cell
+    # glyphs and works in every terminal, tmux included. "kitty" and "sixel"
+    # use the terminal's pixel graphics protocol and "auto" probes for one;
+    # they are opt-in because Sixel in Konsole froze the now-playing pane.
+    # "ascii" is plain block characters; "off" hides the art.
+    "ui": {"theme": "dark", "art": "blocks"},
     "pot": {"enabled": True, "base_url": "http://127.0.0.1:4416"},
     "keys": {
         "toggle": "space",
         "next": "n",
         "prev": "p",
         "search": "/",
-        "quit": "q",
+        "quit": "e",
     },
 }
 
@@ -62,7 +79,9 @@ _TYPES = {
     ("audio", "device"): str,
     ("behaviour", "autoplay_radio"): bool,
     ("behaviour", "confirm_remote_delete"): bool,
+    ("behaviour", "authenticated_streams"): bool,
     ("ui", "theme"): str,
+    ("ui", "art"): str,
     ("pot", "enabled"): bool,
     ("pot", "base_url"): str,
     ("keys", "toggle"): str,

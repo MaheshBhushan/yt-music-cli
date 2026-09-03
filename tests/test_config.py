@@ -11,15 +11,19 @@ def test_missing_file_yields_documented_defaults(tmp_path):
     config = config_mod.load(tmp_path / "does-not-exist.toml")
     assert config == {
         "audio": {"volume": 70, "device": "auto"},
-        "behaviour": {"autoplay_radio": True, "confirm_remote_delete": True},
-        "ui": {"theme": "dark"},
+        "behaviour": {
+            "autoplay_radio": True,
+            "confirm_remote_delete": True,
+            "authenticated_streams": False,
+        },
+        "ui": {"theme": "dark", "art": "blocks"},
         "pot": {"enabled": True, "base_url": "http://127.0.0.1:4416"},
         "keys": {
             "toggle": "space",
             "next": "n",
             "prev": "p",
             "search": "/",
-            "quit": "q",
+            "quit": "e",
         },
     }
 
@@ -42,12 +46,13 @@ def test_partial_config_overrides_only_its_own_keys(tmp_path):
     assert config["keys"]["next"] == "n"
     assert config["keys"]["prev"] == "p"
     assert config["keys"]["search"] == "/"
-    assert config["keys"]["quit"] == "q"
+    assert config["keys"]["quit"] == "e"
     assert config["behaviour"] == {
         "autoplay_radio": True,
         "confirm_remote_delete": True,
+        "authenticated_streams": False,
     }
-    assert config["ui"] == {"theme": "dark"}
+    assert config["ui"] == {"theme": "dark", "art": "blocks"}
 
 
 def test_malformed_toml_falls_back_to_defaults_with_warning(tmp_path, capsys):
@@ -92,6 +97,6 @@ def test_unknown_section_and_key_are_ignored_with_warning(tmp_path, capsys):
     )
     config = config_mod.load(path)
     assert "nonsense" not in config
-    assert config["ui"] == {"theme": "light"}
+    assert config["ui"] == {"theme": "light", "art": "blocks"}
     captured = capsys.readouterr()
     assert "config warning" in captured.err
