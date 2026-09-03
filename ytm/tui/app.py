@@ -72,6 +72,11 @@ class YTMApp(App):
 
     CSS_PATH = "app.tcss"
 
+    #: below either of these the layout drops to the essentials (see `.compact`
+    #: in app.tcss): search box, queue, now-playing strip and shortcut bar
+    COMPACT_WIDTH = 100
+    COMPACT_HEIGHT = 24
+
     BINDINGS = [
         ("/", "focus_search", "Search"),
         ("s", "focus_search", "Search"),
@@ -204,6 +209,14 @@ class YTMApp(App):
         # the shortcut bar: every key, always, whatever has focus (Textual's
         # Footer hides letter keys while the search box is focused)
         yield Static(self._shortcut_text(self._config["keys"]), id="shortcut-bar")
+
+    def on_resize(self, event):
+        """Small terminals lose the results table, playlists and lyrics."""
+        size = event.size
+        compact = size.width < self.COMPACT_WIDTH or size.height < self.COMPACT_HEIGHT
+        self.screen.set_class(compact, "compact")
+        if compact and self.focused is not None and not self.focused.display:
+            self.query_one("#search-input", Input).focus()
 
     def on_mount(self):
         if self._client_error is not None:
@@ -514,7 +527,13 @@ class YTMApp(App):
         if self._armed is not None:
             self._disarm()  # Escape while choosing a playlist cancels the add
             return
-        self.query_one("#search-results", DataTable).focus()
+        table = self.query_one("#search-results", DataTable)
+        if not table.display:
+            # compact layout: the results table is hidden, so the queue is
+            # the list to hand focus to
+            self.query_one("#queue-table", DataTable).focus()
+            return
+        table.focus()
 
     def on_descendant_focus(self, message):
         # remember which list the user was last in, so `a` adds the track
