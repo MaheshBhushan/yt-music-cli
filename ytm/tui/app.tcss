@@ -18,6 +18,15 @@ Screen {
     width: 1fr;
 }
 
+#playlist-name {
+    display: none;
+}
+
+/* wide rows are cut, not scrolled sideways */
+#queue-table, #playlists-table {
+    scrollbar-size-horizontal: 0;
+}
+
 #lyrics-pane {
     width: 2fr;
     border-left: solid $panel;

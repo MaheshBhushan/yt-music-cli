@@ -173,3 +173,13 @@ def test_to_track_carries_a_thumbnail_and_old_state_without_one_still_loads(tmp_
     path.write_text(json.dumps({"last_search": [], "tracks": {"v": {
         "video_id": "v", "title": "T", "artist": "", "album": "", "duration": "", "duration_seconds": 0}}}))
     assert state.track_for("v", path).thumbnail == ""
+
+
+def test_playlist_count_reads_track_count_from_a_one_track_page():
+    class YT:
+        def get_playlist(self, pid, limit=100):
+            assert limit == 1
+            return {"trackCount": "1,204"} if pid == "LM" else {}
+
+    assert music.playlist_count("LM", yt=YT()) == 1204
+    assert music.playlist_count("SE", yt=YT()) is None

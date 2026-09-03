@@ -180,3 +180,28 @@ def test_default_player_passes_no_timeout_through_for_the_observer(monkeypatch):
     monkeypatch.setattr(cli, "player", lambda spawn=True, **kw: seen.append((spawn, kw)))
     _default_player(spawn=False, timeout=None)
     assert seen == [(False, {"timeout": None})]
+
+
+def test_playlist_list_fills_in_missing_remote_counts(backend, catalogue, monkeypatch, tmp_path):
+    from ytm import playlists_local
+
+    monkeypatch.setattr(playlists_local, "DEFAULT_PATH", tmp_path / "pl.json")
+    monkeypatch.setattr(music, "library_playlists", lambda limit=25, yt=None: [
+        music.Playlist("LM", "Liked Music", 0), music.Playlist("PL9", "Mix", 12)])
+    asked = []
+    monkeypatch.setattr(music, "playlist_count", lambda pid, yt=None: (asked.append(pid), 9)[1])
+    lists = backend.request("playlist_list")["playlists"]
+    assert asked == ["LM"]  # only the one without a count
+    assert [(p["title"], p["track_count"]) for p in lists] == [("Liked Music", 9), ("Mix", 12)]
+
+
+def test_playlist_create_remote_and_local(backend, monkeypatch, tmp_path):
+    from ytm import playlists_local
+
+    monkeypatch.setattr(playlists_local, "DEFAULT_PATH", tmp_path / "pl.json")
+    monkeypatch.setattr(music, "create_playlist", lambda title, description="", privacy="PRIVATE", yt=None: "PLx")
+    assert backend.request("playlist_create", {"title": "Road Trip"}) == {"playlist_id": "PLx", "title": "Road Trip", "local": False}
+    made = backend.request("playlist_create", {"title": "Offline", "local": True})
+    assert made["local"] is True and playlists_local.is_local_id(made["playlist_id"])
+    with pytest.raises(BackendError, match="name"):
+        backend.request("playlist_create", {"title": "  "})

@@ -209,6 +209,27 @@ def get_playlist(playlist_id, limit=100, yt=None):
     return playlist, tracks
 
 
+def playlist_count(playlist_id, yt=None):
+    """How many tracks a remote playlist holds.
+
+    The library listing omits the count for YouTube's auto-playlists (Liked
+    Music, Episodes for Later), so this asks for the playlist itself with a
+    one-track page and reads ``trackCount``. Returns None when unknown.
+    """
+    yt = yt if yt is not None else client()
+    try:
+        result = yt.get_playlist(playlist_id, limit=1) or {}
+    except YTMusicError as exc:
+        raise _wrap_ytmusic_error(exc) from exc
+    count = result.get("trackCount")
+    if count is None:
+        return None
+    try:
+        return int(str(count).replace(",", ""))
+    except ValueError:
+        return None
+
+
 def create_playlist(title, description="", privacy="PRIVATE", yt=None):
     """Create a remote playlist and return its playlist id."""
     yt = yt if yt is not None else client()
