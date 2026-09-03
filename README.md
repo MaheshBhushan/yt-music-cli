@@ -25,6 +25,7 @@ pipx install ytm              # or: uv tool install ytm   /   pip install ytm
 ytm auth                      # cookies from a logged-in browser, see Authentication
 ytm play "daft punk"          # search, play the first hit, radio follows
 ytm                           # the TUI
+ytm update                    # later: newest ytm and yt-dlp, whatever installed it
 ```
 
 To hack on it instead:
@@ -40,7 +41,7 @@ pip install -e '.[dev]'
 
 ## Usage
 
-The TUI is `ytm` with no arguments. Type a query and press Enter to play the first result. Every key is listed in the bar at the bottom, and everything is clickable: results, queue rows, playlists, the progress bar, the shortcuts.
+The TUI is `ytm` with no arguments. Results appear as you type; Enter plays the first one. Every key is listed in the bar at the bottom, and everything is clickable: results, queue rows, playlists, the progress bar, the shortcuts.
 
 | Key | Action |
 |---|---|
@@ -68,6 +69,7 @@ ytm status | queue | lyrics | like
 ytm pause | resume | toggle | next | prev | stop
 ytm seek -10 | seek --to 90 | volume 60 | clear | shuffle
 ytm quit                       # stop mpv entirely
+ytm update                     # upgrade ytm and yt-dlp; --check only reports
 ```
 
 The queue never holds a track twice: playing something already queued jumps to it, and radio skips what is there.
@@ -116,6 +118,10 @@ next = "n"
 prev = "p"
 search = "/"
 quit = "e"
+
+[update]
+check = true                    # ask PyPI once a day, toast in the TUI when newer
+auto = false                    # true: install it (and fresh yt-dlp) automatically
 ```
 
 `art = "blocks"` draws the cover with coloured half-cell glyphs and works in every terminal, tmux included. `kitty` and `sixel` use the terminal's pixel protocol; Sixel is known to freeze the pane in Konsole, which is why it is opt-in.
@@ -127,7 +133,7 @@ The proof-of-origin token provider is a yt-dlp plugin installed with `ytm`. It a
 - **Offline cache.** `ytm cache add <video_id>` downloads a track into `~/.cache/ytm/tracks/`; `cache rm` and `cache list` manage it. 2 GB cap, least-recently-played evicted first.
 - **Local playlists** live in `~/.local/state/ytm/playlists.json` and show up next to your YouTube Music playlists in the TUI.
 - **Media keys.** `ytm` has no MPRIS of its own; install the [mpv-mpris](https://github.com/hoyon/mpv-mpris) plugin and mpv announces itself to your desktop.
-- **yt-dlp goes stale.** YouTube changes things; yt-dlp follows within days. `pipx upgrade ytm` (or `pip install -U yt-dlp` in the same environment) fixes most sudden resolution failures.
+- **Updating.** `ytm update` upgrades ytm and yt-dlp through whatever installed them (pipx, `uv tool`, or pip), so the new version lands where the `ytm` command runs from. The TUI checks PyPI once a day and shows a toast when there is a newer release; set `auto = true` under `[update]` to have it install without asking. yt-dlp is why this matters: YouTube changes things and yt-dlp follows within days, so a stale copy is the usual cause of sudden "could not resolve" failures.
 - **Windows** is supported in design (named-pipe IPC, no D-Bus) but has not been tested.
 - **Logs.** mpv writes to `~/.local/state/ytm/mpv.log`.
 
@@ -141,9 +147,11 @@ ytm/
   state.py          remembered searches and track metadata
   auth.py           browser cookies, DevTools headers, OAuth
   cache.py          offline downloads
+  update.py         version check against PyPI, in-place upgrade
   mpv/autoplay.lua  radio autoplay inside mpv
   tui/              Textual app, panes, backend over Player
 tests/              pytest; no network and no mpv needed
+.github/workflows/  tests on 3.11-3.13; publish to PyPI on a v* tag
 ```
 
 ```bash
