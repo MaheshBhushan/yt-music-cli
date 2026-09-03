@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.1 — 2026-09-03
+
+- `ytm update` works in environments without pip (for example `uv venv` + `uv pip install ytm`): it upgrades through `uv pip` aimed at the running interpreter, and says what to run if neither pip nor uv exists.
+
 ## 0.3.0 — 2026-09-03
 
 - `ytm update`: upgrades ytm and yt-dlp through whatever installed them (pipx, `uv tool`, pip). `--check` only reports, `--force` reinstalls.

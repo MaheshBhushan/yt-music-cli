@@ -86,8 +86,18 @@ def test_upgrade_commands_per_installer():
         ["pipx", "upgrade", "ytm"], ["pipx", "runpip", "ytm", "install", "-U", "yt-dlp"]]
     assert update.upgrade_commands("pipx", yt_dlp=False) == [["pipx", "upgrade", "ytm"]]
     assert update.upgrade_commands("uv") == [["uv", "tool", "upgrade", "ytm"]]
-    assert update.upgrade_commands("pip") == [[sys.executable, "-m", "pip", "install", "-U", "ytm", "yt-dlp"]]
+    assert update.upgrade_commands("pip", has_pip=True) == [[sys.executable, "-m", "pip", "install", "-U", "ytm", "yt-dlp"]]
+    # a `uv venv` has no pip module: go through uv aimed at this interpreter
+    assert update.upgrade_commands("pip", has_pip=False, has_uv=True) == [
+        ["uv", "pip", "install", "-U", "--python", sys.executable, "ytm", "yt-dlp"]]
+    assert update.upgrade_commands("pip", has_pip=False, has_uv=False) == []
     assert update.upgrade_commands("editable") == []
+
+
+def test_upgrade_without_pip_or_uv_explains_itself(monkeypatch):
+    monkeypatch.setattr(update, "upgrade_commands", lambda kind, yt_dlp=True, **k: [])
+    ok, text = update.upgrade(kind="pip")
+    assert not ok and "uv pip install" in text and sys.executable in text
 
 
 def test_upgrade_runs_each_command_and_stops_on_failure():
