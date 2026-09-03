@@ -1447,3 +1447,20 @@ def test_tui_auto_update_runs_the_upgrade(monkeypatch):
         assert upgraded and any("Updated ytm to 0.3.0" in m for m in toasts), toasts
 
     asyncio.run(scenario())
+
+
+def test_play_next_key_sends_enqueue_next():
+    async def scenario():
+        stub = StubClient()
+        app = YTMApp(client=stub)
+        async with app.run_test() as pilot:
+            await _search(pilot)
+            app.query_one("#search-results", DataTable).focus()
+            await settle(pilot)
+            await pilot.press("u")
+            await settle(pilot)
+            calls = [c for c in stub.calls if c[0] == "enqueue_next"]
+            assert len(calls) == 1 and calls[0][1]["video_id"] == "abc123"
+            assert "play next" in str(app.query_one("#shortcut-bar").render())
+
+    asyncio.run(scenario())

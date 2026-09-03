@@ -69,6 +69,7 @@ class Backend:
             "search": self._search,
             "play": lambda a: self._load(a, play=True),
             "enqueue": lambda a: self._load(a, play=False),
+            "enqueue_next": lambda a: self._load(a, play=False, up_next=True),
             "pause": lambda a: self._transport("pause"),
             "resume": lambda a: self._transport("resume"),
             "toggle": lambda a: self._transport("toggle"),
@@ -129,7 +130,7 @@ class Backend:
         state.remember_search(tracks)
         return {"tracks": [asdict(t) for t in tracks]}
 
-    def _load(self, args, play):
+    def _load(self, args, play, up_next=False):
         track = _from_args(args)
         if not track.video_id:
             raise BackendError("'video_id' is required")
@@ -140,7 +141,12 @@ class Backend:
             if known and known.thumbnail:
                 track.thumbnail = known.thumbnail
         state.remember_tracks([track])
-        method = self._player.play if play else self._player.enqueue
+        if play:
+            method = self._player.play
+        elif up_next:
+            method = self._player.enqueue_next
+        else:
+            method = self._player.enqueue
         method(watch_url(track.video_id), title=_label(track))
         return self._status(args)
 

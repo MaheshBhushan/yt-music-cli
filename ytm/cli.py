@@ -212,9 +212,11 @@ def _load(args, flags):
     with player() as p:
         if flags == "play":
             p.play(watch_url(track.video_id), title=_label(track))
+        elif flags == "next":
+            p.enqueue_next(watch_url(track.video_id), title=_label(track))
         else:
             p.enqueue(watch_url(track.video_id), title=_label(track))
-    verb = "Playing" if flags == "play" else "Queued"
+    verb = {"play": "Playing", "next": "Up next"}.get(flags, "Queued")
     text = "\n".join([f"{verb}:", track.title, track.artist] + ([track.album] if track.album else []))
     return {"track": fmt_track(track), "action": flags}, text
 
@@ -226,7 +228,7 @@ def cmd_play(args):
 
 
 def cmd_add(args):
-    return _load(args, "add")
+    return _load(args, "next" if args.next else "add")
 
 
 def cmd_radio(args):
@@ -458,8 +460,9 @@ def build_parser():
 
     p = add("play", cmd_play, "play a song: a query, a result number, or a video id")
     p.add_argument("what", nargs="*")
-    p = add("add", cmd_add, "queue a song after the current queue")
+    p = add("add", cmd_add, "queue a song at the end (or right after the current one)")
     p.add_argument("what", nargs="+")
+    p.add_argument("--next", action="store_true", help="play it next instead of last")
     p = add("radio", cmd_radio, "queue a radio from a song (default: the one playing)")
     p.add_argument("what", nargs="*")
     p.add_argument("-n", "--limit", type=int, default=25)

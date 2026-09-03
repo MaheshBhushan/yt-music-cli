@@ -92,6 +92,12 @@ class FakeMpv:
             else:
                 self.playlist.append(entry)
             self.props["playlist-count"] = len(self.playlist)
+        elif name == "playlist-move" and 0 <= command[1] < len(self.playlist):
+            src, dst = command[1], command[2]
+            entry = self.playlist.pop(src)
+            self.playlist.insert(dst - 1 if src < dst else dst, entry)
+            cur = next((i for i, e in enumerate(self.playlist) if e.get("current")), -1)
+            self.props["playlist-pos"] = cur
         elif name == "playlist-play-index":
             self.props["playlist-pos"] = command[1]
             self.props["idle-active"] = False
@@ -399,3 +405,29 @@ def test_play_of_a_queued_track_jumps_to_it_instead_of_inserting(mpv):
     assert len(mpv.playlist) == 3
     assert ["playlist-play-index", 2] in mpv.commands
     assert not any(c[0] == "loadfile" for c in mpv.commands)
+
+
+def test_enqueue_next_inserts_after_current_without_interrupting(mpv):
+    p = Player(mpv.path, timeout=2)
+    for i, name in enumerate("ABC"):
+        p.enqueue(f"https://music.youtube.com/watch?v={name * 11}", title=name)
+    p.play_index(0)
+    assert p.enqueue_next("https://music.youtube.com/watch?v=" + "N" * 11, title="N") is True
+    assert [e["title"] for e in p.playlist()] == ["A", "N", "B", "C"]
+    assert p.status()["index"] == 0  # still playing A
+    # already up next: nothing to do
+    assert p.enqueue_next("https://music.youtube.com/watch?v=" + "N" * 11) is False
+
+
+def test_enqueue_next_moves_an_already_queued_track_up(mpv):
+    p = Player(mpv.path, timeout=2)
+    for name in "ABCD":
+        p.enqueue(f"https://music.youtube.com/watch?v={name * 11}", title=name)
+    p.play_index(1)  # playing B
+    assert p.enqueue_next("https://music.youtube.com/watch?v=" + "D" * 11) is True  # from behind
+    assert [e["title"] for e in p.playlist()] == ["A", "B", "D", "C"]
+    assert p.enqueue_next("https://music.youtube.com/watch?v=" + "A" * 11) is True  # from in front
+    assert [e["title"] for e in p.playlist()] == ["B", "A", "D", "C"]
+    assert p.status()["index"] == 0 and p.playlist()[0]["current"]
+    assert p.enqueue_next("https://music.youtube.com/watch?v=" + "B" * 11) is False  # it is playing
+    assert not [c for c in mpv.commands if c[0] == "loadfile" and "%" not in str(c[4]) and c[2] == "insert-next"]

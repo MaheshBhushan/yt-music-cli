@@ -240,3 +240,11 @@ def test_playlist_add_count_failure_does_not_undo_the_add(backend, monkeypatch):
     monkeypatch.setattr(music, "playlist_count", boom)
     out = backend.request("playlist_add", {"playlist_id": "PL1", "video_ids": ["v1"]})
     assert out == {"playlist_id": "PL1", "added": 1}
+
+
+def test_enqueue_next_route_uses_the_player(backend):
+    backend.request("play", {"video_id": "a", "title": "A"})
+    backend.request("enqueue", {"video_id": "b", "title": "B"})
+    out = backend.request("enqueue_next", {"video_id": "c", "title": "C", "artist": "Cc"})
+    assert backend.fake.calls[-1] == ("enqueue_next", "https://music.youtube.com/watch?v=c", "C / Cc")
+    assert out["count"] == 3
