@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.5.1 — 2026-09-04
+
+- The player strip's PLAYED / UP NEXT columns are uppercase and sit side by side instead of at opposite ends of the strip.
+- README screenshot shows the 0.5 layout.
+
 ## 0.5.0 — 2026-09-04
 
 - Mixes: `ytm mix` lists your daily mixes (Supermix, Discover Mix, Replay Mix, ...), `ytm mix <name>` plays one, and they appear below your playlists in the TUI.
