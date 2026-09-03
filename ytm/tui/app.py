@@ -415,11 +415,14 @@ class YTMApp(App):
             return
         self.query_one("#search-results", DataTable).focus()
 
-    def on_data_table_row_highlighted(self, message: DataTable.RowHighlighted):
-        # remember which list the user last moved through, so `A` adds the
-        # track they were looking at even after `P` moved focus to playlists
-        if message.data_table.id in ("search-results", "queue-table"):
-            self._pick_pane = message.data_table.id
+    def on_descendant_focus(self, message):
+        # remember which list the user was last in, so `A` adds the track
+        # they were looking at even after `P` moved focus to playlists.
+        # (Focus, not RowHighlighted: a queue refresh re-adds rows and fires
+        # highlights the user never made.)
+        widget_id = getattr(message.widget, "id", None)
+        if widget_id in ("search-results", "queue-table"):
+            self._pick_pane = widget_id
 
     def _create_playlist(self, title):
         pane = self.query_one(PlaylistsPane)
@@ -446,9 +449,10 @@ class YTMApp(App):
         }
 
     def _selected_track_args(self):
-        """The track the user means: the highlighted row of the list they last
-        moved through (queue or search results), else the search selection,
-        else whatever is playing."""
+        """The track the user means: the highlighted row of the list they were
+        last in (queue or search results), else the search selection, else
+        the queue cursor (which follows the playing track until moved), else
+        whatever is playing."""
         panes = {"search-results": SearchPane, "queue-table": QueuePane}
         order = [getattr(self, "_pick_pane", None), "search-results", "queue-table"]
         for pane_id in order:
@@ -518,6 +522,7 @@ class YTMApp(App):
 
         def added(data):
             self.notify(f"Added {track_args.get('title') or 'track'} to {pane.title_of(playlist_id) or 'playlist'}")
+            pane.set_count(playlist_id, (data or {}).get("track_count"))
             self._refresh_playlists()
 
         self._request_async(
