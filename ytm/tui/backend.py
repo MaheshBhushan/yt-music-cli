@@ -82,6 +82,7 @@ class Backend:
             "playlist_get": self._playlist_get,
             "playlist_add": self._playlist_add,
             "playlist_play": self._playlist_play,
+            "playlist_create": self._playlist_create,
             "shutdown": self._shutdown,
         }
 
@@ -201,7 +202,27 @@ class Backend:
     def _playlist_list(self, args):
         local = playlists_local.list_playlists()
         remote = music.library_playlists()
+        for playlist in remote:
+            # the listing has no count for the auto-playlists; ask per playlist
+            if not playlist.track_count:
+                try:
+                    count = music.playlist_count(playlist.playlist_id)
+                except Exception:
+                    count = None
+                if count is not None:
+                    playlist.track_count = count
         return {"playlists": [_playlist_dict(p) for p in local + remote]}
+
+    def _playlist_create(self, args):
+        """Create a playlist named `title`; remote unless `local` is set."""
+        title = (args.get("title") or "").strip()
+        if not title:
+            raise BackendError("a playlist needs a name")
+        if args.get("local"):
+            playlist_id = playlists_local.create(title)
+        else:
+            playlist_id = music.create_playlist(title)
+        return {"playlist_id": playlist_id, "title": title, "local": bool(args.get("local"))}
 
     def _playlist_get(self, args):
         playlist_id = args["playlist_id"]
@@ -314,7 +335,10 @@ class Backend:
 
 
 def _default_player(spawn=True, timeout=None):
+    """`timeout=None` really means no timeout: the observing connection
+    blocks for as long as mpv is silent, which while paused is forever.
+    (It used to fall back to the 5 s default, so the listener died quietly
+    after five seconds of pause and the pane froze.)"""
     from ytm import cli
 
-    kwargs = {} if timeout is None else {"timeout": timeout}
-    return cli.player(spawn=spawn, **kwargs)
+    return cli.player(spawn=spawn, timeout=timeout)
