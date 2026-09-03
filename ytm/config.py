@@ -27,6 +27,10 @@ startup. The shape and defaults are::
     search = "/"
     quit = "e"
 
+    [update]
+    check = true
+    auto = false
+
 A missing file yields exactly these defaults. A partial file overrides only
 the keys it specifies -- every other key, and every key in a section that
 is omitted entirely, keeps its default.
@@ -70,6 +74,9 @@ DEFAULTS = {
         "search": "/",
         "quit": "e",
     },
+    # check: ask PyPI once a day whether a newer ytm exists and say so in
+    # the TUI. auto: also install it (and a fresh yt-dlp) when one exists.
+    "update": {"check": True, "auto": False},
 }
 
 #: expected Python type for each known (section, key) -- bool is checked
@@ -89,6 +96,8 @@ _TYPES = {
     ("keys", "prev"): str,
     ("keys", "search"): str,
     ("keys", "quit"): str,
+    ("update", "check"): bool,
+    ("update", "auto"): bool,
 }
 
 

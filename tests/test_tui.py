@@ -1406,3 +1406,44 @@ def test_stale_live_search_reply_cannot_overwrite_newer_results():
             assert app._results_query == "new"
 
     asyncio.run(scenario())
+
+
+def test_tui_toasts_when_a_newer_version_exists(monkeypatch):
+    from ytm import update as update_mod
+
+    monkeypatch.setattr(update_mod, "check", lambda **k: {
+        "installed": "0.2.0", "latest": "0.3.0", "newer": True, "checked_at": 0, "cached": False})
+    upgraded = []
+    monkeypatch.setattr(update_mod, "upgrade", lambda **k: (upgraded.append(1), (True, ""))[1])
+
+    async def scenario():
+        app = YTMApp(client=StubClient())
+        toasts = []
+        monkeypatch.setattr(app, "notify", lambda message, **kw: toasts.append((kw.get("title"), message)))
+        async with app.run_test() as pilot:
+            await settle(pilot, delay=0.3)
+        assert any("0.3.0" in m and "ytm update" in m for _, m in toasts), toasts
+        assert not upgraded  # auto is off by default: tell, don't install
+
+    asyncio.run(scenario())
+
+
+def test_tui_auto_update_runs_the_upgrade(monkeypatch):
+    from ytm import config as config_mod, update as update_mod
+
+    monkeypatch.setattr(update_mod, "check", lambda **k: {
+        "installed": "0.2.0", "latest": "0.3.0", "newer": True, "checked_at": 0, "cached": False})
+    upgraded = []
+    monkeypatch.setattr(update_mod, "upgrade", lambda **k: (upgraded.append(1), (True, "ok"))[1])
+    cfg = config_mod.load("/nonexistent/config.toml")
+    cfg["update"]["auto"] = True
+
+    async def scenario():
+        app = YTMApp(client=StubClient(), config=cfg)
+        toasts = []
+        monkeypatch.setattr(app, "notify", lambda message, **kw: toasts.append(message))
+        async with app.run_test() as pilot:
+            await settle(pilot, delay=0.3)
+        assert upgraded and any("Updated ytm to 0.3.0" in m for m in toasts), toasts
+
+    asyncio.run(scenario())

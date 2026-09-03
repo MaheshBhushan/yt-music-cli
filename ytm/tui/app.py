@@ -13,6 +13,7 @@ from textual.message import Message
 from textual.widgets import DataTable, Input, Static
 
 from ytm import config as config_mod
+from ytm import update
 from ytm.tui.backend import Backend, BackendError
 from ytm.tui.lyrics import LyricsPane
 from ytm.tui.nowplaying import DEFAULT_ART, NowPlaying
@@ -214,6 +215,38 @@ class YTMApp(App):
         self._refresh_playlists()
         self._seed_volume()
         self.query_one("#search-input", Input).focus()
+        if self._update_setting("check"):
+            self.run_worker(self._check_for_update, thread=True, name="update-check", group="update")
+
+    def _update_setting(self, key):
+        # configs built by hand (tests, old files) may lack the section
+        return (self._config.get("update") or {}).get(key, config_mod.DEFAULTS["update"][key])
+
+    def _check_for_update(self):
+        """Once-a-day PyPI check off the UI thread; a toast if there is news.
+        With `[update] auto = true` the upgrade runs right here too."""
+        info = update.check()
+        if not info["newer"]:
+            return
+        latest = info["latest"]
+        if not self._update_setting("auto"):
+            self.call_from_thread(
+                self.notify,
+                f"ytm {latest} is available (you have {info['installed']}). Run: ytm update",
+                title="Update available", timeout=12,
+            )
+            return
+        ok, text = update.upgrade()
+        if ok:
+            self.call_from_thread(
+                self.notify, f"Updated ytm to {latest}. Restart to use it.",
+                title="Updated", timeout=12,
+            )
+        else:
+            self.call_from_thread(
+                self.notify, f"Auto-update failed: {text.splitlines()[0] if text else 'unknown error'}",
+                title="Update", severity="warning", timeout=12,
+            )
 
     def _seed_volume(self):
         """One-time `status` fetch at startup -- not a poll, never repeated.

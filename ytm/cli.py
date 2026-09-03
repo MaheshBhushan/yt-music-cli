@@ -402,6 +402,32 @@ def cmd_cache(args):
     ) or "cache is empty"
 
 
+def cmd_update(args):
+    """Upgrade ytm and yt-dlp in place, or just report what is available."""
+    from ytm import update
+
+    info = update.check(force=True)
+    if info["latest"] is None:
+        line = f"ytm {info['installed']} installed; could not reach PyPI to check for updates"
+    elif info["newer"]:
+        line = f"ytm {info['installed']} installed; {info['latest']} is available"
+    else:
+        line = f"ytm {info['installed']} is up to date"
+    if args.check:
+        return info, line
+    if not info["newer"] and not args.force:
+        return dict(info, upgraded=False), line + " (use --force to reinstall and refresh yt-dlp)"
+    kind = update.install_kind()
+    ok, text = update.upgrade(kind=kind)
+    if not ok:
+        raise CliError(text)
+    after = update.installed_version()
+    return (
+        dict(info, upgraded=True, kind=kind, output=text),
+        f"{line}\nupgraded via {kind}; restart ytm to run the new version",
+    )
+
+
 def cmd_tui(args):
     """The Textual TUI, still on the old daemon until the new one lands."""
     from ytm.tui.app import run as run_tui
@@ -416,6 +442,9 @@ def cmd_tui(args):
 def build_parser():
     parser = argparse.ArgumentParser(prog="ytm", description="YouTube Music from the terminal")
     parser.add_argument("--json", action="store_true", help="print JSON instead of text")
+    from ytm.update import installed_version
+
+    parser.add_argument("--version", action="version", version=f"ytm {installed_version()}")
     sub = parser.add_subparsers(dest="command", metavar="command")
 
     def add(name, func, help, **kwargs):
@@ -467,6 +496,10 @@ def build_parser():
     cache_sub.add_parser("rm").add_argument("video_id")
     cache_sub.add_parser("list")
     p.set_defaults(cache_command="list")
+
+    p = add("update", cmd_update, "upgrade ytm and yt-dlp to the latest release")
+    p.add_argument("--check", action="store_true", help="only report whether a newer version exists")
+    p.add_argument("--force", action="store_true", help="reinstall even when already current")
 
     add("tui", cmd_tui, "open the full-screen interface")
     return parser
