@@ -4,6 +4,8 @@ A full-screen terminal music player for YouTube Music. Two-process design: a bac
 
 No browser, no Electron, no window — audio plays while the terminal stays the only thing on screen.
 
+![ytm's TUI: search results, queue, playlists and lyrics, with the current track and its cover at the bottom](docs/screenshot.png)
+
 ## Requirements
 
 - **Python 3.11+**
