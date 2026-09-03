@@ -10,12 +10,15 @@ Screen {
     height: 1fr;
 }
 
+/* middle row: queue 2 : playlists 1 : lyrics 2 -- the playlist list is
+   short and narrow, queue titles are long */
 #queue-pane {
-    width: 1fr;
+    width: 2fr;
 }
 
 #playlists-pane {
     width: 1fr;
+    min-width: 28;
 }
 
 #playlist-name {
