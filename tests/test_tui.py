@@ -907,7 +907,7 @@ def test_enter_in_the_search_box_hands_focus_to_the_results_so_space_toggles():
     async def scenario():
         stub = StubClient()
         app = YTMApp(client=stub)
-        async with app.run_test() as pilot:
+        async with app.run_test(size=(120, 40)) as pilot:
             await settle(pilot)
             await pilot.click("#search-input")
             for char in "am":
@@ -927,7 +927,7 @@ def test_arrow_keys_move_the_text_cursor_inside_the_search_box():
     async def scenario():
         stub = StubClient()
         app = YTMApp(client=stub)
-        async with app.run_test() as pilot:
+        async with app.run_test(size=(120, 40)) as pilot:
             await settle(pilot)
             await pilot.click("#search-input")
             for char in "ab":
@@ -967,7 +967,7 @@ def test_clicking_a_playlist_plays_it():
     async def scenario():
         stub = StubClient()
         app = YTMApp(client=stub)
-        async with app.run_test() as pilot:
+        async with app.run_test(size=(120, 40)) as pilot:
             await settle(pilot)
             await pilot.click("#playlists-table", offset=(2, 1))
             await settle(pilot)
@@ -1272,7 +1272,7 @@ def test_add_to_playlist_after_a_search_takes_the_search_result_not_the_queue():
     async def scenario():
         stub = StubClient()
         app = YTMApp(client=stub)
-        async with app.run_test() as pilot:
+        async with app.run_test(size=(120, 40)) as pilot:
             await settle(pilot)
             # a queue with a different song highlighted, as after startup
             app.query_one(QueuePane).set_queue(_queue(3, 0))
@@ -1403,7 +1403,7 @@ def test_enter_after_live_results_plays_without_searching_again():
     async def scenario():
         stub = StubClient()
         app = YTMApp(client=stub)
-        async with app.run_test() as pilot:
+        async with app.run_test(size=(120, 40)) as pilot:
             await pilot.click("#search-input")
             for char in "kaanave":
                 await pilot.press(char)
