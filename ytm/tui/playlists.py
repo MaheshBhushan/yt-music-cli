@@ -92,7 +92,7 @@ class PlaylistsPane(Vertical):
     def arm(self, title):
         """Show which song is waiting for a playlist."""
         self.query_one("#playlists-title", Static).update(
-            f"PLAYLISTS  ·  adding: {escape(title)}   [dim]↑/↓ pick, A/Enter add, Esc cancel[/]"
+            f"PLAYLISTS  ·  adding: {escape(title)}   [dim]↑/↓ pick, a/Enter add, Esc cancel[/]"
         )
 
     def disarm(self):
