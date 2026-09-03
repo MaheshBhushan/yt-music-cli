@@ -13,6 +13,7 @@ from ytm.tui.backend import BackendError as ClientError
 from ytm.tui.app import YTMApp
 from ytm.tui.lyrics import LyricsPane, NO_LYRICS_TEXT
 from ytm.tui.nowplaying import NowPlaying
+from ytm.tui.playlists import PlaylistsPane
 from ytm.tui.queue import QueuePane
 from ytm.tui.search import SearchPane
 
@@ -71,6 +72,8 @@ class StubClient:
             }
         if cmd == "playlist_add":
             return {"playlist_id": args["playlist_id"], "added": len(args["video_ids"])}
+        if cmd == "playlist_create":
+            return {"playlist_id": "PLnew", "title": args["title"], "local": False}
         return {"paused": False, "volume": 60}
 
     def listen(self):
@@ -381,7 +384,7 @@ def test_playlists_pane_renders_local_and_remote_markers():
             await settle(pilot)
             pane = app.query_one(PlaylistsPane)
             table = pane.query_one("#playlists-table", _DT)
-            assert table.row_count == 2
+            assert table.row_count == 3  # two playlists plus "+ new playlist"
             rows = [
                 tuple(table.get_row_at(i)) for i in range(table.row_count)
             ]
@@ -1061,5 +1064,100 @@ def test_listener_drop_shows_a_banner_and_reconnects():
             await settle(pilot, 0.3)
             assert stub.listens == 2
             assert any("player events lost" in m for m in shown)
+
+    asyncio.run(scenario())
+
+
+# -- playlists: add from the queue, create new ----------------------------------------
+
+
+def test_add_to_playlist_takes_the_highlighted_queue_row():
+    async def scenario():
+        stub = StubClient()
+        app = YTMApp(client=stub)
+        async with app.run_test() as pilot:
+            await settle(pilot)
+            app.query_one(QueuePane).set_queue(
+                {"tracks": [TRACK, dict(TRACK, video_id="q2", title="Second")], "index": 0})
+            await settle(pilot)
+            queue = app.query_one("#queue-table", DataTable)
+            queue.focus()
+            await pilot.press("down")  # highlight "Second"
+            await pilot.press("P")     # move to playlists, cursor on the first one
+            await settle(pilot)
+            await pilot.press("A")
+            await settle(pilot)
+            adds = [c for c in stub.calls if c[0] == "playlist_add"]
+            assert adds and adds[0][1]["video_ids"] == ["q2"]
+            assert adds[0][1]["playlist_id"] == "remote-1"
+
+    asyncio.run(scenario())
+
+
+def test_add_to_playlist_falls_back_to_the_playing_track():
+    class Playing(StubClient):
+        def request(self, cmd, args=None):
+            if cmd == "status":
+                self.calls.append((cmd, args))
+                return {"current": TRACK, "paused": False, "volume": 70, "index": 0, "count": 1, "position": 3.0}
+            return super().request(cmd, args)
+
+    async def scenario():
+        stub = Playing()
+        app = YTMApp(client=stub)
+        async with app.run_test() as pilot:
+            await settle(pilot)
+            await pilot.press("P")
+            await settle(pilot)
+            await pilot.press("A")
+            await settle(pilot)
+            adds = [c for c in stub.calls if c[0] == "playlist_add"]
+            assert adds and adds[0][1]["video_ids"] == ["abc123"]
+
+    asyncio.run(scenario())
+
+
+def test_new_playlist_row_prompts_for_a_name_and_creates_it():
+    from textual.widgets import Input as _Input
+
+    async def scenario():
+        stub = StubClient()
+        app = YTMApp(client=stub)
+        async with app.run_test() as pilot:
+            await settle(pilot)
+            table = app.query_one("#playlists-table", DataTable)
+            table.focus()
+            table.move_cursor(row=table.row_count - 1)  # the "+ new playlist" row is last
+            await settle(pilot)
+            await pilot.press("enter")
+            await settle(pilot)
+            box = app.query_one("#playlist-name", _Input)
+            assert box.display is True and app.focused is box
+            for ch in "Road Trip":
+                await pilot.press(ch if ch != " " else "space")
+            await pilot.press("enter")
+            await settle(pilot)
+            assert ("playlist_create", {"title": "Road Trip"}) in stub.calls
+            assert box.display is False
+            # the list was refreshed afterwards
+            assert [c[0] for c in stub.calls].count("playlist_list") >= 2
+
+    asyncio.run(scenario())
+
+
+def test_escape_cancels_the_new_playlist_prompt():
+    from textual.widgets import Input as _Input
+
+    async def scenario():
+        stub = StubClient()
+        app = YTMApp(client=stub)
+        async with app.run_test() as pilot:
+            await settle(pilot)
+            app.query_one(PlaylistsPane).prompt_new()
+            await settle(pilot)
+            await pilot.press("escape")
+            await settle(pilot)
+            assert app.query_one("#playlist-name", _Input).display is False
+            assert not any(c[0] == "playlist_create" for c in stub.calls)
 
     asyncio.run(scenario())

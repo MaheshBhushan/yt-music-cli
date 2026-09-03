@@ -365,6 +365,9 @@ class YTMApp(App):
     # -- search --------------------------------------------------------
 
     def on_input_submitted(self, message: Input.Submitted):
+        if message.input.id == "playlist-name":
+            self._create_playlist(message.value)
+            return
         if message.input.id != "search-input":
             return
         def show(data):
@@ -386,7 +389,11 @@ class YTMApp(App):
         elif table_id == "queue-table":
             self._request("queue_play", {"index": message.cursor_row})
         elif table_id == "playlists-table":
-            playlist_id = self.query_one(PlaylistsPane).selected_playlist_id()
+            pane = self.query_one(PlaylistsPane)
+            if pane.new_selected():
+                pane.prompt_new()
+                return
+            playlist_id = pane.selected_playlist_id()
             if playlist_id is not None:
                 self._request_async(
                     "playlist_play", {"playlist_id": playlist_id},
@@ -402,7 +409,29 @@ class YTMApp(App):
         self.query_one("#search-input", Input).focus()
 
     def action_focus_results(self):
+        pane = self.query_one(PlaylistsPane)
+        if pane.query_one("#playlist-name", Input).display:
+            pane.close_prompt()  # Escape while naming a playlist cancels it
+            return
         self.query_one("#search-results", DataTable).focus()
+
+    def on_data_table_row_highlighted(self, message: DataTable.RowHighlighted):
+        # remember which list the user last moved through, so `A` adds the
+        # track they were looking at even after `P` moved focus to playlists
+        if message.data_table.id in ("search-results", "queue-table"):
+            self._pick_pane = message.data_table.id
+
+    def _create_playlist(self, title):
+        pane = self.query_one(PlaylistsPane)
+        pane.close_prompt()
+        if not title.strip():
+            return
+
+        def created(data):
+            self.notify(f"Created playlist {data.get('title') or title}")
+            self._refresh_playlists()
+
+        self._request_async("playlist_create", {"title": title.strip()}, then=created)
 
     @staticmethod
     def _track_args(track):
@@ -417,10 +446,19 @@ class YTMApp(App):
         }
 
     def _selected_track_args(self):
-        track = self.query_one(SearchPane).selected_track()
-        if track is None:
-            return None
-        return self._track_args(track)
+        """The track the user means: the highlighted row of the list they last
+        moved through (queue or search results), else the search selection,
+        else whatever is playing."""
+        panes = {"search-results": SearchPane, "queue-table": QueuePane}
+        order = [getattr(self, "_pick_pane", None), "search-results", "queue-table"]
+        for pane_id in order:
+            if pane_id in panes:
+                track = self.query_one(panes[pane_id]).selected_track()
+                if track is not None:
+                    return self._track_args(track)
+        status = self._request("status") or {}
+        current = status.get("current")
+        return self._track_args(current) if current else None
 
     def action_play_selected(self):
         args = self._selected_track_args()
@@ -465,12 +503,23 @@ class YTMApp(App):
         self.query_one("#playlists-table", DataTable).focus()
 
     def action_add_to_playlist(self):
+        pane = self.query_one(PlaylistsPane)
+        if pane.new_selected():
+            pane.prompt_new()
+            return
+        playlist_id = pane.selected_playlist_id()
+        if playlist_id is None:
+            self._show_error("highlight a playlist first (P), then press A")
+            return
         track_args = self._selected_track_args()
         if track_args is None:
+            self._show_error("nothing to add: highlight a track or play one")
             return
-        playlist_id = self.query_one(PlaylistsPane).selected_playlist_id()
-        if playlist_id is None:
-            return
+
+        def added(data):
+            self.notify(f"Added {track_args.get('title') or 'track'} to {pane.title_of(playlist_id) or 'playlist'}")
+            self._refresh_playlists()
+
         self._request_async(
             "playlist_add",
             {
@@ -478,7 +527,7 @@ class YTMApp(App):
                 "video_ids": [track_args["video_id"]],
                 "tracks": [track_args],
             },
-            then=lambda data: self._refresh_playlists(),
+            then=added,
         )
 
     def action_cycle_pane(self):
