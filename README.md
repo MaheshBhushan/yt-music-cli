@@ -76,22 +76,53 @@ The queue never holds a track twice: playing something already queued jumps to i
 
 ## Authentication
 
-Search works signed out, but library, playlists, likes and lyrics need your account. Credentials live in `~/.config/ytm/auth.json` (mode 0600) and are validated with a live call before being kept.
+Search and playback work signed out. Library, playlists, likes and lyrics need your account. Credentials live in `~/.config/ytm/auth.json` (mode 0600) and are checked with a live call before being kept. Three ways in:
 
 ```bash
-ytm auth                          # cookies from Chrome, Chromium, Edge, Brave, Vivaldi, Opera or Firefox
-ytm auth --from-browser firefox   # pick one
-ytm auth --manual                 # paste request headers copied from DevTools
-ytm auth --oauth                  # device-code flow, for SSH and headless boxes
+ytm auth                          # 1. cookies from a browser you are logged in to (auto-detects)
+ytm auth --from-browser firefox   #    or name one: chrome, chromium, edge, brave, vivaldi, opera, firefox
+ytm auth --manual                 # 2. paste request headers copied from the browser's DevTools
+ytm auth --oauth                  # 3. OAuth device code: for SSH, headless boxes, or Windows without Firefox
 ```
 
-> [!WARNING]
-> **Windows:** Chrome, Edge, Brave, Vivaldi and Opera encrypt their cookies with App-Bound Encryption (Chrome 127 and newer), which no other program can read, so `ytm auth` cannot take cookies from them. Log in at music.youtube.com in **Firefox** and run `ytm auth --from-browser firefox`, or use `--manual` or `--oauth`. When extraction fails, the error names the reason per browser.
+Cookies expire after a few weeks; re-run `ytm auth` when the app says so. OAuth tokens refresh themselves.
 
-Browser cookies expire after a few weeks; re-run `ytm auth` when the app says so. OAuth needs your own Google Cloud client (YouTube removed the shared one in 2024): create an OAuth client of type *TVs and Limited Input devices* and pass `--client-id`/`--client-secret`, or set `YTM_OAUTH_CLIENT_ID`/`YTM_OAUTH_CLIENT_SECRET`.
+### From a browser
+
+Log in at <https://music.youtube.com>, then run `ytm auth`. It tries each browser's profile and takes the first with a YouTube session. If none works, the error says why for each browser: not installed, cookies could not be decrypted, database locked, or no YouTube login.
+
+> [!WARNING]
+> **Windows:** Chrome, Edge, Brave, Vivaldi and Opera encrypt their cookies with App-Bound Encryption (Chrome 127 and newer), which no other program can read, so `ytm auth` cannot import from them. Either log in with **Firefox** and run `ytm auth --from-browser firefox`, or use `--manual` (works with Chrome) or `--oauth`.
+
+### Manual headers
+
+Works with any browser on any OS, including Chrome on Windows.
+
+1. Open <https://music.youtube.com> logged in, and open DevTools (F12) → **Network**.
+2. Filter for `browse` and click around in the app until a `browse` request appears.
+3. Right-click it → **Copy** → **Copy request headers**.
+4. Run `ytm auth --manual` and paste, then press Enter and Ctrl-D (Ctrl-Z then Enter on Windows).
+
+### OAuth
+
+`ytm auth --oauth` prints a URL and a short code. Open the URL on any device, sign in, enter the code, and `ytm` stores a token that refreshes itself. YouTube removed ytmusicapi's shared OAuth client in November 2024, so you need your own from Google Cloud once:
+
+1. Go to <https://console.cloud.google.com/> and create or pick a project.
+2. **APIs & Services → Library**: enable **YouTube Data API v3**.
+3. **APIs & Services → OAuth consent screen**: External is fine. Add your own Google account under **Test users**.
+4. **APIs & Services → Credentials → Create credentials → OAuth client ID**. Application type: **TVs and Limited Input devices**. Name it and create.
+5. Copy the **Client ID** and **Client secret**, then:
+
+```bash
+ytm auth --oauth --client-id YOUR_CLIENT_ID --client-secret YOUR_CLIENT_SECRET
+```
+
+The flags can also come from `YTM_OAUTH_CLIENT_ID` / `YTM_OAUTH_CLIENT_SECRET`, and with neither set `ytm` prompts for them. They are kept in `~/.config/ytm/oauth_client.json` (mode 0600) because every token refresh needs them again. Revoking access in your Google account is reported as expired auth; run `ytm auth --oauth` again.
+
+OAuth has no browser cookies, so streams always resolve anonymously for OAuth users. Search, library and playback of the normal catalogue are unaffected; private or age-gated tracks are not.
 
 > [!NOTE]
-> Streams resolve **anonymously by default**. With account cookies, YouTube hands out URLs that require an account-bound proof-of-origin token and then answers 403. Anonymous resolution plays the same catalogue. Set `behaviour.authenticated_streams = true` only if you need private or age-gated tracks.
+> Streams resolve **anonymously by default** for everyone. With account cookies, YouTube hands out URLs that require an account-bound proof-of-origin token and then answers 403. Anonymous resolution plays the same catalogue. Set `behaviour.authenticated_streams = true` only if you need private or age-gated tracks.
 
 ## Configuration
 
