@@ -284,7 +284,7 @@ class Player:
         index = self.get("playlist-pos", -1)
         index = -1 if index is None else index
         self._loadfile(url, "insert-next", title)
-        self.command("playlist-play-index", index + 1 if index >= 0 else 0)
+        self.play_index(index + 1 if index >= 0 else 0)
 
     def enqueue(self, url, title=None):
         """Append `url` to the end of the playlist without interrupting."""
@@ -349,7 +349,11 @@ class Player:
         ]
 
     def play_index(self, index):
-        self.set("playlist-pos", index)
+        """Jump to entry `index` and make sure it is audible: mpv keeps its
+        paused state across a jump, so "play this" while paused would
+        otherwise load the track and sit there silently."""
+        self.command("playlist-play-index", index)
+        self.set("pause", False)
 
     def remove(self, index):
         self.command("playlist-remove", index)
