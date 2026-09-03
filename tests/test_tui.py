@@ -71,7 +71,7 @@ class StubClient:
                 ]
             }
         if cmd == "playlist_add":
-            return {"playlist_id": args["playlist_id"], "added": len(args["video_ids"])}
+            return {"playlist_id": args["playlist_id"], "added": len(args["video_ids"]), "track_count": 413}
         if cmd == "playlist_create":
             return {"playlist_id": "PLnew", "title": args["title"], "local": False}
         return {"paused": False, "volume": 60}
@@ -1159,5 +1159,180 @@ def test_escape_cancels_the_new_playlist_prompt():
             await settle(pilot)
             assert app.query_one("#playlist-name", _Input).display is False
             assert not any(c[0] == "playlist_create" for c in stub.calls)
+
+    asyncio.run(scenario())
+
+
+def test_add_to_playlist_updates_the_count_and_keeps_the_cursor():
+    async def scenario():
+        stub = StubClient()
+        app = YTMApp(client=stub)
+        async with app.run_test() as pilot:
+            await _search(pilot)
+            app.query_one("#search-results", DataTable).focus()
+            await settle(pilot)
+            await pilot.press("P")
+            await settle(pilot)
+            table = app.query_one("#playlists-table", DataTable)
+            table.move_cursor(row=1)  # "scratch", the local one
+            await settle(pilot)
+            await pilot.press("A")
+            await settle(pilot)
+            add_calls = [c for c in stub.calls if c[0] == "playlist_add"]
+            assert add_calls[0][1]["playlist_id"] == "local-1"
+            # the refresh re-lists (stub says 12) but must not move the highlight
+            assert table.cursor_row == 1
+            assert app.query_one(PlaylistsPane).selected_playlist_id() == "local-1"
+
+    asyncio.run(scenario())
+
+
+def test_playlists_pane_set_count_updates_one_row():
+    async def scenario():
+        app = YTMApp(client=StubClient())
+        async with app.run_test() as pilot:
+            await settle(pilot)
+            pane = app.query_one(PlaylistsPane)
+            pane.set_count("remote-1", 413)
+            table = app.query_one("#playlists-table", DataTable)
+            assert str(table.get_cell("remote-1", "count")) == "413"
+            pane.set_count("nope", 1)  # unknown id is ignored, not an error
+            pane.set_count("remote-1", None)
+            assert str(table.get_cell("remote-1", "count")) == "413"
+
+    asyncio.run(scenario())
+
+
+def _queue(n, index):
+    tracks = [dict(TRACK, video_id=f"q{i}", title=f"Song {i}") for i in range(n)]
+    return {"tracks": tracks, "index": index}
+
+
+def test_queue_cursor_follows_the_playing_track_across_refreshes():
+    async def scenario():
+        stub = StubClient()
+        app = YTMApp(client=stub)
+        async with app.run_test() as pilot:
+            await settle(pilot)
+            pane = app.query_one(QueuePane)
+            table = app.query_one("#queue-table", DataTable)
+            pane.set_queue(_queue(5, 2))
+            assert table.cursor_row == 2 and pane.selected_track()["title"] == "Song 2"
+            # the track advances: a refresh must not park the cursor on row 0
+            pane.set_queue(_queue(5, 3))
+            assert table.cursor_row == 3 and pane.selected_track()["title"] == "Song 3"
+
+    asyncio.run(scenario())
+
+
+def test_queue_cursor_moved_by_the_user_stays_put_on_refresh():
+    async def scenario():
+        stub = StubClient()
+        app = YTMApp(client=stub)
+        async with app.run_test() as pilot:
+            await settle(pilot)
+            pane = app.query_one(QueuePane)
+            table = app.query_one("#queue-table", DataTable)
+            pane.set_queue(_queue(5, 1))
+            table.move_cursor(row=4)
+            pane.set_queue(_queue(5, 2))  # playback moved on, the user's pick did not
+            assert table.cursor_row == 4 and pane.selected_track()["title"] == "Song 4"
+
+    asyncio.run(scenario())
+
+
+def test_add_to_playlist_after_a_search_takes_the_search_result_not_the_queue():
+    async def scenario():
+        stub = StubClient()
+        app = YTMApp(client=stub)
+        async with app.run_test() as pilot:
+            await settle(pilot)
+            # a queue with a different song highlighted, as after startup
+            app.query_one(QueuePane).set_queue(_queue(3, 0))
+            await _search(pilot)  # Enter plays the first result and refreshes the queue
+            await settle(pilot)
+            assert isinstance(app.focused, DataTable) and app.focused.id == "search-results"
+            await pilot.press("P")
+            await settle(pilot)
+            await pilot.press("A")
+            await settle(pilot)
+            add_calls = [c for c in stub.calls if c[0] == "playlist_add"]
+            assert add_calls[-1][1]["video_ids"] == [TRACK["video_id"]]
+
+    asyncio.run(scenario())
+
+
+def test_add_flow_arm_song_pick_playlist_confirm():
+    """A on a song → playlists pane with the song shown, ↓ to pick, A to add,
+    focus comes back to where the user was."""
+    async def scenario():
+        stub = StubClient()
+        app = YTMApp(client=stub)
+        async with app.run_test() as pilot:
+            await _search(pilot)
+            results = app.query_one("#search-results", DataTable)
+            results.focus()
+            await settle(pilot)
+            await pilot.press("A")
+            await settle(pilot)
+            assert app.focused.id == "playlists-table"
+            header = str(app.query_one("#playlists-title").render())
+            assert "adding" in header and TRACK["title"] in header
+            assert not [c for c in stub.calls if c[0] == "playlist_add"]  # nothing sent yet
+            await pilot.press("down")  # "scratch"
+            await pilot.press("A")
+            await settle(pilot)
+            add_calls = [c for c in stub.calls if c[0] == "playlist_add"]
+            assert len(add_calls) == 1
+            assert add_calls[0][1]["playlist_id"] == "local-1"
+            assert add_calls[0][1]["video_ids"] == [TRACK["video_id"]]
+            assert str(app.query_one("#playlists-title").render()) == "PLAYLISTS"
+            assert app.focused is results
+
+    asyncio.run(scenario())
+
+
+def test_add_flow_enter_and_lowercase_a_also_confirm():
+    async def scenario():
+        for confirm in ("enter", "a"):
+            stub = StubClient()
+            app = YTMApp(client=stub)
+            async with app.run_test() as pilot:
+                await _search(pilot)
+                app.query_one("#search-results", DataTable).focus()
+                await settle(pilot)
+                await pilot.press("A")
+                await settle(pilot)
+                await pilot.press(confirm)
+                await settle(pilot)
+                add_calls = [c for c in stub.calls if c[0] == "playlist_add"]
+                assert len(add_calls) == 1, confirm
+                assert add_calls[0][1]["playlist_id"] == "remote-1"
+                # Enter with a song armed must not start playing the playlist
+                assert not [c for c in stub.calls if c[0] == "playlist_play"]
+
+    asyncio.run(scenario())
+
+
+def test_add_flow_escape_cancels_and_returns_focus():
+    async def scenario():
+        stub = StubClient()
+        app = YTMApp(client=stub)
+        async with app.run_test() as pilot:
+            await _search(pilot)
+            results = app.query_one("#search-results", DataTable)
+            results.focus()
+            await settle(pilot)
+            await pilot.press("A")
+            await settle(pilot)
+            await pilot.press("escape")
+            await settle(pilot)
+            assert app.focused is results
+            assert str(app.query_one("#playlists-title").render()) == "PLAYLISTS"
+            await pilot.press("P")
+            await pilot.press("enter")  # with nothing armed, Enter plays the playlist again
+            await settle(pilot)
+            assert not [c for c in stub.calls if c[0] == "playlist_add"]
+            assert [c for c in stub.calls if c[0] == "playlist_play"]
 
     asyncio.run(scenario())

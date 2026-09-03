@@ -205,3 +205,38 @@ def test_playlist_create_remote_and_local(backend, monkeypatch, tmp_path):
     assert made["local"] is True and playlists_local.is_local_id(made["playlist_id"])
     with pytest.raises(BackendError, match="name"):
         backend.request("playlist_create", {"title": "  "})
+
+
+def test_playlist_add_remote_returns_a_fresh_count(backend, monkeypatch):
+    added = []
+    monkeypatch.setattr(music, "add_playlist_items", lambda pid, vids, yt=None: added.append((pid, list(vids))))
+    monkeypatch.setattr(music, "playlist_count", lambda pid, yt=None: 7)
+    out = backend.request("playlist_add", {"playlist_id": "PL1", "video_ids": ["v1"]})
+    assert added == [("PL1", ["v1"])]
+    assert out == {"playlist_id": "PL1", "added": 1, "track_count": 7}
+
+
+def test_playlist_add_to_liked_music_likes_instead_of_inserting(backend, monkeypatch):
+    # YouTube answers HTTP 400 to add_playlist_items("LM", ...); rate_song is the way in
+    liked = []
+    monkeypatch.setattr(music, "like", lambda vid, yt=None: liked.append(vid))
+    monkeypatch.setattr(music, "add_playlist_items", lambda *a, **k: pytest.fail("must not insert into LM"))
+    monkeypatch.setattr(music, "playlist_count", lambda pid, yt=None: 10)
+    out = backend.request("playlist_add", {"playlist_id": "LM", "video_ids": ["v1", "v2"]})
+    assert liked == ["v1", "v2"]
+    assert out["added"] == 2 and out["track_count"] == 10
+
+
+def test_playlist_add_to_episodes_for_later_is_refused(backend, monkeypatch):
+    monkeypatch.setattr(music, "add_playlist_items", lambda *a, **k: pytest.fail("must not insert into SE"))
+    with pytest.raises(BackendError, match="podcast"):
+        backend.request("playlist_add", {"playlist_id": "SE", "video_ids": ["v1"]})
+
+
+def test_playlist_add_count_failure_does_not_undo_the_add(backend, monkeypatch):
+    monkeypatch.setattr(music, "add_playlist_items", lambda pid, vids, yt=None: None)
+    def boom(pid, yt=None):
+        raise RuntimeError("network")
+    monkeypatch.setattr(music, "playlist_count", boom)
+    out = backend.request("playlist_add", {"playlist_id": "PL1", "video_ids": ["v1"]})
+    assert out == {"playlist_id": "PL1", "added": 1}
