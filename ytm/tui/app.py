@@ -94,6 +94,8 @@ class YTMApp(App):
         super().__init__()
         self._client_error = None
         self._volume = 100
+        self._armed = None  # song chosen with A, waiting for a playlist
+        self._return_to = None
         self._config = config if config is not None else config_mod.load()
         self._bindings = BindingsMap(self._build_bindings(self._config["keys"]))
         self.theme = self._resolve_theme(self._config["ui"]["theme"])
@@ -393,6 +395,9 @@ class YTMApp(App):
             if pane.new_selected():
                 pane.prompt_new()
                 return
+            if self._armed is not None:
+                self._add_armed_to_highlighted()  # Enter drops the armed song in
+                return
             playlist_id = pane.selected_playlist_id()
             if playlist_id is not None:
                 self._request_async(
@@ -413,13 +418,19 @@ class YTMApp(App):
         if pane.query_one("#playlist-name", Input).display:
             pane.close_prompt()  # Escape while naming a playlist cancels it
             return
+        if self._armed is not None:
+            self._disarm()  # Escape while choosing a playlist cancels the add
+            return
         self.query_one("#search-results", DataTable).focus()
 
-    def on_data_table_row_highlighted(self, message: DataTable.RowHighlighted):
-        # remember which list the user last moved through, so `A` adds the
-        # track they were looking at even after `P` moved focus to playlists
-        if message.data_table.id in ("search-results", "queue-table"):
-            self._pick_pane = message.data_table.id
+    def on_descendant_focus(self, message):
+        # remember which list the user was last in, so `A` adds the track
+        # they were looking at even after `P` moved focus to playlists.
+        # (Focus, not RowHighlighted: a queue refresh re-adds rows and fires
+        # highlights the user never made.)
+        widget_id = getattr(message.widget, "id", None)
+        if widget_id in ("search-results", "queue-table"):
+            self._pick_pane = widget_id
 
     def _create_playlist(self, title):
         pane = self.query_one(PlaylistsPane)
@@ -446,9 +457,10 @@ class YTMApp(App):
         }
 
     def _selected_track_args(self):
-        """The track the user means: the highlighted row of the list they last
-        moved through (queue or search results), else the search selection,
-        else whatever is playing."""
+        """The track the user means: the highlighted row of the list they were
+        last in (queue or search results), else the search selection, else
+        the queue cursor (which follows the playing track until moved), else
+        whatever is playing."""
         panes = {"search-results": SearchPane, "queue-table": QueuePane}
         order = [getattr(self, "_pick_pane", None), "search-results", "queue-table"]
         for pane_id in order:
@@ -467,6 +479,9 @@ class YTMApp(App):
         self._request("play", args)
 
     def action_enqueue_selected(self):
+        if self._armed is not None and self._in_playlists():
+            self._add_armed_to_highlighted()
+            return
         args = self._selected_track_args()
         if args is None:
             return
@@ -503,21 +518,53 @@ class YTMApp(App):
         self.query_one("#playlists-table", DataTable).focus()
 
     def action_add_to_playlist(self):
+        """Two-step add: `A` on a song arms it and jumps to the playlists pane;
+        up/down picks a playlist; `A` (or `a`, or Enter) drops it in. Escape
+        cancels. `A` in the playlists pane with nothing armed adds the song
+        the user was last on, so the old one-key flow still works."""
         pane = self.query_one(PlaylistsPane)
-        if pane.new_selected():
-            pane.prompt_new()
-            return
-        playlist_id = pane.selected_playlist_id()
-        if playlist_id is None:
-            self._show_error("highlight a playlist first (P), then press A")
+        if self._in_playlists():
+            if pane.new_selected():
+                pane.prompt_new()
+                return
+            self._add_armed_to_highlighted()
             return
         track_args = self._selected_track_args()
+        if track_args is None:
+            self._show_error("nothing to add: highlight a track or play one")
+            return
+        self._armed = track_args
+        self._return_to = self.focused
+        pane.arm(track_args.get("title") or "track")
+        self.query_one("#playlists-table", DataTable).focus()
+
+    def _in_playlists(self):
+        return getattr(self.focused, "id", None) == "playlists-table"
+
+    def _disarm(self):
+        self._armed = None
+        self.query_one(PlaylistsPane).disarm()
+        target = getattr(self, "_return_to", None)
+        self._return_to = None
+        if target is not None and target.is_attached:
+            target.focus()
+
+    def _add_armed_to_highlighted(self):
+        """Add the armed song (or, with none armed, the last-picked one) to
+        the playlist under the cursor."""
+        pane = self.query_one(PlaylistsPane)
+        playlist_id = pane.selected_playlist_id()
+        if playlist_id is None:
+            self._show_error("highlight a playlist first, then press A")
+            return
+        track_args = self._armed or self._selected_track_args()
         if track_args is None:
             self._show_error("nothing to add: highlight a track or play one")
             return
 
         def added(data):
             self.notify(f"Added {track_args.get('title') or 'track'} to {pane.title_of(playlist_id) or 'playlist'}")
+            pane.set_count(playlist_id, (data or {}).get("track_count"))
             self._refresh_playlists()
 
         self._request_async(
@@ -529,6 +576,8 @@ class YTMApp(App):
             },
             then=added,
         )
+        if self._armed is not None:
+            self._disarm()
 
     def action_cycle_pane(self):
         self.focus_next()

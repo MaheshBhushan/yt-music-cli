@@ -18,6 +18,11 @@ from ytm.music import Track
 from ytm.player import Player, PlayerError, watch_url
 
 
+#: YouTube's auto-playlists: ids are fixed and they cannot take plain inserts
+LIKED_MUSIC_ID = "LM"
+EPISODES_ID = "SE"
+
+
 class BackendError(Exception):
     """A request the core could not carry out; shown as a banner by the TUI."""
 
@@ -241,9 +246,24 @@ class Backend:
             meta = {t.get("video_id"): t for t in (args.get("tracks") or [])}
             tracks = [_from_args(meta.get(v) or {"video_id": v}) for v in video_ids]
             playlists_local.add_items(playlist_id, tracks)
+        elif playlist_id == LIKED_MUSIC_ID:
+            # YouTube rejects playlist inserts into the auto-playlist with an
+            # HTTP 400; liking the song is what puts it there.
+            for video_id in video_ids:
+                music.like(video_id)
+        elif playlist_id == EPISODES_ID:
+            raise BackendError("Episodes for Later only takes podcast episodes")
         else:
             music.add_playlist_items(playlist_id, video_ids)
-        return {"playlist_id": playlist_id, "added": len(video_ids)}
+        result = {"playlist_id": playlist_id, "added": len(video_ids)}
+        if not playlists_local.is_local_id(playlist_id):
+            # the library listing can lag behind an add; hand the UI a fresh
+            # count so the row is right without waiting for the next refresh
+            try:
+                result["track_count"] = music.playlist_count(playlist_id)
+            except Exception:
+                pass
+        return result
 
     def _playlist_play(self, args):
         """Replace the queue with a playlist's tracks and start the first."""
