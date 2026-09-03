@@ -14,9 +14,11 @@ when a newer release exists; with ``[update] auto = true`` it runs
 ``upgrade()`` too. ``ytm update`` does the same from the shell.
 """
 
+import importlib.util
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import time
@@ -128,8 +130,16 @@ def install_kind(prefix=None):
     return "pip"
 
 
-def upgrade_commands(kind, yt_dlp=True):
-    """The shell commands that upgrade ytm (and yt-dlp) for `kind`."""
+def _has_module(name):
+    return importlib.util.find_spec(name) is not None
+
+
+def upgrade_commands(kind, yt_dlp=True, has_pip=None, has_uv=None):
+    """The shell commands that upgrade ytm (and yt-dlp) for `kind`.
+
+    A plain venv normally has pip; one made by `uv venv` does not, so that
+    case goes through `uv pip` aimed at this interpreter instead.
+    """
     if kind == "pipx":
         commands = [["pipx", "upgrade", PACKAGE]]
         if yt_dlp:
@@ -141,7 +151,13 @@ def upgrade_commands(kind, yt_dlp=True):
     if kind == "editable":
         return []  # a checkout: `git pull` is the upgrade
     packages = [PACKAGE, "yt-dlp"] if yt_dlp else [PACKAGE]
-    return [[sys.executable, "-m", "pip", "install", "-U", *packages]]
+    has_pip = _has_module("pip") if has_pip is None else has_pip
+    if has_pip:
+        return [[sys.executable, "-m", "pip", "install", "-U", *packages]]
+    has_uv = shutil.which("uv") is not None if has_uv is None else has_uv
+    if has_uv:
+        return [["uv", "pip", "install", "-U", "--python", sys.executable, *packages]]
+    return []
 
 
 def upgrade(kind=None, yt_dlp=True, run=subprocess.run):
@@ -149,7 +165,12 @@ def upgrade(kind=None, yt_dlp=True, run=subprocess.run):
     kind = kind or install_kind()
     commands = upgrade_commands(kind, yt_dlp=yt_dlp)
     if not commands:
-        return False, "ytm runs from a source checkout; update it with git pull"
+        if kind == "editable":
+            return False, "ytm runs from a source checkout; update it with git pull"
+        return False, (
+            f"this environment has neither pip nor uv; run: "
+            f"uv pip install -U --python {sys.executable} {PACKAGE} yt-dlp"
+        )
     output = []
     for command in commands:
         try:
