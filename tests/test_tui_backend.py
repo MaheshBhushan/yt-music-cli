@@ -377,3 +377,19 @@ def test_a_slow_network_request_does_not_block_player_requests(backend, catalogu
     worker.join(5)
     assert out == {"volume": 55.0}
     assert elapsed < 1, f"volume waited {elapsed:.1f}s behind the search"
+
+
+def test_playlist_list_keeps_local_playlists_and_reports_a_signed_out_account(backend, catalogue, monkeypatch, tmp_path):
+    from ytm import playlists_local
+    from ytm.auth import AuthExpired
+
+    monkeypatch.setattr(playlists_local, "DEFAULT_PATH", tmp_path / "pl.json")
+    playlists_local.create("road trip")
+
+    def signed_out(limit=25, yt=None):
+        raise AuthExpired("signed out")
+
+    monkeypatch.setattr(music, "library_playlists", signed_out)
+    out = backend.request("playlist_list")
+    assert [p["title"] for p in out["playlists"]] == ["road trip"]
+    assert out["error"] == "signed out"

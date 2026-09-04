@@ -38,6 +38,12 @@ _EXPIRED_HINT = (
 )
 _MISSING_HINT = "No YouTube Music credentials found at {path}. Run 'ytm auth' to set them up."
 
+_SIGNED_OUT_HINT = (
+    "YouTube Music is treating these credentials as signed out: the library "
+    "and home feed came back empty instead of failing. Browser cookies have "
+    "expired or were copied from a signed-out tab. Run 'ytm auth' again."
+)
+
 _OAUTH_EXPIRED_HINT = (
     "YouTube Music OAuth authentication is no longer valid (the refresh token "
     "was revoked or rejected). Run 'ytm auth --oauth' to re-authenticate."
