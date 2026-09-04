@@ -1271,7 +1271,7 @@ def test_queue_summary_layout_tightens_and_expands():
     assert tight.show_artist is False
 
     roomy = queue_summary_layout(width=100, height=10)
-    assert roomy.column_width == 50
+    assert roomy.column_width == 40  # capped so the two columns stay together
     assert roomy.track_count == 6
     assert roomy.show_artist is True
 
@@ -1283,7 +1283,7 @@ def test_now_playing_queue_uses_space_for_artist_details():
     assert tight == "UP NEXT\nLong Way Home"
 
     roomy = NowPlaying._render_column("UP NEXT", [track], queue_summary_layout(100, 8))
-    assert roomy == "UP NEXT\nLong Way Home - Norah Jones"
+    assert roomy == "UP NEXT\nLong Way Home — Norah Jones"
 
 
 def test_now_playing_queue_rerenders_after_terminal_resize():
@@ -1297,7 +1297,7 @@ def test_now_playing_queue_rerenders_after_terminal_resize():
             await pilot.pause()
 
             up_next = app.query_one("#now-playing-upnext", Static)
-            assert "Song 4 - Sid Sriram" in up_next.content
+            assert "Song 4 — Sid Sriram" in up_next.content
 
             await pilot.resize_terminal(80, 20)
             await pilot.pause()
