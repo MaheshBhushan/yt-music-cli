@@ -335,8 +335,16 @@ class Backend:
         current_id = None
         duration = 0
         position = None
+        last_emitted = None
 
         def emit_position():
+            # mpv reports time-pos a dozen times a second; the strip only
+            # shows whole seconds, so skip changes that would render the same
+            nonlocal last_emitted
+            key = (int(position or 0), duration, current_id)
+            if key == last_emitted:
+                return
+            last_emitted = key
             self._emit("position", {
                 "position": position, "video_id": current_id, "duration_seconds": duration,
             })
@@ -352,7 +360,11 @@ class Backend:
                 if self._closed:
                     return
                 if name == "duration":
-                    duration = value or 0
+                    # None while the next file loads: keep the duration the
+                    # track change already announced instead of zeroing it
+                    if value is None:
+                        continue
+                    duration = value
                     if position is not None:
                         emit_position()
                 elif name == "time-pos":
@@ -373,6 +385,12 @@ class Backend:
                         current_id = new_id
                         if track:
                             self._emit("track_changed", track)
+                            # mpv only reports time-pos/duration once yt-dlp
+                            # has resolved the stream, seconds later; snap
+                            # the bar to 0:00 of the known length right away
+                            position = 0
+                            duration = track.get("duration_seconds") or 0
+                            emit_position()
         except PlayerError as exc:
             if not self._closed:
                 raise BackendError(str(exc)) from exc

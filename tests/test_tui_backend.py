@@ -116,9 +116,13 @@ def test_listen_translates_property_changes_into_events(backend, monkeypatch):
     backend._closed = False
     backend.listen()
     names = [e for e, _ in events]
-    assert names == ["state_changed", "state_changed", "queue_changed", "track_changed", "position"]
+    assert names == ["state_changed", "state_changed", "queue_changed", "track_changed", "position", "position", "position"]
     assert events[3][1]["title"] == "A"
-    assert events[4][1] == {"position": 12.5, "video_id": "a", "duration_seconds": 200.0}
+    # the track change snaps the bar to 0:00 before mpv knows the stream,
+    # then the real duration and the first time-pos follow
+    assert [(d["position"], d["duration_seconds"]) for e, d in events if e == "position"] == [
+        (0, 0), (0, 200.0), (12.5, 200.0),
+    ]
 
 
 def test_play_keeps_the_remembered_thumbnail_when_the_client_omits_it(backend, catalogue):
@@ -297,3 +301,54 @@ def test_mix_tracklist_is_cached_until_refreshed(backend, catalogue, monkeypatch
     assert calls == {"mixes": 2, "get": 2}
     assert lists[-1]["kind"] == "mix"
     assert fresh[0]["video_id"] == "m2"
+
+
+def test_listen_snaps_the_bar_to_zero_when_the_track_changes(backend):
+    backend.request("play", {"video_id": "a", "title": "A"})
+    backend.request("enqueue", {"video_id": "b", "title": "B", "duration_seconds": 180})
+    changes = [("playlist-pos", 0), ("time-pos", 50.0), ("duration", 200.0)]
+
+    class Observer:
+        def observe(self, *names):
+            yield from changes
+            for entry in backend.fake.entries:
+                entry["current"] = entry["video_id"] == "b"
+            yield ("playlist-pos", 1)
+            yield ("duration", None)  # mpv while the next file loads
+            backend.close()
+            from ytm.player import PlayerError
+            raise PlayerError("closed")
+
+        def close(self):
+            pass
+
+    backend._make_player = lambda spawn=True, timeout=None: Observer()
+    events = []
+    backend.on_event(lambda e, d: events.append((e, d)))
+    backend._closed = False
+    backend.listen()
+    positions = [(d["video_id"], d["position"], d["duration_seconds"]) for e, d in events if e == "position"]
+    assert positions[-1] == ("b", 0, 180)
+    assert positions.count(("b", 0, 180)) == 1
+
+
+def test_listen_skips_position_changes_within_the_same_second(backend):
+    backend.request("play", {"video_id": "a", "title": "A"})
+    changes = [("duration", 200.0), ("time-pos", 3.1), ("time-pos", 3.5), ("time-pos", 3.9), ("time-pos", 4.0)]
+
+    class Observer:
+        def observe(self, *names):
+            yield from changes
+            backend.close()
+            from ytm.player import PlayerError
+            raise PlayerError("closed")
+
+        def close(self):
+            pass
+
+    backend._make_player = lambda spawn=True, timeout=None: Observer()
+    events = []
+    backend.on_event(lambda e, d: events.append((e, d)))
+    backend._closed = False
+    backend.listen()
+    assert [d["position"] for e, d in events if e == "position"] == [3.1, 4.0]
