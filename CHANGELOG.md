@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.5.4 — 2026-09-04
 
 - Expired or signed-out browser cookies are reported instead of silently hiding your playlists and mixes. YouTube answers stale cookies with the signed-out page (empty library, no mixes) rather than an error, so `ytm mix` said "no mixes available" and the TUI showed only local playlists. Both now say the credentials are signed out and to run `ytm auth` again; the TUI keeps the local playlists visible.
 - Volume keys work again, from anywhere. `+` and `-` are handled before the search box, so they change the volume instead of being typed, and the search box's `-` in a query is no longer needed for hyphenated names (YouTube ignores it).
