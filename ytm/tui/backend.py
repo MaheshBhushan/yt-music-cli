@@ -10,7 +10,6 @@ change is translated into the same `track_changed` / `position` /
 `state_changed` / `queue_changed` events the TUI already understands.
 """
 
-import threading
 from dataclasses import asdict
 
 from ytm import music, playlists_local, state
@@ -62,7 +61,6 @@ class Backend:
             self._player = self._make_player(spawn=True)
         except PlayerError as exc:
             raise BackendError(str(exc)) from exc
-        self._lock = threading.Lock()
         self._subscribers = []
         self._closed = False
         # mixes are re-rolled by YouTube on every fetch, so a session keeps
@@ -104,9 +102,11 @@ class Backend:
         handler = self._routes.get(cmd)
         if handler is None:
             raise BackendError(f"unknown command: {cmd}")
+        # no lock here: handlers that talk to YouTube take seconds, and a
+        # volume or pause request must not queue behind them. The player
+        # connection serialises its own commands.
         try:
-            with self._lock:
-                return handler(args or {})
+            return handler(args or {})
         except PlayerError as exc:
             raise BackendError(str(exc)) from exc
         except Exception as exc:  # auth or network failure
@@ -372,12 +372,10 @@ class Backend:
                         position = value
                         emit_position()
                 elif name in ("pause", "volume"):
-                    with self._lock:
-                        s = self._player.status()
+                    s = self._player.status()
                     self._emit("state_changed", {"paused": s["paused"], "volume": s["volume"]})
                 elif name in ("playlist-pos", "playlist-count"):
-                    with self._lock:
-                        queue = self._queue()
+                    queue = self._queue()
                     self._emit("queue_changed", queue)
                     track = queue["tracks"][queue["index"]] if queue["index"] >= 0 else None
                     new_id = track["video_id"] if track else None

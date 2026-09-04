@@ -2,6 +2,7 @@
 mpv Player and the catalogue, with both faked."""
 
 import pytest
+import time
 
 from ytm import music, state
 from ytm.tui.backend import Backend, BackendError
@@ -352,3 +353,27 @@ def test_listen_skips_position_changes_within_the_same_second(backend):
     backend._closed = False
     backend.listen()
     assert [d["position"] for e, d in events if e == "position"] == [3.1, 4.0]
+
+
+def test_a_slow_network_request_does_not_block_player_requests(backend, catalogue, monkeypatch):
+    import threading
+
+    release = threading.Event()
+    started = threading.Event()
+
+    def slow_search(q, limit=20, yt=None):
+        started.set()
+        release.wait(5)
+        return []
+
+    monkeypatch.setattr(music, "search", slow_search)
+    worker = threading.Thread(target=lambda: backend.request("search", {"query": "x"}), daemon=True)
+    worker.start()
+    assert started.wait(2)
+    t0 = time.monotonic()
+    out = backend.request("volume", {"level": 55})
+    elapsed = time.monotonic() - t0
+    release.set()
+    worker.join(5)
+    assert out == {"volume": 55.0}
+    assert elapsed < 1, f"volume waited {elapsed:.1f}s behind the search"

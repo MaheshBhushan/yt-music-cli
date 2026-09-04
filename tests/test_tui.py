@@ -1517,3 +1517,19 @@ def test_play_next_key_sends_enqueue_next():
             assert "play next" in str(app.query_one("#shortcut-bar").render())
 
     asyncio.run(scenario())
+
+
+def test_volume_keys_work_while_the_search_box_has_focus():
+    async def scenario():
+        stub = StubClient()
+        app = YTMApp(client=stub)
+        async with app.run_test() as pilot:
+            app.query_one("#search-input").focus()
+            await settle(pilot)
+            start = app._volume
+            await pilot.press("plus")
+            await settle(pilot)
+            assert app._volume == start + 5
+            assert app.query_one("#search-input").value == ""
+
+    asyncio.run(scenario())

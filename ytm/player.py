@@ -23,6 +23,7 @@ import socket
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from pathlib import Path
 
@@ -135,6 +136,8 @@ class Player:
         self._timeout = timeout
         self._file = None
         self._request_id = 0
+        # one request/reply at a time on the socket; callers may be on any thread
+        self._io_lock = threading.RLock()
         self._connect(spawn=spawn, spawner=spawner)
 
     # -- connection ----------------------------------------------------------
@@ -199,29 +202,30 @@ class Player:
         carrying our request id is returned. Raises PlayerError when mpv
         answers with anything but ``success``.
         """
-        if self._file is None:
-            raise PlayerError("player connection is closed")
-        self._request_id += 1
-        request = {"command": list(args), "request_id": self._request_id}
-        try:
-            self._file.write((json.dumps(request) + "\n").encode("utf-8"))
-            while True:
-                line = self._file.readline()
-                if not line:
-                    raise PlayerError("mpv closed the connection")
-                try:
-                    message = json.loads(line)
-                except ValueError:
-                    continue
-                if message.get("request_id") != self._request_id:
-                    continue
-                if message.get("error") != "success":
-                    raise PlayerError(
-                        f"mpv rejected {args[0]}: {message.get('error')}"
-                    )
-                return message.get("data")
-        except (OSError, socket.timeout) as exc:
-            raise PlayerError(f"lost the connection to mpv: {exc}") from exc
+        with self._io_lock:
+            if self._file is None:
+                raise PlayerError("player connection is closed")
+            self._request_id += 1
+            request = {"command": list(args), "request_id": self._request_id}
+            try:
+                self._file.write((json.dumps(request) + "\n").encode("utf-8"))
+                while True:
+                    line = self._file.readline()
+                    if not line:
+                        raise PlayerError("mpv closed the connection")
+                    try:
+                        message = json.loads(line)
+                    except ValueError:
+                        continue
+                    if message.get("request_id") != self._request_id:
+                        continue
+                    if message.get("error") != "success":
+                        raise PlayerError(
+                            f"mpv rejected {args[0]}: {message.get('error')}"
+                        )
+                    return message.get("data")
+            except (OSError, socket.timeout) as exc:
+                raise PlayerError(f"lost the connection to mpv: {exc}") from exc
 
     def observe(self, *names):
         """Yield ``(name, value)`` for every change to the given properties.
