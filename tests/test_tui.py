@@ -7,12 +7,12 @@ rather than depending on the pytest-asyncio plugin.
 
 import asyncio
 
-from textual.widgets import DataTable
+from textual.widgets import DataTable, Static
 
 from ytm.tui.backend import BackendError as ClientError
 from ytm.tui.app import YTMApp
 from ytm.tui.lyrics import LyricsPane, NO_LYRICS_TEXT
-from ytm.tui.nowplaying import NowPlaying, split_queue
+from ytm.tui.nowplaying import NowPlaying, queue_summary_layout, split_queue
 from ytm.tui.playlists import PlaylistsPane
 from ytm.tui.queue import QueuePane
 from ytm.tui.search import SearchPane
@@ -1259,6 +1259,52 @@ def test_split_queue_in_the_middle():
     played, up_next = split_queue(tracks, 3)
     assert [t["title"] for t in played] == ["Song 1", "Song 2"]
     assert [t["title"] for t in up_next] == ["Song 4", "Song 5"]
+
+
+def test_queue_summary_layout_tightens_and_expands():
+    very_narrow = queue_summary_layout(width=18, height=4)
+    assert very_narrow.column_width == 9
+
+    tight = queue_summary_layout(width=40, height=4)
+    assert tight.column_width == 20
+    assert tight.track_count == 1
+    assert tight.show_artist is False
+
+    roomy = queue_summary_layout(width=100, height=10)
+    assert roomy.column_width == 40  # capped so the two columns stay together
+    assert roomy.track_count == 6
+    assert roomy.show_artist is True
+
+
+def test_now_playing_queue_uses_space_for_artist_details():
+    track = dict(TRACK, title="Long Way Home", artist="Norah Jones")
+
+    tight = NowPlaying._render_column("UP NEXT", [track], queue_summary_layout(40, 4))
+    assert tight == "UP NEXT\nLong Way Home"
+
+    roomy = NowPlaying._render_column("UP NEXT", [track], queue_summary_layout(100, 8))
+    assert roomy == "UP NEXT\nLong Way Home — Norah Jones"
+
+
+def test_now_playing_queue_rerenders_after_terminal_resize():
+    async def scenario():
+        stub = StubClient()
+        app = YTMApp(client=stub)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await settle(pilot)
+            now_playing = app.query_one(NowPlaying)
+            now_playing.set_queue(_queue(8, 3))
+            await pilot.pause()
+
+            up_next = app.query_one("#now-playing-upnext", Static)
+            assert "Song 4 — Sid Sriram" in up_next.content
+
+            await pilot.resize_terminal(80, 20)
+            await pilot.pause()
+
+            assert up_next.content == "UP NEXT\nSong 4"
+
+    asyncio.run(scenario())
 
 
 def test_queue_cursor_follows_the_playing_track_across_refreshes():

@@ -2,6 +2,7 @@
 
 import io
 import urllib.request
+from dataclasses import dataclass
 
 from textual.containers import Container, Horizontal, Vertical
 from textual.markup import escape
@@ -43,10 +44,46 @@ def _format_time(seconds):
 
 #: title width in each played/up-next column
 QUEUE_COLUMN_WIDTH = 16
+QUEUE_COLUMN_MIN_WIDTH = 12
+#: wider than this and UP NEXT drifts to the far edge of a wide terminal
+QUEUE_COLUMN_MAX_WIDTH = 40
+QUEUE_ARTIST_MIN_WIDTH = 28
+QUEUE_DEFAULT_HEIGHT = 8
+QUEUE_RESERVED_ROWS = 4
+
+
+@dataclass(frozen=True)
+class QueueSummaryLayout:
+    column_width: int
+    track_count: int
+    show_artist: bool
 
 
 def _truncate(title, width=QUEUE_COLUMN_WIDTH):
     return title if len(title) <= width else title[:width - 1] + "…"
+
+
+def queue_summary_layout(width=None, height=None):
+    """Return the played/up-next column shape for the available cells."""
+    width = width or QUEUE_COLUMN_WIDTH * 2
+    height = height or QUEUE_DEFAULT_HEIGHT
+    half_width = max(1, width // 2)
+    column_width = (
+        min(QUEUE_COLUMN_MAX_WIDTH, max(QUEUE_COLUMN_MIN_WIDTH, half_width))
+        if width >= QUEUE_COLUMN_MIN_WIDTH * 2
+        else half_width
+    )
+    track_count = max(1, height - QUEUE_RESERVED_ROWS)
+    show_artist = column_width >= QUEUE_ARTIST_MIN_WIDTH and track_count > 1
+    return QueueSummaryLayout(column_width, track_count, show_artist)
+
+
+def queue_track_label(track, layout):
+    title = track.get("title") or "Unknown Title"
+    artist = (track.get("artist") or "").strip()
+    if layout.show_artist and artist:
+        return _truncate(f"{title} — {artist}", layout.column_width)  # same dash as the queue pane
+    return _truncate(title, layout.column_width)
 
 
 def split_queue(tracks, index, before=2, after=3):
@@ -158,6 +195,8 @@ class NowPlaying(Vertical):
         self._video_id = None
         self._title = "nothing playing"
         self._paused = False
+        self._queue_tracks = []
+        self._queue_index = None
 
     def compose(self):
         with Horizontal():
@@ -227,21 +266,41 @@ class NowPlaying(Vertical):
     def set_volume(self, level):
         self.query_one("#now-playing-volume", Static).update(f"vol {int(level)}")
 
+    def on_resize(self):
+        self.call_after_refresh(self._refresh_queue_summary)
+
     def set_queue(self, data):
         """Refresh the played/up-next columns from a `queue_get`/
         `queue_changed` payload (same shape as `QueuePane.set_queue`)."""
         data = data or {}
-        played, up_next = split_queue(data.get("tracks"), data.get("index"))
+        self._queue_tracks = data.get("tracks") or []
+        self._queue_index = data.get("index")
+        self._refresh_queue_summary()
+
+    def _refresh_queue_summary(self, width=None, height=None):
+        text_width = self.query_one("#now-playing-text").size.width
+        width = text_width or width
+        height = height or self.size.height
+        layout = queue_summary_layout(width, height)
+        self.query_one("#now-playing-played", Static).styles.width = layout.column_width
+        self.query_one("#now-playing-upnext", Static).styles.width = layout.column_width
+        played, up_next = split_queue(
+            self._queue_tracks,
+            self._queue_index,
+            before=layout.track_count,
+            after=layout.track_count,
+        )
         self.query_one("#now-playing-played", Static).update(
-            self._render_column("PLAYED", played)
+            self._render_column("PLAYED", played, layout)
         )
         self.query_one("#now-playing-upnext", Static).update(
-            self._render_column("UP NEXT", up_next)
+            self._render_column("UP NEXT", up_next, layout)
         )
 
     @staticmethod
-    def _render_column(heading, tracks):
+    def _render_column(heading, tracks, layout=None):
+        layout = layout or queue_summary_layout()
         lines = [heading] + [
-            escape(_truncate(track.get("title", ""))) for track in tracks
+            escape(queue_track_label(track, layout)) for track in tracks
         ]
         return "\n".join(lines)
