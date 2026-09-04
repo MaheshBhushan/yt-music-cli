@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Volume keys work again, from anywhere. `+` and `-` are handled before the search box, so they change the volume instead of being typed, and the search box's `-` in a query is no longer needed for hyphenated names (YouTube ignores it).
+- The TUI no longer freezes while a YouTube call is in flight. One lock used to cover every backend request, so pressing a key during the startup playlist load or a search waited seconds for it; the lock now sits on the mpv connection only. The volume indicator is seeded in about 1 s instead of 5.
+
 ## 0.5.3 — 2026-09-04
 
 - The progress line resets to 0:00 of the new song's length the moment the track changes, instead of showing the old song's position for the two seconds mpv needs to resolve the stream.

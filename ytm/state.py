@@ -13,6 +13,7 @@ mpv and are never mirrored here.
 
 import json
 import os
+import threading
 from dataclasses import asdict
 from pathlib import Path
 
@@ -47,11 +48,16 @@ def save(data, path=None):
     os.replace(tmp, path)
 
 
+#: remember_* are read-modify-write; TUI worker threads call them concurrently
+_WRITE_LOCK = threading.Lock()
+
+
 def remember_search(tracks, path=None):
-    data = load(path)
-    data["last_search"] = [asdict(t) for t in tracks]
-    _remember(data, tracks)
-    save(data, path)
+    with _WRITE_LOCK:
+        data = load(path)
+        data["last_search"] = [asdict(t) for t in tracks]
+        _remember(data, tracks)
+        save(data, path)
 
 
 def last_search(path=None):
@@ -59,9 +65,10 @@ def last_search(path=None):
 
 
 def remember_tracks(tracks, path=None):
-    data = load(path)
-    _remember(data, tracks)
-    save(data, path)
+    with _WRITE_LOCK:
+        data = load(path)
+        _remember(data, tracks)
+        save(data, path)
 
 
 def _remember(data, tracks):

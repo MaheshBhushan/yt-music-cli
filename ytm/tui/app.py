@@ -90,8 +90,9 @@ class YTMApp(App):
         ("p", "prev", "Prev"),
         Binding("left", "seek_back", "Seek -5s", priority=True),
         Binding("right", "seek_forward", "Seek +5s", priority=True),
-        ("plus", "volume_up", "Vol +"),
-        ("minus", "volume_down", "Vol -"),
+        # priority: volume from anywhere, even while typing a search
+        Binding("plus", "volume_up", "Vol +", priority=True),
+        Binding("minus", "volume_down", "Vol -", priority=True),
         ("tab", "cycle_pane", "Cycle panes"),
         Binding("escape", "focus_results", "Results", show=False),
         ("e", "quit_only", "Exit"),
@@ -154,8 +155,9 @@ class YTMApp(App):
             # them back to the search box while it has focus
             Binding("left", "seek_back", "Seek -5s", priority=True),
             Binding("right", "seek_forward", "Seek +5s", priority=True),
-            ("plus", "volume_up", "Vol +"),
-            ("minus", "volume_down", "Vol -"),
+            # priority: volume from anywhere, even while typing a search
+            Binding("plus", "volume_up", "Vol +", priority=True),
+            Binding("minus", "volume_down", "Vol -", priority=True),
             ("tab", "cycle_pane", "Cycle panes"),
             Binding("escape", "focus_results", "Results", show=False),
             # no priority on any letter key: while the search box has focus
