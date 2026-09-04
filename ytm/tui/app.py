@@ -80,6 +80,7 @@ class YTMApp(App):
     BINDINGS = [
         ("/", "focus_search", "Search"),
         ("s", "focus_search", "Search"),
+        ("h", "toggle_search", "Hide search"),
         ("q", "enqueue_selected", "Enqueue"),
         ("u", "play_next_selected", "Up next"),
         ("l", "focus_playlists", "Playlists"),
@@ -143,6 +144,7 @@ class YTMApp(App):
             # `s`/`e` are plain (non-priority) bindings: they act from any
             # pane but stay ordinary letters while the search box has focus
             ("s", "focus_search", "Search"),
+            ("h", "toggle_search", "Hide search"),
             ("q", "enqueue_selected", "Enqueue"),
             ("u", "play_next_selected", "Up next"),
             ("l", "focus_playlists", "Playlists"),
@@ -190,6 +192,7 @@ class YTMApp(App):
             link("l", "playlists", "focus_playlists"),
             link("a", "add to playlist", "add_to_playlist"),
             link("r", "refresh mixes", "refresh_mixes"),
+            link("h", "hide search", "toggle_search"),
             link("Tab", "panes", "cycle_pane"),
             link("x", "exit+stop", "quit_and_shutdown"),
         ])
@@ -221,7 +224,15 @@ class YTMApp(App):
         compact = size.width < self.COMPACT_WIDTH or size.height < self.COMPACT_HEIGHT
         self.screen.set_class(compact, "compact")
         if compact and self.focused is not None and not self.focused.display:
-            self.query_one("#search-input", Input).focus()
+            self._focus_fallback()
+
+    def _focus_fallback(self):
+        """Focus the search box, or the queue when the search pane is hidden."""
+        search = self.query_one("#search-input", Input)
+        if search.display:
+            search.focus()
+        else:
+            self.query_one("#queue-table", DataTable).focus()
 
     def on_mount(self):
         if self._client_error is not None:
@@ -525,7 +536,17 @@ class YTMApp(App):
     # -- actions ---------------------------------------------------------
 
     def action_focus_search(self):
+        self.screen.remove_class("search-hidden")  # `s` / `/` bring a hidden pane back
         self.query_one("#search-input", Input).focus()
+
+    def action_toggle_search(self):
+        """Hide the search box and results (or show them again) for a
+        cleaner screen while just listening. Not remembered across runs."""
+        hidden = not self.screen.has_class("search-hidden")
+        self.screen.set_class(hidden, "search-hidden")
+        pane = self.query_one("#search-pane")
+        if hidden and self.focused is not None and pane in self.focused.ancestors_with_self:
+            self.query_one("#queue-table", DataTable).focus()
 
     def action_focus_results(self):
         pane = self.query_one(PlaylistsPane)

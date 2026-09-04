@@ -788,6 +788,58 @@ def test_s_focuses_search_from_another_pane():
     asyncio.run(scenario())
 
 
+def test_h_hides_the_search_pane_and_s_brings_it_back():
+    async def scenario():
+        stub = StubClient()
+        app = YTMApp(client=stub)
+        async with app.run_test(size=(120, 40)) as pilot:
+            await settle(pilot)
+            pane = app.query_one("#search-pane")
+            await pilot.click("#search-input")
+            await pilot.press("h")  # typing: `h` is a letter inside the box
+            await settle(pilot)
+            assert pane.display
+            assert app.query_one("#search-input").value == "h"
+            app.query_one("#queue-table").focus()
+            await settle(pilot)
+            await pilot.press("h")
+            await settle(pilot)
+            assert not pane.display
+            assert app.focused.id == "queue-table"
+            await pilot.press("s")
+            await settle(pilot)
+            assert pane.display
+            assert app.focused.id == "search-input"
+            app.query_one("#queue-table").focus()
+            await pilot.press("h")
+            await settle(pilot)
+            assert not pane.display
+            await pilot.press("h")  # toggles back too
+            await settle(pilot)
+            assert pane.display
+
+    asyncio.run(scenario())
+
+
+def test_hiding_the_search_pane_moves_focus_off_it():
+    async def scenario():
+        stub = StubClient()
+        app = YTMApp(client=stub)
+        async with app.run_test(size=(120, 40)) as pilot:
+            await settle(pilot)
+            app.query_one("#search-results").focus()
+            await settle(pilot)
+            await pilot.press("h")
+            await settle(pilot)
+            assert not app.query_one("#search-pane").display
+            assert app.focused.id == "queue-table"
+            await pilot.press("tab")  # the focus chain skips the hidden pane
+            await settle(pilot)
+            assert app.focused.id != "search-input"
+
+    asyncio.run(scenario())
+
+
 def test_e_exits_without_stopping_playback():
     async def scenario():
         stub = StubClient()

@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- `h` hides the search box and results so the queue, playlists and lyrics get the whole screen while you listen; `s`, `/` or `h` bring them back. Not remembered across runs. Suggested by @paul-sx (#30).
 - The PLAYED / UP NEXT columns in the player strip size themselves to the terminal: up to four tracks per side with the artist when there is room, one per side in compact mode where they now stay visible in place of the artist line. Columns are capped at 40 cells so they stay side by side. Contributed by @paul-sx (#28).
 
 ## 0.5.5 — 2026-09-04
