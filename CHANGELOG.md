@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- The progress line resets to 0:00 of the new song's length the moment the track changes, instead of showing the old song's position for the two seconds mpv needs to resolve the stream.
+- Position updates are sent to the TUI once per second instead of a dozen times, so the strip re-renders 12x less often.
+
 ## 0.5.2 — 2026-09-04
 
 - Mixes no longer re-roll on every play. YouTube generates a fresh tracklist each time a mix is fetched, so playing one twice queued different songs than the pane had shown. The TUI now keeps each mix's tracklist for the session; `r` refreshes all mixes at once.
