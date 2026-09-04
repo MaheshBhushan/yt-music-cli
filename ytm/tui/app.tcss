@@ -148,3 +148,9 @@ Screen {
 .compact #now-playing-artist {
     display: none;
 }
+
+/* `h` hides the search box and results while just listening; `s` or `/`
+   bring them back (see YTMApp.action_toggle_search) */
+.search-hidden #search-pane {
+    display: none;
+}
