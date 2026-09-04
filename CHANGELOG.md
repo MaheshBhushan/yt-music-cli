@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.5.3 — 2026-09-04
 
 - The progress line resets to 0:00 of the new song's length the moment the track changes, instead of showing the old song's position for the two seconds mpv needs to resolve the stream.
 - Position updates are sent to the TUI once per second instead of a dozen times, so the strip re-renders 12x less often.
