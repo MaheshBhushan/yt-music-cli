@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- The PLAYED / UP NEXT columns in the player strip size themselves to the terminal: up to four tracks per side with the artist when there is room, one per side in compact mode where they now stay visible in place of the artist line. Columns are capped at 40 cells so they stay side by side. Contributed by @paul-sx (#28).
+
 ## 0.5.5 — 2026-09-04
 
 - `ytm auth --from-browser helium` reads cookies from the Helium browser (macOS, Linux, Windows), and auto-detection tries it after the mainstream browsers. Helium stores its profile under `net.imput.helium` and, on macOS, names its Keychain item "Helium Storage Key", neither of which yt-dlp knows; ytm supplies both and reuses yt-dlp's Chromium decryption. Fixes #27.
