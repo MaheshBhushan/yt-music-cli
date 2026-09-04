@@ -84,6 +84,7 @@ class YTMApp(App):
         ("u", "play_next_selected", "Up next"),
         ("l", "focus_playlists", "Playlists"),
         ("a", "add_to_playlist", "Add to playlist"),
+        ("r", "refresh_mixes", "Refresh mixes"),
         ("space", "toggle", "Play/Pause"),
         ("n", "next", "Next"),
         ("p", "prev", "Prev"),
@@ -145,6 +146,7 @@ class YTMApp(App):
             ("u", "play_next_selected", "Up next"),
             ("l", "focus_playlists", "Playlists"),
             ("a", "add_to_playlist", "Add to playlist"),
+            ("r", "refresh_mixes", "Refresh mixes"),
             (keys["toggle"], "toggle", "Play/Pause"),
             (keys["next"], "next", "Next"),
             (keys["prev"], "prev", "Prev"),
@@ -185,6 +187,7 @@ class YTMApp(App):
             f"[@click=app.volume_up][b]+[/b][/]/[@click=app.volume_down][b]-[/b][/] volume",
             link("l", "playlists", "focus_playlists"),
             link("a", "add to playlist", "add_to_playlist"),
+            link("r", "refresh mixes", "refresh_mixes"),
             link("Tab", "panes", "cycle_pane"),
             link("x", "exit+stop", "quit_and_shutdown"),
         ])
@@ -634,6 +637,14 @@ class YTMApp(App):
 
     def action_focus_playlists(self):
         self.query_one("#playlists-table", DataTable).focus()
+
+    def action_refresh_mixes(self):
+        """Ask YouTube for today's mixes again. Until then a mix plays the
+        same tracklist every time, so what the pane showed is what you get."""
+        def done(data):
+            self.query_one(PlaylistsPane).set_playlists(data)
+            self.notify("Mixes refreshed", timeout=3)
+        self._request_async("mixes_refresh", then=done)
 
     def action_add_to_playlist(self):
         """Two-step add: `a` on a song arms it and jumps to the playlists pane;
