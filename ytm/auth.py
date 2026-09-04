@@ -2,7 +2,9 @@
 import getpass
 import json
 import re
+import subprocess
 import sys
+import tempfile
 import os
 import time
 from pathlib import Path
@@ -21,7 +23,21 @@ AUTH_PATH = Path.home() / ".config" / "ytm" / "auth.json"
 # Edge/Brave/Vivaldi/Opera on the same engine) protect cookies with
 # App-Bound Encryption, which no outside program can undo, so they never
 # yield a usable session and only cost time.
-_CHROMIUM_BROWSERS = ("chrome", "chromium", "edge", "brave", "vivaldi", "opera")
+_CHROMIUM_BROWSERS = ("chrome", "chromium", "edge", "brave", "vivaldi", "opera", "helium")
+
+#: Chromium forks yt-dlp does not know by name. Per platform: where the
+#: profile lives and how the cookie key is labelled in the OS keystore.
+#: Helium: github.com/imputnet/helium-{macos,linux,windows} branding patches.
+_CHROMIUM_FORKS = {
+    "helium": {
+        "darwin": {
+            "dir": "~/Library/Application Support/net.imput.helium",
+            "keychain": ("Helium Storage Key", "Helium"),  # (service, account)
+        },
+        "linux": {"dir": "~/.config/net.imput.helium", "keyring": "Chromium"},
+        "win32": {"dir": r"%LOCALAPPDATA%\imput\Helium\User Data"},
+    },
+}
 _AUTODETECT_BROWSERS = (
     ("firefox", *_CHROMIUM_BROWSERS) if sys.platform == "win32" else (*_CHROMIUM_BROWSERS, "firefox")
 )
@@ -241,6 +257,82 @@ def _cookie_header_from_jar(jar):
     return "; ".join(f"{name}={value}" for name, value in pairs)
 
 
+def _fork_settings(browser_name):
+    """Profile dir and keystore label for a Chromium fork on this platform,
+    or None when the fork is unknown here."""
+    platform = "linux" if sys.platform.startswith("linux") else sys.platform
+    settings = _CHROMIUM_FORKS.get(browser_name, {}).get(platform)
+    if settings is None:
+        return None
+    directory = settings["dir"]
+    if platform == "linux":
+        directory = directory.replace("~/.config", os.environ.get("XDG_CONFIG_HOME", "~/.config"), 1)
+    # %VAR% is Windows syntax; os.path.expandvars only honours it on Windows
+    directory = re.sub(r"%([^%]+)%", lambda m: os.environ.get(m.group(1), m.group(0)), directory)
+    return {**settings, "dir": os.path.expanduser(directory)}
+
+
+def _keychain_password(service, account):
+    """The cookie key macOS keeps for a browser, from the login Keychain."""
+    result = subprocess.run(
+        ["security", "find-generic-password", "-w", "-a", account, "-s", service],
+        capture_output=True, check=False,
+    )
+    return result.stdout.rstrip(b"\n") if result.returncode == 0 else None
+
+
+def _extract_fork_cookies(browser_name, logger):
+    """Read a Chromium fork's cookie database the way yt-dlp reads Chrome's.
+
+    yt-dlp only accepts the browser names it knows, so forks reuse its
+    Chromium machinery (`yt_dlp.cookies`) with our own profile directory and
+    keystore label. Everything else -- database copy, decryption, cookie
+    construction -- is yt-dlp's.
+    """
+    from yt_dlp import cookies as ytc
+
+    settings = _fork_settings(browser_name)
+    if settings is None:
+        raise FileNotFoundError(f"{browser_name} is not supported on this platform")
+    browser_dir = settings["dir"]
+    database = ytc._newest(ytc._find_files(browser_dir, "Cookies", logger))
+    if database is None:
+        raise FileNotFoundError(f'could not find {browser_name} cookies database in "{browser_dir}"')
+    with tempfile.TemporaryDirectory(prefix="ytm") as tmpdir:
+        cursor = ytc._open_database_copy(database, tmpdir)
+        try:
+            meta_version = int(cursor.execute("SELECT value FROM meta WHERE key = 'version'").fetchone()[0])
+            if sys.platform == "darwin" and "keychain" in settings:
+                # yt-dlp derives the Keychain item from "<name> Safe Storage";
+                # Helium renamed it, so fetch the password ourselves
+                decryptor = ytc.MacChromeCookieDecryptor("Chromium", logger, meta_version=meta_version)
+                password = _keychain_password(*settings["keychain"])
+                decryptor._v10_key = None if password is None else decryptor.derive_key(password)
+            else:
+                decryptor = ytc.get_cookie_decryptor(
+                    browser_dir, settings.get("keyring", "Chromium"), logger, meta_version=meta_version
+                )
+            cursor.connection.text_factory = bytes
+            columns = ytc._get_column_names(cursor, "cookies")
+            secure = "is_secure" if "is_secure" in columns else "secure"
+            cursor.execute(
+                f"SELECT host_key, name, value, encrypted_value, path, expires_utc, {secure} FROM cookies"
+            )
+            jar = ytc.YoutubeDLCookieJar()
+            failed = 0
+            for row in cursor.fetchall():
+                _, cookie = ytc._process_chrome_cookie(decryptor, *row)
+                if cookie is None:
+                    failed += 1
+                    continue
+                jar.set_cookie(cookie)
+        finally:
+            cursor.connection.close()
+    suffix = f" ({failed} could not be decrypted)" if failed else ""
+    logger.info(f"Extracted {len(jar)} cookies from {browser_name}{suffix}")
+    return jar
+
+
 def _extract_browser_cookie_header(browser_name):
     """Return (cookie header or None, one-line reason when None).
 
@@ -250,7 +342,10 @@ def _extract_browser_cookie_header(browser_name):
     """
     logger = _QuietLogger()
     try:
-        jar = extract_cookies_from_browser(browser_name, logger=logger)
+        if browser_name in _CHROMIUM_FORKS:
+            jar = _extract_fork_cookies(browser_name, logger)
+        else:
+            jar = extract_cookies_from_browser(browser_name, logger=logger)
     except Exception as exc:
         text = str(exc)
         if isinstance(exc, FileNotFoundError) or "could not find" in text:
