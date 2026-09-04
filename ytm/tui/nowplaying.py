@@ -45,6 +45,8 @@ def _format_time(seconds):
 #: title width in each played/up-next column
 QUEUE_COLUMN_WIDTH = 16
 QUEUE_COLUMN_MIN_WIDTH = 12
+#: wider than this and UP NEXT drifts to the far edge of a wide terminal
+QUEUE_COLUMN_MAX_WIDTH = 40
 QUEUE_ARTIST_MIN_WIDTH = 28
 QUEUE_DEFAULT_HEIGHT = 8
 QUEUE_RESERVED_ROWS = 4
@@ -67,7 +69,7 @@ def queue_summary_layout(width=None, height=None):
     height = height or QUEUE_DEFAULT_HEIGHT
     half_width = max(1, width // 2)
     column_width = (
-        max(QUEUE_COLUMN_MIN_WIDTH, half_width)
+        min(QUEUE_COLUMN_MAX_WIDTH, max(QUEUE_COLUMN_MIN_WIDTH, half_width))
         if width >= QUEUE_COLUMN_MIN_WIDTH * 2
         else half_width
     )
@@ -80,7 +82,7 @@ def queue_track_label(track, layout):
     title = track.get("title") or "Unknown Title"
     artist = (track.get("artist") or "").strip()
     if layout.show_artist and artist:
-        return _truncate(f"{title} - {artist}", layout.column_width)
+        return _truncate(f"{title} — {artist}", layout.column_width)  # same dash as the queue pane
     return _truncate(title, layout.column_width)
 
 
