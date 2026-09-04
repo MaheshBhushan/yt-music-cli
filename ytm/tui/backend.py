@@ -13,6 +13,7 @@ change is translated into the same `track_changed` / `position` /
 from dataclasses import asdict
 
 from ytm import music, playlists_local, state
+from ytm.auth import AuthError
 from ytm.music import Track
 from ytm.player import Player, PlayerError, watch_url
 
@@ -218,6 +219,14 @@ class Backend:
 
     def _playlist_list(self, args):
         local = playlists_local.list_playlists()
+        try:
+            return self._playlist_list_remote(local)
+        except AuthError as exc:
+            # signed out: still list the local playlists, and say why the
+            # rest is missing instead of silently showing fewer rows
+            return {"playlists": [_playlist_dict(p) for p in local], "error": str(exc)}
+
+    def _playlist_list_remote(self, local):
         remote = music.library_playlists()
         for playlist in remote:
             # the listing has no count for the auto-playlists; ask per playlist
@@ -228,7 +237,7 @@ class Backend:
                     count = None
                 if count is not None:
                     playlist.track_count = count
-        if self._mixes is None:
+        if not self._mixes:
             self._mixes = music.mixes()
         return {
             "playlists": [_playlist_dict(p) for p in local + remote]

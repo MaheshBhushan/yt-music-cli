@@ -422,10 +422,12 @@ class YTMApp(App):
         self._request_async("queue_get", then=self._set_queue)
 
     def _refresh_playlists(self):
-        self._request_async(
-            "playlist_list",
-            then=lambda data: self.query_one(PlaylistsPane).set_playlists(data),
-        )
+        def show(data):
+            self.query_one(PlaylistsPane).set_playlists(data)
+            if data and data.get("error"):
+                self._show_error(data["error"])
+
+        self._request_async("playlist_list", then=show)
 
     # -- search --------------------------------------------------------
 

@@ -8,7 +8,7 @@ from dataclasses import asdict, dataclass
 
 from ytmusicapi.exceptions import YTMusicError
 
-from ytm.auth import AuthExpired, _EXPIRED_HINT, client, is_expiry
+from ytm.auth import AuthExpired, _EXPIRED_HINT, _SIGNED_OUT_HINT, client, is_expiry
 
 #: search results whose videoType is an upload are out of scope for this player
 UPLOAD_VIDEO_TYPE = "MUSIC_VIDEO_TYPE_PRIVATELY_OWNED_TRACK"
@@ -188,6 +188,15 @@ def mixes(yt=None):
         shelves = yt.get_home(limit=40)
     except YTMusicError as exc:
         raise _wrap_ytmusic_error(exc) from exc
+    result = _mixes_from_home(shelves)
+    if not result:
+        # no mixes at all is what a signed-out home feed looks like; tell
+        # them apart from a brand-new account by the library listing
+        library_playlists(limit=1, yt=yt)
+    return result
+
+
+def _mixes_from_home(shelves):
     seen = set()
     result = []
     for shelf in shelves or []:
@@ -218,6 +227,10 @@ def library_playlists(limit=25, yt=None):
         if is_expiry(exc):
             raise AuthExpired(_EXPIRED_HINT) from exc
         raise
+    if not results:
+        # a signed-in library always lists at least Liked Music; YouTube
+        # answers stale cookies with the signed-out (empty) page, not an error
+        raise AuthExpired(_SIGNED_OUT_HINT)
     return [to_playlist(result) for result in results]
 
 

@@ -16,6 +16,9 @@ class FakeYT:
     def get_home(self, limit=40):
         return self.shelves
 
+    def get_library_playlists(self, limit=25):
+        return [{"playlistId": "LM", "title": "Liked Music"}]
+
 
 def test_mixes_dedupes_and_skips_none_and_non_mix_ids():
     result = music.mixes(yt=FakeYT(FIXTURE))
@@ -40,3 +43,29 @@ def test_mixes_tolerates_none_shelf_and_content_entries():
     shelves = [None, {"title": "x", "contents": [None, {"playlistId": "RDTMAKfoo", "title": "Foo Mix"}]}]
     result = music.mixes(yt=FakeYT(shelves))
     assert [p.title for p in result] == ["Foo Mix"]
+
+
+def test_empty_mixes_on_a_signed_out_feed_raise_auth_expired():
+    import pytest
+    from ytm.auth import AuthExpired
+
+    class SignedOut(FakeYT):
+        def get_library_playlists(self, limit=25):
+            return []
+
+    with pytest.raises(AuthExpired, match="signed out"):
+        music.mixes(yt=SignedOut([{"title": "Quick picks", "contents": []}]))
+    # a signed-in account that simply has no mixes yet is not an error
+    assert music.mixes(yt=FakeYT([{"title": "Quick picks", "contents": []}])) == []
+
+
+def test_empty_library_listing_means_signed_out():
+    import pytest
+    from ytm.auth import AuthExpired
+
+    class SignedOut(FakeYT):
+        def get_library_playlists(self, limit=25):
+            return []
+
+    with pytest.raises(AuthExpired, match="signed out"):
+        music.library_playlists(yt=SignedOut([]))
