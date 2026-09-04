@@ -83,7 +83,7 @@ Search and playback work signed out. Library, playlists, likes and lyrics need y
 
 ```bash
 ytm auth                          # 1. cookies from a browser you are logged in to (auto-detects)
-ytm auth --from-browser firefox   #    or name one: chrome, chromium, edge, brave, vivaldi, opera, firefox
+ytm auth --from-browser firefox   #    or name one: chrome, chromium, edge, brave, vivaldi, opera, helium, firefox
 ytm auth --manual                 # 2. paste request headers copied from the browser's DevTools
 ytm auth --oauth                  # 3. OAuth device code: for SSH, headless boxes, or Windows without Firefox
 ```

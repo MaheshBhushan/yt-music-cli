@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- `ytm auth --from-browser helium` reads cookies from the Helium browser (macOS, Linux, Windows), and auto-detection tries it after the mainstream browsers. Helium stores its profile under `net.imput.helium` and, on macOS, names its Keychain item "Helium Storage Key", neither of which yt-dlp knows; ytm supplies both and reuses yt-dlp's Chromium decryption. Fixes #27.
+
 ## 0.5.4 — 2026-09-04
 
 - Expired or signed-out browser cookies are reported instead of silently hiding your playlists and mixes. YouTube answers stale cookies with the signed-out page (empty library, no mixes) rather than an error, so `ytm mix` said "no mixes available" and the TUI showed only local playlists. Both now say the credentials are signed out and to run `ytm auth` again; the TUI keeps the local playlists visible.

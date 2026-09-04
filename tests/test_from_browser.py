@@ -177,3 +177,76 @@ def test_quiet_logger_counts_decrypt_failures():
     assert logger.decrypt_failures() == 0
     logger.info("Extracted 3 cookies from chrome (7 could not be decrypted)")
     assert logger.decrypt_failures() == 7
+
+
+# -- Chromium forks yt-dlp does not know by name (Helium) ---------------------
+
+def test_fork_settings_per_platform(monkeypatch):
+    monkeypatch.setattr(auth.sys, "platform", "darwin")
+    mac = auth._fork_settings("helium")
+    assert mac["dir"].endswith("Library/Application Support/net.imput.helium")
+    assert mac["keychain"] == ("Helium Storage Key", "Helium")
+
+    monkeypatch.setattr(auth.sys, "platform", "linux")
+    monkeypatch.setenv("XDG_CONFIG_HOME", "/xdg")
+    assert auth._fork_settings("helium") == {"dir": "/xdg/net.imput.helium", "keyring": "Chromium"}
+
+    monkeypatch.setattr(auth.sys, "platform", "win32")
+    monkeypatch.setenv("LOCALAPPDATA", r"C:\Users\me\AppData\Local")
+    assert auth._fork_settings("helium")["dir"] == r"C:\Users\me\AppData\Local\imput\Helium\User Data"
+
+    assert auth._fork_settings("netscape") is None
+
+
+def _chromium_cookie_db(path, rows):
+    import sqlite3
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(path)
+    conn.execute("CREATE TABLE meta (key TEXT, value TEXT)")
+    conn.execute("INSERT INTO meta VALUES ('version', '20')")
+    conn.execute(
+        "CREATE TABLE cookies (host_key TEXT, name TEXT, value TEXT, encrypted_value BLOB, "
+        "path TEXT, expires_utc INTEGER, is_secure INTEGER)"
+    )
+    for host, name, value in rows:
+        conn.execute("INSERT INTO cookies VALUES (?, ?, ?, X'', '/', 0, 1)", (host, name, value))
+    conn.commit()
+    conn.close()
+
+
+def test_fork_cookies_are_read_from_the_fork_profile_dir(tmp_path, monkeypatch):
+    profile = tmp_path / "net.imput.helium"
+    _chromium_cookie_db(profile / "Default" / "Cookies", [
+        (".youtube.com", "__Secure-3PAPISID", "papisid"),
+        (".youtube.com", "SID", "sid"),
+        (".example.com", "other", "x"),
+    ])
+    monkeypatch.setattr(auth.sys, "platform", "linux")
+    monkeypatch.setattr(auth, "_fork_settings", lambda name: {"dir": str(profile), "keyring": "Chromium"})
+
+    header, reason = auth._extract_browser_cookie_header("helium")
+    assert reason is None
+    assert "__Secure-3PAPISID=papisid" in header and "SID=sid" in header and "other" not in header
+
+
+def test_fork_without_a_profile_reports_not_installed(tmp_path, monkeypatch):
+    monkeypatch.setattr(auth, "_fork_settings", lambda name: {"dir": str(tmp_path / "missing")})
+    assert auth._extract_browser_cookie_header("helium") == (None, "not installed or no profile found")
+
+
+def test_keychain_password_asks_security_for_heliums_item(monkeypatch):
+    calls = []
+
+    class Result:
+        returncode = 0
+        stdout = b"secret\n"
+
+    monkeypatch.setattr(auth.subprocess, "run", lambda cmd, **kw: calls.append(cmd) or Result())
+    assert auth._keychain_password("Helium Storage Key", "Helium") == b"secret"
+    assert calls == [["security", "find-generic-password", "-w", "-a", "Helium", "-s", "Helium Storage Key"]]
+
+
+def test_helium_is_tried_by_autodetect_after_the_mainstream_browsers():
+    assert "helium" in auth._AUTODETECT_BROWSERS
+    assert auth._AUTODETECT_BROWSERS.index("helium") > auth._AUTODETECT_BROWSERS.index("chrome")
