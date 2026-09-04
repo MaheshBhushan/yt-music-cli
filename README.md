@@ -54,6 +54,7 @@ The TUI is `ytm` with no arguments. Results appear as you type; Enter plays the 
 | `+` `-` | Volume |
 | `a` | Add the selected song to a playlist: `a`, pick the list with `↑` `↓`, `a` or `Enter` |
 | `l` | Focus playlists |
+| `r` | Refresh your mixes (a mix keeps the same tracklist until you do) |
 | `Tab` | Cycle panes |
 | `e` | Exit, music keeps playing |
 | `x` | Exit and stop mpv |

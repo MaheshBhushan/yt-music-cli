@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.5.2 — 2026-09-04
+
+- Mixes no longer re-roll on every play. YouTube generates a fresh tracklist each time a mix is fetched, so playing one twice queued different songs than the pane had shown. The TUI now keeps each mix's tracklist for the session; `r` refreshes all mixes at once.
+
 ## 0.5.1 — 2026-09-04
 
 - The player strip's PLAYED / UP NEXT columns are uppercase and sit side by side instead of at opposite ends of the strip.

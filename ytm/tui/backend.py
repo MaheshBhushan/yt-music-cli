@@ -65,6 +65,10 @@ class Backend:
         self._lock = threading.Lock()
         self._subscribers = []
         self._closed = False
+        # mixes are re-rolled by YouTube on every fetch, so a session keeps
+        # the list and each tracklist until `mixes_refresh` asks for new ones
+        self._mixes = None
+        self._mix_tracks = {}
         self._routes = {
             "status": self._status,
             "search": self._search,
@@ -87,6 +91,7 @@ class Backend:
             "lyrics": self._lyrics,
             "playlist_list": self._playlist_list,
             "playlist_get": self._playlist_get,
+            "mixes_refresh": self._mixes_refresh,
             "playlist_add": self._playlist_add,
             "playlist_play": self._playlist_play,
             "playlist_create": self._playlist_create,
@@ -223,11 +228,19 @@ class Backend:
                     count = None
                 if count is not None:
                     playlist.track_count = count
-        mixes = music.mixes()
+        if self._mixes is None:
+            self._mixes = music.mixes()
         return {
             "playlists": [_playlist_dict(p) for p in local + remote]
-            + [_playlist_dict(m, kind="mix") for m in mixes]
+            + [_playlist_dict(m, kind="mix") for m in self._mixes]
         }
+
+    def _mixes_refresh(self, args):
+        """Forget the cached mixes and their tracklists; the next listing
+        and the next play fetch fresh ones."""
+        self._mixes = None
+        self._mix_tracks = {}
+        return self._playlist_list(args)
 
     def _playlist_create(self, args):
         """Create a playlist named `title`; remote unless `local` is set."""
@@ -246,6 +259,10 @@ class Backend:
             playlist, tracks = playlists_local.get_playlist(playlist_id)
             if playlist is None:
                 raise BackendError(f"no local playlist {playlist_id}")
+        elif music.is_mix_id(playlist_id):
+            if playlist_id not in self._mix_tracks:
+                self._mix_tracks[playlist_id] = music.get_playlist(playlist_id)
+            playlist, tracks = self._mix_tracks[playlist_id]
         else:
             playlist, tracks = music.get_playlist(playlist_id)
         return {"playlist": _playlist_dict(playlist), "tracks": [asdict(t) for t in tracks]}

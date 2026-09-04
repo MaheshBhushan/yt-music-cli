@@ -266,3 +266,34 @@ def test_enqueue_next_route_uses_the_player(backend):
     out = backend.request("enqueue_next", {"video_id": "c", "title": "C", "artist": "Cc"})
     assert backend.fake.calls[-1] == ("enqueue_next", "https://music.youtube.com/watch?v=c", "C / Cc")
     assert out["count"] == 3
+
+
+def test_mix_tracklist_is_cached_until_refreshed(backend, catalogue, monkeypatch, tmp_path):
+    from ytm import playlists_local
+
+    monkeypatch.setattr(playlists_local, "DEFAULT_PATH", tmp_path / "pl.json")
+    calls = {"mixes": 0, "get": 0}
+
+    def fake_mixes(yt=None):
+        calls["mixes"] += 1
+        return [music.Playlist("RDTMAKfoo", "Discover Mix", None)]
+
+    def fake_get(pid, limit=100, yt=None):
+        calls["get"] += 1
+        return music.Playlist(pid, "Discover Mix", 1), [track(f"m{calls['get']}", "Mix song", "X")]
+
+    monkeypatch.setattr(music, "mixes", fake_mixes)
+    monkeypatch.setattr(music, "get_playlist", fake_get)
+
+    backend.request("playlist_list")
+    backend.request("playlist_list")
+    first = backend.request("playlist_get", {"playlist_id": "RDTMAKfoo"})["tracks"]
+    again = backend.request("playlist_get", {"playlist_id": "RDTMAKfoo"})["tracks"]
+    assert calls == {"mixes": 1, "get": 1}
+    assert first == again
+
+    lists = backend.request("mixes_refresh")["playlists"]
+    fresh = backend.request("playlist_get", {"playlist_id": "RDTMAKfoo"})["tracks"]
+    assert calls == {"mixes": 2, "get": 2}
+    assert lists[-1]["kind"] == "mix"
+    assert fresh[0]["video_id"] == "m2"
