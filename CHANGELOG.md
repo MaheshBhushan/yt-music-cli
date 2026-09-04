@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.5.5 — 2026-09-04
 
 - `ytm auth --from-browser helium` reads cookies from the Helium browser (macOS, Linux, Windows), and auto-detection tries it after the mainstream browsers. Helium stores its profile under `net.imput.helium` and, on macOS, names its Keychain item "Helium Storage Key", neither of which yt-dlp knows; ytm supplies both and reuses yt-dlp's Chromium decryption. Fixes #27.
 
