@@ -145,6 +145,9 @@ authenticated_streams = false   # see the note above
 theme = "dark"                  # or "light"
 art = "blocks"                  # blocks | kitty | sixel | auto | ascii | off
 
+[tui]
+queue_column_width = 40         # max PLAYED / UP NEXT column width; 0 = no max
+
 [pot]
 enabled = true                  # proof-of-origin tokens via bgutil-ytdlp-pot-provider
 base_url = "http://127.0.0.1:4416"

@@ -209,7 +209,13 @@ class YTMApp(App):
             yield QueuePane(id="queue-pane")
             yield PlaylistsPane(id="playlists-pane")
             yield LyricsPane(id="lyrics-pane")
-        yield NowPlaying(id="now-playing", art=self._config["ui"].get("art", DEFAULT_ART))
+        yield NowPlaying(
+            id="now-playing",
+            art=self._config["ui"].get("art", DEFAULT_ART),
+            queue_column_width=(self._config.get("tui") or config_mod.DEFAULTS["tui"])[
+                "queue_column_width"
+            ],
+        )
         yield Static("", id="error-banner")
         # the shortcut bar: every key, always, whatever has focus (Textual's
         # Footer hides letter keys while the search box is focused)

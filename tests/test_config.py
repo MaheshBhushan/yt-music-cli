@@ -17,6 +17,7 @@ def test_missing_file_yields_documented_defaults(tmp_path):
             "authenticated_streams": False,
         },
         "ui": {"theme": "dark", "art": "blocks"},
+        "tui": {"queue_column_width": 40},
         "pot": {"enabled": True, "base_url": "http://127.0.0.1:4416"},
         "keys": {
             "toggle": "space",
@@ -54,6 +55,39 @@ def test_partial_config_overrides_only_its_own_keys(tmp_path):
         "authenticated_streams": False,
     }
     assert config["ui"] == {"theme": "dark", "art": "blocks"}
+    assert config["tui"] == {"queue_column_width": 40}
+
+
+def test_tui_queue_column_width_accepts_positive_integer_and_zero(tmp_path):
+    path = tmp_path / "config.toml"
+    path.write_text(
+        """
+        [tui]
+        queue_column_width = 72
+        """
+    )
+    assert config_mod.load(path)["tui"]["queue_column_width"] == 72
+
+    path.write_text(
+        """
+        [tui]
+        queue_column_width = 0
+        """
+    )
+    assert config_mod.load(path)["tui"]["queue_column_width"] == 0
+
+
+def test_tui_queue_column_width_rejects_negative_values(tmp_path, capsys):
+    path = tmp_path / "config.toml"
+    path.write_text(
+        """
+        [tui]
+        queue_column_width = -1
+        """
+    )
+    assert config_mod.load(path)["tui"]["queue_column_width"] == 40
+    captured = capsys.readouterr()
+    assert "config warning" in captured.err
 
 
 def test_malformed_toml_falls_back_to_defaults_with_warning(tmp_path, capsys):
