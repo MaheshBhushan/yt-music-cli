@@ -1328,6 +1328,14 @@ def test_queue_summary_layout_tightens_and_expands():
     assert roomy.show_artist is True
 
 
+def test_queue_summary_layout_uses_configurable_max_width():
+    capped = queue_summary_layout(width=160, height=8, max_width=24)
+    assert capped.column_width == 24
+
+    uncapped = queue_summary_layout(width=160, height=8, max_width=0)
+    assert uncapped.column_width == 80
+
+
 def test_now_playing_queue_uses_space_for_artist_details():
     track = dict(TRACK, title="Long Way Home", artist="Norah Jones")
 
