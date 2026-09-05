@@ -51,7 +51,7 @@ def test_from_browser_writes_headers_with_authuser_and_mode_0600(tmp_path, monke
         _FakeCookie("SID", "sid-value"),
         _FakeCookie("__Secure-3PAPISID", "papisid-value"),
     )
-    monkeypatch.setattr(auth, "extract_cookies_from_browser", lambda name, logger=None: jar)
+    monkeypatch.setattr(auth, "extract_cookies_from_browser", lambda name, profile=None, logger=None: jar)
 
     auth.from_browser("chrome", path=path, client_factory=_fake_client_ok)
 
@@ -66,7 +66,7 @@ def test_from_browser_autodetect_skips_browser_with_no_youtube_cookies(tmp_path,
     path = tmp_path / "auth.json"
     logged_in_jar = _jar(_FakeCookie("__Secure-3PAPISID", "papisid-value"))
 
-    def fake_extract(name, logger=None):
+    def fake_extract(name, profile=None, logger=None):
         if name == "chrome":
             return _jar()  # no cookies at all: not logged in
         if name == "chromium":
@@ -84,7 +84,7 @@ def test_from_browser_autodetect_skips_browser_with_no_youtube_cookies(tmp_path,
 
 def test_from_browser_no_session_anywhere_raises_actionable_error(tmp_path, monkeypatch):
     path = tmp_path / "auth.json"
-    monkeypatch.setattr(auth, "extract_cookies_from_browser", lambda name, logger=None: _jar())
+    monkeypatch.setattr(auth, "extract_cookies_from_browser", lambda name, profile=None, logger=None: _jar())
     monkeypatch.setattr(auth, "_AUTODETECT_BROWSERS", ("chrome", "firefox"))
 
     with pytest.raises(auth.AuthError) as excinfo:
@@ -100,7 +100,7 @@ def test_from_browser_no_session_anywhere_raises_actionable_error(tmp_path, monk
 def test_from_browser_validation_failure_does_not_leave_broken_auth_file(tmp_path, monkeypatch):
     path = tmp_path / "auth.json"
     jar = _jar(_FakeCookie("__Secure-3PAPISID", "papisid-value"))
-    monkeypatch.setattr(auth, "extract_cookies_from_browser", lambda name, logger=None: jar)
+    monkeypatch.setattr(auth, "extract_cookies_from_browser", lambda name, profile=None, logger=None: jar)
 
     with pytest.raises(auth.AuthError) as excinfo:
         auth.from_browser("chrome", path=path, client_factory=_fake_client_fails)
@@ -114,7 +114,7 @@ def test_error_names_the_reason_per_browser(tmp_path, monkeypatch):
     cookie (App-Bound Encryption). The error must say so, not "not logged in"."""
     path = tmp_path / "auth.json"
 
-    def fake_extract(name, logger=None):
+    def fake_extract(name, profile=None, logger=None):
         if name == "chrome":
             logger.info("Extracted 0 cookies from chrome (312 could not be decrypted)")
             return _jar()
@@ -138,7 +138,7 @@ def test_windows_chromium_decrypt_failure_gets_the_app_bound_hint(tmp_path, monk
     path = tmp_path / "auth.json"
     monkeypatch.setattr(auth.sys, "platform", "win32")
 
-    def fake_extract(name, logger=None):
+    def fake_extract(name, profile=None, logger=None):
         logger.info(f"Extracted 0 cookies from {name} (12 could not be decrypted)")
         return _jar()
 
@@ -152,7 +152,7 @@ def test_windows_chromium_decrypt_failure_gets_the_app_bound_hint(tmp_path, monk
 
 def test_no_windows_hint_on_linux_or_without_decrypt_failures(tmp_path, monkeypatch):
     path = tmp_path / "auth.json"
-    monkeypatch.setattr(auth, "extract_cookies_from_browser", lambda name, logger=None: _jar())
+    monkeypatch.setattr(auth, "extract_cookies_from_browser", lambda name, profile=None, logger=None: _jar())
     monkeypatch.setattr(auth.sys, "platform", "linux")
     with pytest.raises(auth.AuthError) as excinfo:
         auth.from_browser("chrome", path=path, client_factory=_fake_client_ok)
@@ -164,7 +164,7 @@ def test_no_windows_hint_on_linux_or_without_decrypt_failures(tmp_path, monkeypa
 
 
 def test_locked_database_reason(tmp_path, monkeypatch):
-    def fake_extract(name, logger=None):
+    def fake_extract(name, profile=None, logger=None):
         raise Exception("sqlite3.OperationalError: database is locked")
     monkeypatch.setattr(auth, "extract_cookies_from_browser", fake_extract)
     with pytest.raises(auth.AuthError) as excinfo:
@@ -250,3 +250,71 @@ def test_keychain_password_asks_security_for_heliums_item(monkeypatch):
 def test_helium_is_tried_by_autodetect_after_the_mainstream_browsers():
     assert "helium" in auth._AUTODETECT_BROWSERS
     assert auth._AUTODETECT_BROWSERS.index("helium") > auth._AUTODETECT_BROWSERS.index("chrome")
+
+
+def test_fork_prefers_the_profile_with_a_login_over_the_newest_database(tmp_path, monkeypatch):
+    """Two Helium profiles: the one flushed last on quit has no YouTube login,
+    the older one does. yt-dlp's newest-file rule picked the wrong one (#27)."""
+    import os
+
+    profile = tmp_path / "net.imput.helium"
+    logged_in = profile / "Default" / "Network" / "Cookies"
+    other = profile / "Profile 1" / "Network" / "Cookies"
+    system = profile / "System Profile" / "Network" / "Cookies"
+    _chromium_cookie_db(logged_in, [(".youtube.com", "__Secure-3PAPISID", "papisid")])
+    _chromium_cookie_db(other, [(".example.com", "other", "x")])
+    _chromium_cookie_db(system, [(".youtube.com", "__Secure-3PAPISID", "system-ghost")])
+    os.utime(logged_in, (1_000, 1_000))
+    os.utime(other, (2_000, 2_000))
+    os.utime(system, (3_000, 3_000))
+    monkeypatch.setattr(auth.sys, "platform", "linux")
+    monkeypatch.setattr(auth, "_fork_settings", lambda name: {"dir": str(profile), "keyring": "Chromium"})
+
+    header, reason = auth._extract_browser_cookie_header("helium")
+    assert reason is None
+    assert "__Secure-3PAPISID=papisid" in header
+
+
+def test_fork_profile_option_selects_one_profile_directory(tmp_path, monkeypatch):
+    profile = tmp_path / "net.imput.helium"
+    _chromium_cookie_db(profile / "Default" / "Cookies", [(".youtube.com", "__Secure-3PAPISID", "a")])
+    _chromium_cookie_db(profile / "Profile 1" / "Cookies", [(".youtube.com", "__Secure-3PAPISID", "b")])
+    monkeypatch.setattr(auth.sys, "platform", "linux")
+    monkeypatch.setattr(auth, "_fork_settings", lambda name: {"dir": str(profile), "keyring": "Chromium"})
+
+    header, _ = auth._extract_browser_cookie_header("helium", profile="Profile 1")
+    assert "__Secure-3PAPISID=b" in header
+    assert auth._extract_browser_cookie_header("helium", profile="Profile 7") == (
+        None, 'profile "Profile 7" not found'
+    )
+
+
+def test_profile_is_passed_through_to_yt_dlp_for_known_browsers(tmp_path, monkeypatch):
+    seen = {}
+
+    def fake_extract(name, profile=None, logger=None):
+        seen[name] = profile
+        return _jar(_FakeCookie("__Secure-3PAPISID", "v"))
+
+    monkeypatch.setattr(auth, "extract_cookies_from_browser", fake_extract)
+    auth.from_browser("firefox", path=tmp_path / "auth.json", client_factory=_fake_client_ok, profile="abc.default")
+    assert seen == {"firefox": "abc.default"}
+
+
+def test_validation_network_failure_is_reported_as_network_not_login(tmp_path, monkeypatch):
+    import requests
+
+    path = tmp_path / "auth.json"
+    monkeypatch.setattr(
+        auth, "extract_cookies_from_browser",
+        lambda name, profile=None, logger=None: _jar(_FakeCookie("__Secure-3PAPISID", "v")),
+    )
+
+    def client_hangs(path):
+        raise requests.exceptions.ConnectTimeout("HTTPSConnectionPool(host='music.youtube.com')")
+
+    with pytest.raises(auth.AuthError) as excinfo:
+        auth.from_browser("chrome", path=path, client_factory=client_hangs)
+    assert not path.exists()
+    message = str(excinfo.value)
+    assert "network problem" in message and "did not authenticate" not in message

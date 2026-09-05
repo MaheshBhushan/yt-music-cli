@@ -413,7 +413,7 @@ def cmd_auth(args):
     elif args.manual:
         path = auth.setup()
     else:
-        path = auth.from_browser(args.from_browser or None)
+        path = auth.from_browser(args.from_browser or None, profile=args.profile)
     # regenerate the cookie file yt-dlp reads, so mpv's next resolve is authenticated
     auth.cookies_file()
     return {"saved": str(path)}, f"Saved credentials to {path}"
@@ -523,6 +523,10 @@ def build_parser():
 
     p = add("auth", cmd_auth, "sign in (default: cookies from a logged-in browser)")
     p.add_argument("--from-browser", nargs="?", const="", default=None, metavar="BROWSER")
+    p.add_argument(
+        "--profile", default=None, metavar="NAME",
+        help='browser profile directory to read, e.g. "Default" or "Profile 1" (default: the one with a login)',
+    )
     p.add_argument("--manual", action="store_true", help="paste request headers instead")
     p.add_argument("--oauth", action="store_true", help="OAuth device flow, for SSH")
     p.add_argument("--client-id", default=None)

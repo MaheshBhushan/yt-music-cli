@@ -9,6 +9,7 @@ import os
 import time
 from pathlib import Path
 
+import requests
 import ytmusicapi
 from yt_dlp.cookies import extract_cookies_from_browser
 from ytmusicapi.auth.oauth.credentials import OAuthCredentials
@@ -281,23 +282,35 @@ def _keychain_password(service, account):
     return result.stdout.rstrip(b"\n") if result.returncode == 0 else None
 
 
-def _extract_fork_cookies(browser_name, logger):
-    """Read a Chromium fork's cookie database the way yt-dlp reads Chrome's.
+#: Chromium profile directories that never hold a user's login.
+_NON_USER_PROFILES = ("System Profile", "Guest Profile")
 
-    yt-dlp only accepts the browser names it knows, so forks reuse its
-    Chromium machinery (`yt_dlp.cookies`) with our own profile directory and
-    keystore label. Everything else -- database copy, decryption, cookie
-    construction -- is yt-dlp's.
+
+def _fork_databases(browser_dir, profile, logger):
+    """Cookie databases under a Chromium fork's directory, newest first.
+
+    Chromium keeps one per profile (Default, Profile 1, ...), plus System and
+    Guest profiles that never hold a login. `profile` restricts the list to
+    one profile directory name.
     """
     from yt_dlp import cookies as ytc
 
-    settings = _fork_settings(browser_name)
-    if settings is None:
-        raise FileNotFoundError(f"{browser_name} is not supported on this platform")
-    browser_dir = settings["dir"]
-    database = ytc._newest(ytc._find_files(browser_dir, "Cookies", logger))
-    if database is None:
-        raise FileNotFoundError(f'could not find {browser_name} cookies database in "{browser_dir}"')
+    databases = []
+    for database in ytc._find_files(browser_dir, "Cookies", logger):
+        relative = Path(os.path.relpath(database, browser_dir))
+        top = relative.parts[0] if len(relative.parts) > 1 else None
+        if top in _NON_USER_PROFILES:
+            continue
+        if profile is not None and top != profile:
+            continue
+        databases.append(database)
+    return sorted(databases, key=lambda path: os.lstat(path).st_mtime, reverse=True)
+
+
+def _read_fork_database(database, settings, logger):
+    """Decrypt one Chromium cookie database into a jar, the way yt-dlp reads Chrome's."""
+    from yt_dlp import cookies as ytc
+
     with tempfile.TemporaryDirectory(prefix="ytm") as tmpdir:
         cursor = ytc._open_database_copy(database, tmpdir)
         try:
@@ -310,7 +323,7 @@ def _extract_fork_cookies(browser_name, logger):
                 decryptor._v10_key = None if password is None else decryptor.derive_key(password)
             else:
                 decryptor = ytc.get_cookie_decryptor(
-                    browser_dir, settings.get("keyring", "Chromium"), logger, meta_version=meta_version
+                    settings["dir"], settings.get("keyring", "Chromium"), logger, meta_version=meta_version
                 )
             cursor.connection.text_factory = bytes
             columns = ytc._get_column_names(cursor, "cookies")
@@ -328,12 +341,47 @@ def _extract_fork_cookies(browser_name, logger):
                 jar.set_cookie(cookie)
         finally:
             cursor.connection.close()
+    return jar, failed
+
+
+def _extract_fork_cookies(browser_name, logger, profile=None):
+    """Read a Chromium fork's cookies the way yt-dlp reads Chrome's.
+
+    yt-dlp only accepts the browser names it knows, so forks reuse its
+    Chromium machinery (`yt_dlp.cookies`) with our own profile directory and
+    keystore label. Everything else -- database copy, decryption, cookie
+    construction -- is yt-dlp's.
+
+    Every profile's database is tried, newest first, and the first one holding
+    a YouTube login wins; yt-dlp's "newest file" rule alone picks whichever
+    profile the browser happened to flush last, which with several profiles is
+    often not the logged-in one (#27). When none has a login, the newest is
+    returned so the failure can still say how many cookies failed to decrypt.
+    """
+    settings = _fork_settings(browser_name)
+    if settings is None:
+        raise FileNotFoundError(f"{browser_name} is not supported on this platform")
+    browser_dir = settings["dir"]
+    databases = _fork_databases(browser_dir, profile, logger)
+    if not databases:
+        if profile is not None and os.path.isdir(browser_dir):
+            raise FileNotFoundError(f'could not find profile "{profile}" in "{browser_dir}"')
+        raise FileNotFoundError(f'could not find {browser_name} cookies database in "{browser_dir}"')
+    first = None
+    for database in databases:
+        jar, failed = _read_fork_database(database, settings, logger)
+        if first is None:
+            first = (jar, failed)
+        if _cookie_header_from_jar(jar):
+            first = (jar, failed)
+            break
+    jar, failed = first
     suffix = f" ({failed} could not be decrypted)" if failed else ""
     logger.info(f"Extracted {len(jar)} cookies from {browser_name}{suffix}")
     return jar
 
 
-def _extract_browser_cookie_header(browser_name):
+def _extract_browser_cookie_header(browser_name, profile=None):
     """Return (cookie header or None, one-line reason when None).
 
     The reason is what the user needs to fix it: the browser was not found,
@@ -343,11 +391,13 @@ def _extract_browser_cookie_header(browser_name):
     logger = _QuietLogger()
     try:
         if browser_name in _CHROMIUM_FORKS:
-            jar = _extract_fork_cookies(browser_name, logger)
+            jar = _extract_fork_cookies(browser_name, logger, profile=profile)
         else:
-            jar = extract_cookies_from_browser(browser_name, logger=logger)
+            jar = extract_cookies_from_browser(browser_name, profile=profile, logger=logger)
     except Exception as exc:
         text = str(exc)
+        if "could not find profile" in text:
+            return None, f'profile "{profile}" not found'
         if isinstance(exc, FileNotFoundError) or "could not find" in text:
             return None, "not installed or no profile found"
         if "locked" in text.lower():
@@ -380,11 +430,22 @@ def _windows_chromium_hint(reasons):
     )
 
 
-def from_browser(browser=None, path=AUTH_PATH, client_factory=None):
+def _is_network_error(exc):
+    """True when exc (or anything it was raised from) is a transport failure, not a refusal."""
+    while exc is not None:
+        if isinstance(exc, (requests.exceptions.ConnectionError, requests.exceptions.Timeout)):
+            return True
+        exc = exc.__cause__ or exc.__context__
+    return False
+
+
+def from_browser(browser=None, path=AUTH_PATH, client_factory=None, profile=None):
     """Extract YouTube cookies from a local browser profile and store credentials at path.
 
     If browser is None, tries each of _AUTODETECT_BROWSERS in turn and uses the first
-    that yields a logged-in YouTube cookie set. Validates the extracted credentials with
+    that yields a logged-in YouTube cookie set. `profile` names one browser profile
+    directory (Chromium: "Default", "Profile 1"; Firefox: the profile folder name)
+    instead of letting the newest one win. Validates the extracted credentials with
     a live call before leaving the auth file in place; on failure the file is removed
     and AuthError is raised so a dead auth file is never left behind silently.
     """
@@ -392,7 +453,7 @@ def from_browser(browser=None, path=AUTH_PATH, client_factory=None):
     cookie_header = None
     reasons = {}
     for name in candidates:
-        cookie_header, reason = _extract_browser_cookie_header(name)
+        cookie_header, reason = _extract_browser_cookie_header(name, profile=profile)
         if cookie_header:
             break
         reasons[name] = reason
@@ -427,6 +488,14 @@ def from_browser(browser=None, path=AUTH_PATH, client_factory=None):
         make_client(path).search("test", limit=1)
     except Exception as exc:
         path.unlink(missing_ok=True)
+        if _is_network_error(exc):
+            raise AuthError(
+                "Browser cookies were extracted, but the check against YouTube Music "
+                "failed to connect, so no auth file was left behind. This is a network "
+                "problem, not a login problem: check connectivity (a machine whose IPv6 "
+                "route is broken hangs here until the 30 s timeout; try disabling IPv6 "
+                f"or setting a proxy). Underlying error: {exc}"
+            ) from exc
         raise AuthError(
             "Extracted browser cookies were written but did not authenticate "
             "successfully; no auth file was left behind. Make sure you are logged "
