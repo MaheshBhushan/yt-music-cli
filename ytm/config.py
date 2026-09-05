@@ -12,6 +12,9 @@ startup. The shape and defaults are::
     confirm_remote_delete = true
     authenticated_streams = false
 
+    [auth]
+    x-goog-authuser = "0"
+
     [ui]
     theme = "dark"
     art = "blocks"
@@ -63,6 +66,10 @@ DEFAULTS = {
         "confirm_remote_delete": True,
         "authenticated_streams": False,
     },
+    # x-goog-authuser: Google account index to authenticate as when browser
+    # cookies include more than one signed-in account. YouTube Music expects
+    # this as a string header value such as "0", "1", or "2".
+    "auth": {"x-goog-authuser": "0"},
     # art: cover art in the TUI. "blocks" (default) draws coloured half-cell
     # glyphs and works in every terminal, tmux included. "kitty" and "sixel"
     # use the terminal's pixel graphics protocol and "auto" probes for one;
@@ -93,6 +100,7 @@ _TYPES = {
     ("behaviour", "autoplay_radio"): bool,
     ("behaviour", "confirm_remote_delete"): bool,
     ("behaviour", "authenticated_streams"): bool,
+    ("auth", "x-goog-authuser"): str,
     ("ui", "theme"): str,
     ("ui", "art"): str,
     ("tui", "queue_column_width"): int,
@@ -159,6 +167,12 @@ def load(path=None):
                 _warn(
                     f"'{section}.{key}' must be a {expected.__name__} in {path}; "
                     "using default"
+                )
+                continue
+            if (section, key) == ("auth", "x-goog-authuser") and not value.isdecimal():
+                _warn(
+                    f"'{section}.{key}' must be a string representation of a "
+                    f"number in {path}; using default"
                 )
                 continue
             if (section, key) == ("tui", "queue_column_width") and value < 0:

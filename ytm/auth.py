@@ -11,6 +11,7 @@ from pathlib import Path
 
 import requests
 import ytmusicapi
+from ytm import config as config_mod
 from yt_dlp.cookies import extract_cookies_from_browser
 from ytmusicapi.auth.oauth.credentials import OAuthCredentials
 from ytmusicapi.auth.oauth.exceptions import BadOAuthClient, UnauthorizedOAuthClient
@@ -439,7 +440,7 @@ def _is_network_error(exc):
     return False
 
 
-def from_browser(browser=None, path=AUTH_PATH, client_factory=None, profile=None):
+def from_browser(browser=None, path=AUTH_PATH, client_factory=None, profile=None, config=None):
     """Extract YouTube cookies from a local browser profile and store credentials at path.
 
     If browser is None, tries each of _AUTODETECT_BROWSERS in turn and uses the first
@@ -449,6 +450,8 @@ def from_browser(browser=None, path=AUTH_PATH, client_factory=None, profile=None
     a live call before leaving the auth file in place; on failure the file is removed
     and AuthError is raised so a dead auth file is never left behind silently.
     """
+    cfg = config if config is not None else config_mod.load()
+    authuser = cfg["auth"]["x-goog-authuser"]
     candidates = [browser] if browser else list(_AUTODETECT_BROWSERS)
     cookie_header = None
     reasons = {}
@@ -469,7 +472,7 @@ def from_browser(browser=None, path=AUTH_PATH, client_factory=None, profile=None
 
     headers = {
         "cookie": cookie_header,
-        "x-goog-authuser": "0",
+        "x-goog-authuser": authuser,
         "user-agent": _USER_AGENT,
         # Placeholder so ytmusicapi recognises this as browser auth; it is
         # regenerated from the cookie's SAPISID on every request.
