@@ -4,6 +4,8 @@ import io
 import urllib.request
 from dataclasses import dataclass
 
+from ytm import config as config_mod
+
 from textual.containers import Container, Horizontal, Vertical
 from textual.markup import escape
 from textual.message import Message
@@ -46,7 +48,7 @@ def _format_time(seconds):
 QUEUE_COLUMN_WIDTH = 16
 QUEUE_COLUMN_MIN_WIDTH = 12
 #: wider than this and UP NEXT drifts to the far edge of a wide terminal
-QUEUE_COLUMN_MAX_WIDTH = 40
+DEFAULT_QUEUE_COLUMN_MAX_WIDTH = config_mod.DEFAULTS["tui"]["queue_column_width"]
 QUEUE_ARTIST_MIN_WIDTH = 28
 QUEUE_DEFAULT_HEIGHT = 8
 QUEUE_RESERVED_ROWS = 4
@@ -63,16 +65,18 @@ def _truncate(title, width=QUEUE_COLUMN_WIDTH):
     return title if len(title) <= width else title[:width - 1] + "…"
 
 
-def queue_summary_layout(width=None, height=None):
+def queue_summary_layout(width=None, height=None, max_width=DEFAULT_QUEUE_COLUMN_MAX_WIDTH):
     """Return the played/up-next column shape for the available cells."""
     width = width or QUEUE_COLUMN_WIDTH * 2
     height = height or QUEUE_DEFAULT_HEIGHT
     half_width = max(1, width // 2)
     column_width = (
-        min(QUEUE_COLUMN_MAX_WIDTH, max(QUEUE_COLUMN_MIN_WIDTH, half_width))
+        max(QUEUE_COLUMN_MIN_WIDTH, half_width)
         if width >= QUEUE_COLUMN_MIN_WIDTH * 2
         else half_width
     )
+    if max_width:
+        column_width = min(max_width, column_width)
     track_count = max(1, height - QUEUE_RESERVED_ROWS)
     show_artist = column_width >= QUEUE_ARTIST_MIN_WIDTH and track_count > 1
     return QueueSummaryLayout(column_width, track_count, show_artist)
@@ -187,9 +191,12 @@ class NowPlaying(Vertical):
             super().__init__()
             self.seconds = seconds
 
-    def __init__(self, *args, art=DEFAULT_ART, **kwargs):
+    def __init__(
+        self, *args, art=DEFAULT_ART, queue_column_width=DEFAULT_QUEUE_COLUMN_MAX_WIDTH, **kwargs
+    ):
         super().__init__(*args, **kwargs)
         self._art = art
+        self._queue_column_width = queue_column_width
         self._duration_seconds = 0
         self._position = 0
         self._video_id = None
@@ -281,7 +288,7 @@ class NowPlaying(Vertical):
         text_width = self.query_one("#now-playing-text").size.width
         width = text_width or width
         height = height or self.size.height
-        layout = queue_summary_layout(width, height)
+        layout = queue_summary_layout(width, height, self._queue_column_width)
         self.query_one("#now-playing-played", Static).styles.width = layout.column_width
         self.query_one("#now-playing-upnext", Static).styles.width = layout.column_width
         played, up_next = split_queue(

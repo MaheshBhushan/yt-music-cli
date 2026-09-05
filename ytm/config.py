@@ -16,6 +16,9 @@ startup. The shape and defaults are::
     theme = "dark"
     art = "blocks"
 
+    [tui]
+    queue_column_width = 40
+
     [pot]
     enabled = true
     base_url = "http://127.0.0.1:4416"
@@ -66,6 +69,9 @@ DEFAULTS = {
     # they are opt-in because Sixel in Konsole froze the now-playing pane.
     # "ascii" is plain block characters; "off" hides the art.
     "ui": {"theme": "dark", "art": "blocks"},
+    # queue_column_width: maximum width of each PLAYED / UP NEXT column in
+    # the TUI now-playing strip. 0 means no maximum.
+    "tui": {"queue_column_width": 40},
     "pot": {"enabled": True, "base_url": "http://127.0.0.1:4416"},
     "keys": {
         "toggle": "space",
@@ -89,6 +95,7 @@ _TYPES = {
     ("behaviour", "authenticated_streams"): bool,
     ("ui", "theme"): str,
     ("ui", "art"): str,
+    ("tui", "queue_column_width"): int,
     ("pot", "enabled"): bool,
     ("pot", "base_url"): str,
     ("keys", "toggle"): str,
@@ -151,6 +158,12 @@ def load(path=None):
             if not _matches_type(value, expected):
                 _warn(
                     f"'{section}.{key}' must be a {expected.__name__} in {path}; "
+                    "using default"
+                )
+                continue
+            if (section, key) == ("tui", "queue_column_width") and value < 0:
+                _warn(
+                    f"'{section}.{key}' must be a positive integer or 0 in {path}; "
                     "using default"
                 )
                 continue
