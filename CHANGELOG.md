@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.5.8 — 2026-09-05
+
+- The PLAYED / UP NEXT columns' maximum width is configurable: `queue_column_width` under `[tui]` in `config.toml`, default 40 cells, `0` for no cap. Negative values are rejected with the usual config warning. Contributed by @paul-sx (#31).
+
 ## 0.5.7 — 2026-09-05
 
 - `ytm auth --from-browser` with several browser profiles: the profile that is actually logged in to YouTube is used, instead of whichever one the browser saved last. yt-dlp's "newest cookie file" rule picked the wrong profile and ytm then said "no YouTube login" for a browser that had one; System and Guest profiles are skipped. `--profile NAME` ("Default", "Profile 1", a Firefox profile folder) selects one explicitly. Reported by @nikbrunner (#27).
