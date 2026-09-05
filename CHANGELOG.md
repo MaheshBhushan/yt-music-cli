@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- `ytm auth --from-browser` with several browser profiles: the profile that is actually logged in to YouTube is used, instead of whichever one the browser saved last. yt-dlp's "newest cookie file" rule picked the wrong profile and ytm then said "no YouTube login" for a browser that had one; System and Guest profiles are skipped. `--profile NAME` ("Default", "Profile 1", a Firefox profile folder) selects one explicitly. Reported by @nikbrunner (#27).
+- When the extracted cookies could not be checked against YouTube Music because the connection failed (for example a broken IPv6 route, which hangs until the 30 s timeout), the error now says it is a network problem rather than a login problem.
+
 ## 0.5.6 — 2026-09-04
 
 - `h` hides the search box and results so the queue, playlists and lyrics get the whole screen while you listen; `s`, `/` or `h` bring them back. Not remembered across runs. Suggested by @paul-sx (#30).

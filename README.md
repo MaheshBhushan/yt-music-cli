@@ -85,6 +85,7 @@ Search and playback work signed out. Library, playlists, likes and lyrics need y
 ```bash
 ytm auth                          # 1. cookies from a browser you are logged in to (auto-detects)
 ytm auth --from-browser firefox   #    or name one: chrome, chromium, edge, brave, vivaldi, opera, helium, firefox
+ytm auth --from-browser helium --profile "Profile 1"   # pick a browser profile (default: the one that is logged in)
 ytm auth --manual                 # 2. paste request headers copied from the browser's DevTools
 ytm auth --oauth                  # 3. OAuth device code: for SSH, headless boxes, or Windows without Firefox
 ```
@@ -93,7 +94,7 @@ Cookies expire after a few weeks; re-run `ytm auth` when the app says so. OAuth 
 
 ### From a browser
 
-Log in at <https://music.youtube.com>, then run `ytm auth`. It tries each browser's profile and takes the first with a YouTube session. If none works, the error says why for each browser: not installed, cookies could not be decrypted, database locked, or no YouTube login.
+Log in at <https://music.youtube.com>, then run `ytm auth`. It tries each browser in turn and, within a browser, every profile (Chromium's `Default`, `Profile 1`, ...; System and Guest profiles are skipped), taking the first with a YouTube session. To read one profile only, name its directory: `ytm auth --from-browser helium --profile "Profile 1"` (for Firefox, the profile folder name). If none works, the error says why for each browser: not installed, no such profile, cookies could not be decrypted, database locked, no YouTube login, or a network failure while checking the cookies against YouTube Music.
 
 > [!WARNING]
 > **Windows:** Chrome, Edge, Brave, Vivaldi and Opera encrypt their cookies with App-Bound Encryption (Chrome 127 and newer), which no other program can read, so `ytm auth` cannot import from them. Either log in with **Firefox** and run `ytm auth --from-browser firefox`, or use `--manual` (works with Chrome) or `--oauth`.
