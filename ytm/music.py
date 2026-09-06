@@ -4,6 +4,7 @@ Owns nothing YouTube Music already owns. Every function takes an optional
 `yt` client so tests inject a fake; results come back as the small Track and
 Playlist records the CLI needs and nothing more.
 """
+import re
 from dataclasses import asdict, dataclass
 
 from ytmusicapi.exceptions import YTMusicError
@@ -234,6 +235,33 @@ def library_playlists(limit=25, yt=None):
     return [to_playlist(result) for result in results]
 
 
+def _signed_out_or_unexpected(exc, playlist_id, yt):
+    """Explain a KeyError ytmusicapi raised while navigating a playlist response.
+
+    YouTube answers stale cookies with the signed-out page rather than an
+    error. A personal mix does not exist for an anonymous visitor, so that
+    page has no 'contents' and ytmusicapi fails a path lookup with a KeyError
+    carrying the whole response. The library probe tells a dead session apart
+    from a genuinely unexpected response; either way the raw dump never
+    reaches the user.
+    """
+    try:
+        signed_in = bool(yt.get_library_playlists(limit=1))
+    except Exception:  # the probe itself failing is not the answer we want
+        signed_in = True
+    if not signed_in:
+        return AuthExpired(_SIGNED_OUT_HINT)
+    kind = "mix" if is_mix_id(playlist_id) else "playlist"
+    # ytmusicapi's message is "Unable to find 'contents' using path [...] on
+    # {the entire response}"; keep the field name, drop the dump
+    match = re.search(r"Unable to find '([^']+)'", str(exc))
+    missing = match.group(1) if match else "a field"
+    return RuntimeError(
+        f"YouTube Music returned an unexpected response for {kind} {playlist_id} "
+        f"(missing '{missing}'). It may have been removed, or ytmusicapi may need an update."
+    )
+
+
 def _wrap_ytmusic_error(exc):
     if is_expiry(exc):
         return AuthExpired(_EXPIRED_HINT)
@@ -252,6 +280,8 @@ def get_playlist(playlist_id, limit=100, yt=None):
         result = yt.get_playlist(playlist_id, limit=limit)
     except YTMusicError as exc:
         raise _wrap_ytmusic_error(exc) from exc
+    except KeyError as exc:
+        raise _signed_out_or_unexpected(exc, playlist_id, yt) from exc
     result = result or {}
     tracks = to_tracks(result.get("tracks") or [])
     playlist = to_playlist(
