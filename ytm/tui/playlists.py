@@ -57,15 +57,20 @@ class PlaylistsPane(Vertical):
             except Exception:
                 pass  # the highlighted playlist is gone; row 0 is fine
 
-    def set_count(self, playlist_id, count):
-        """Update one playlist's count cell in place (after an add)."""
-        if count is None:
-            return
+    def set_count(self, playlist_id, count, added=0):
+        """Update one playlist's count cell in place after adding `added`
+        tracks. YouTube's count can lag the add by a few seconds, so the
+        cell never drops below what it showed plus what was just added."""
         table = self.query_one("#playlists-table", DataTable)
         try:
-            table.update_cell(playlist_id, "count", _count_text(count))
+            shown = int(str(table.get_cell(playlist_id, "count")) or 0)
         except Exception:
-            pass  # not listed (yet); the next refresh will show it
+            shown = None  # not listed (yet); the next refresh will show it
+        if shown is None:
+            return
+        floor = shown + added
+        count = floor if count is None else max(int(count), floor)
+        table.update_cell(playlist_id, "count", _count_text(count))
 
     def _selected_key(self):
         table = self.query_one("#playlists-table", DataTable)
