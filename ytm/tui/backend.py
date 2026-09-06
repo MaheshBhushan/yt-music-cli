@@ -10,6 +10,7 @@ change is translated into the same `track_changed` / `position` /
 `state_changed` / `queue_changed` events the TUI already understands.
 """
 
+import threading
 from dataclasses import asdict
 
 from ytm import music, playlists_local, state
@@ -341,6 +342,7 @@ class Backend:
             observer = self._make_player(spawn=False, timeout=None)
         except PlayerError as exc:
             raise BackendError(str(exc)) from exc
+        stop_mixer = self._watch_mixer()
         current_id = None
         duration = 0
         position = None
@@ -402,7 +404,31 @@ class Backend:
             if not self._closed:
                 raise BackendError(str(exc)) from exc
         finally:
+            stop_mixer.set()
             observer.close()
+
+    def _watch_mixer(self):
+        """Follow the system volume while `listen()` runs, so a media key or
+        the tray slider shows up in the TUI like a `+`/`-` would. Returns
+        the event that stops the watcher thread; a no-op without a mixer."""
+        stop = threading.Event()
+        mixer = getattr(self._player, "mixer", None)
+        if mixer is None:
+            return stop
+
+        def changed(level):
+            if self._closed or stop.is_set():
+                return
+            try:
+                paused = bool(self._player.get("pause", False))
+            except PlayerError:
+                paused = False
+            self._emit("state_changed", {"paused": paused, "volume": level})
+
+        threading.Thread(
+            target=mixer.watch, args=(changed, stop), daemon=True, name="ytm-mixer"
+        ).start()
+        return stop
 
     def close(self):
         self._closed = True

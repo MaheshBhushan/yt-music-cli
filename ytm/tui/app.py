@@ -160,6 +160,9 @@ class YTMApp(App):
             # priority: volume from anywhere, even while typing a search
             Binding("plus", "volume_up", "Vol +", priority=True),
             Binding("minus", "volume_down", "Vol -", priority=True),
+            # the unshifted `+` key on most layouts; `=` is never typed in a
+            # search, so it is safe to take everywhere too
+            Binding("equals_sign", "volume_up", "Vol +", show=False, priority=True),
             ("tab", "cycle_pane", "Cycle panes"),
             Binding("escape", "focus_results", "Results", show=False),
             # no priority on any letter key: while the search box has focus
