@@ -11,6 +11,7 @@ change is translated into the same `track_changed` / `position` /
 """
 
 import threading
+import time
 from dataclasses import asdict
 
 from ytm import music, playlists_local, state
@@ -22,6 +23,10 @@ from ytm.player import Player, PlayerError, watch_url
 #: YouTube's auto-playlists: ids are fixed and they cannot take plain inserts
 LIKED_MUSIC_ID = "LM"
 EPISODES_ID = "SE"
+
+#: how long an add is remembered while YouTube has not shown it yet (seconds;
+#: propagation takes a few seconds, well under this)
+PENDING_ADD_TTL = 120.0
 
 
 class BackendError(Exception):
@@ -69,6 +74,11 @@ class Backend:
         # the list and each tracklist until `mixes_refresh` asks for new ones
         self._mixes = None
         self._mix_tracks = {}
+        # tracks added to a remote playlist that YouTube has not yet shown
+        # in the playlist itself: {playlist_id: [(Track, monotonic time)]}.
+        # An add is acknowledged at once but takes a few seconds to appear,
+        # so a fetch straight after it would leave the new song out.
+        self._pending_adds = {}
         self._routes = {
             "status": self._status,
             "search": self._search,
@@ -275,7 +285,33 @@ class Backend:
             playlist, tracks = self._mix_tracks[playlist_id]
         else:
             playlist, tracks = music.get_playlist(playlist_id)
+            tracks = self._with_pending_adds(playlist_id, tracks)
+            if playlist.track_count is not None:
+                playlist.track_count = max(playlist.track_count, len(tracks))
         return {"playlist": _playlist_dict(playlist), "tracks": [asdict(t) for t in tracks]}
+
+    def _with_pending_adds(self, playlist_id, tracks):
+        """`tracks` plus any recent adds YouTube has not surfaced yet.
+
+        Once a pending track shows up in the fetched list, or it is older
+        than PENDING_ADD_TTL, it is forgotten. Liked Music lists newest
+        first, so likes go to the front; a plain playlist appends.
+        """
+        pending = self._pending_adds.get(playlist_id)
+        if not pending:
+            return tracks
+        now = time.monotonic()
+        present = {t.video_id for t in tracks}
+        still = [(t, when) for t, when in pending
+                 if t.video_id not in present and now - when < PENDING_ADD_TTL]
+        if still:
+            self._pending_adds[playlist_id] = still
+        else:
+            self._pending_adds.pop(playlist_id, None)
+        missing = [t for t, _ in still]
+        if not missing:
+            return tracks
+        return missing[::-1] + tracks if playlist_id == LIKED_MUSIC_ID else tracks + missing
 
     def _playlist_add(self, args):
         playlist_id = args["playlist_id"]
@@ -297,6 +333,11 @@ class Backend:
             music.add_playlist_items(playlist_id, video_ids)
         result = {"playlist_id": playlist_id, "added": len(video_ids)}
         if not playlists_local.is_local_id(playlist_id):
+            meta = {t.get("video_id"): t for t in (args.get("tracks") or [])}
+            now = time.monotonic()
+            self._pending_adds.setdefault(playlist_id, []).extend(
+                (_from_args(meta.get(v) or {"video_id": v}), now) for v in video_ids
+            )
             # the library listing can lag behind an add; hand the UI a fresh
             # count so the row is right without waiting for the next refresh
             try:

@@ -1676,3 +1676,24 @@ def test_equals_key_raises_the_volume_like_plus():
             assert app.query_one("#search-input").value == ""
 
     asyncio.run(scenario())
+
+
+def test_playlist_count_after_an_add_never_drops_below_what_was_shown():
+    """YouTube's count lags the add by a few seconds; the row must not
+    show 412 after adding to a list that showed 412."""
+    async def scenario():
+        stub = StubClient()
+        app = YTMApp(client=stub)
+        async with app.run_test() as pilot:
+            await settle(pilot)
+            pane = app.query_one(PlaylistsPane)
+            table = app.query_one("#playlists-table", DataTable)
+            pane.set_count("remote-1", 412, added=1)  # stale count from YouTube
+            assert str(table.get_cell("remote-1", "count")) == "413"
+            pane.set_count("remote-1", 420, added=1)  # a fresh, larger count wins
+            assert str(table.get_cell("remote-1", "count")) == "420"
+            pane.set_count("remote-1", None, added=1)  # count lookup failed
+            assert str(table.get_cell("remote-1", "count")) == "421"
+            pane.set_count("nope", 5, added=1)  # unknown playlist: no crash
+
+    asyncio.run(scenario())

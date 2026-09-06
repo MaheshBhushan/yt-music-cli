@@ -727,7 +727,7 @@ class YTMApp(App):
 
         def added(data):
             self.notify(f"Added {track_args.get('title') or 'track'} to {pane.title_of(playlist_id) or 'playlist'}")
-            pane.set_count(playlist_id, (data or {}).get("track_count"))
+            pane.set_count(playlist_id, (data or {}).get("track_count"), added=1)
             self._refresh_playlists()
 
         self._request_async(

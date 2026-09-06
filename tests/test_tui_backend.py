@@ -393,3 +393,74 @@ def test_playlist_list_keeps_local_playlists_and_reports_a_signed_out_account(ba
     out = backend.request("playlist_list")
     assert [p["title"] for p in out["playlists"]] == ["road trip"]
     assert out["error"] == "signed out"
+
+
+# -- an add shows up in the playlist before YouTube catches up ---------------------
+
+
+def _lagging_playlist(monkeypatch, pid, served):
+    """get_playlist serves `served` (a mutable list of Tracks) as the remote
+    playlist, standing in for YouTube while an add has not propagated."""
+    monkeypatch.setattr(music, "add_playlist_items", lambda p, vids, yt=None: None)
+    monkeypatch.setattr(music, "like", lambda vid, yt=None: None)
+    monkeypatch.setattr(music, "playlist_count", lambda p, yt=None: len(served))
+    monkeypatch.setattr(
+        music, "get_playlist",
+        lambda p, limit=100, yt=None: (music.Playlist(p, "List", len(served)), list(served)),
+    )
+
+
+def test_a_just_added_track_is_listed_before_youtube_shows_it(backend, monkeypatch):
+    served = [track("a", "A"), track("b", "B")]
+    _lagging_playlist(monkeypatch, "PL1", served)
+    backend.request("playlist_add", {
+        "playlist_id": "PL1", "video_ids": ["n"],
+        "tracks": [{"video_id": "n", "title": "New", "artist": "Who"}],
+    })
+    got = backend.request("playlist_get", {"playlist_id": "PL1"})
+    assert [t["video_id"] for t in got["tracks"]] == ["a", "b", "n"]  # appended
+    assert got["tracks"][-1]["title"] == "New"
+    assert got["playlist"]["track_count"] == 3
+    # playing it right away includes the new song too
+    q = backend.request("playlist_play", {"playlist_id": "PL1"})
+    assert [t["video_id"] for t in q["tracks"]] == ["a", "b", "n"]
+
+
+def test_a_like_is_listed_first_in_liked_music(backend, monkeypatch):
+    served = [track("old", "Old")]
+    _lagging_playlist(monkeypatch, "LM", served)
+    backend.request("playlist_add", {"playlist_id": "LM", "video_ids": ["n"], "tracks": [{"video_id": "n", "title": "New"}]})
+    got = backend.request("playlist_get", {"playlist_id": "LM"})
+    assert [t["video_id"] for t in got["tracks"]] == ["n", "old"]
+
+
+def test_pending_add_is_forgotten_once_youtube_lists_it(backend, monkeypatch):
+    served = [track("a", "A")]
+    _lagging_playlist(monkeypatch, "PL1", served)
+    backend.request("playlist_add", {"playlist_id": "PL1", "video_ids": ["n"], "tracks": [{"video_id": "n", "title": "New"}]})
+    served.append(track("n", "New (from YouTube)"))
+    got = backend.request("playlist_get", {"playlist_id": "PL1"})
+    assert [t["video_id"] for t in got["tracks"]] == ["a", "n"]  # no duplicate
+    assert got["tracks"][1]["title"] == "New (from YouTube)"  # YouTube's copy wins
+    assert "PL1" not in backend._pending_adds
+
+
+def test_pending_add_expires(backend, monkeypatch):
+    from ytm.tui import backend as backend_mod
+
+    served = [track("a", "A")]
+    _lagging_playlist(monkeypatch, "PL1", served)
+    backend.request("playlist_add", {"playlist_id": "PL1", "video_ids": ["n"], "tracks": [{"video_id": "n", "title": "New"}]})
+    real = time.monotonic
+    monkeypatch.setattr(backend_mod.time, "monotonic", lambda: real() + backend_mod.PENDING_ADD_TTL + 1)
+    got = backend.request("playlist_get", {"playlist_id": "PL1"})
+    assert [t["video_id"] for t in got["tracks"]] == ["a"]
+
+
+def test_local_playlist_adds_are_not_pended(backend, monkeypatch, tmp_path):
+    from ytm import playlists_local
+
+    monkeypatch.setattr(playlists_local, "DEFAULT_PATH", tmp_path / "pl.json")
+    pid = playlists_local.create("mine")
+    backend.request("playlist_add", {"playlist_id": pid, "video_ids": ["n"], "tracks": [{"video_id": "n", "title": "New"}]})
+    assert backend._pending_adds == {}
