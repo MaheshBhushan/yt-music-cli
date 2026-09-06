@@ -69,3 +69,34 @@ def test_empty_library_listing_means_signed_out():
 
     with pytest.raises(AuthExpired, match="signed out"):
         music.library_playlists(yt=SignedOut([]))
+
+
+def test_mix_fetch_on_signed_out_cookies_says_so_instead_of_dumping_the_response():
+    """Opening a mix with stale cookies: YouTube serves the anonymous page,
+    ytmusicapi raises a KeyError carrying the whole response, and the user
+    saw that dump in the error banner. It must be the signed-out hint."""
+    import pytest
+    from ytm.auth import AuthExpired
+
+    class SignedOut(FakeYT):
+        def get_library_playlists(self, limit=25):
+            return []
+
+        def get_playlist(self, playlist_id, limit=100):
+            raise KeyError("Unable to find 'contents' using path [...] on {'responseContext': {...}}")
+
+    with pytest.raises(AuthExpired, match="signed out") as excinfo:
+        music.get_playlist("RDTMAK5uy_abc", yt=SignedOut([]))
+    assert "responseContext" not in str(excinfo.value)
+
+
+def test_mix_fetch_key_error_while_signed_in_is_reported_briefly():
+    import pytest
+
+    class Odd(FakeYT):
+        def get_playlist(self, playlist_id, limit=100):
+            raise KeyError("Unable to find 'contents' using path [...] on {'responseContext': {'huge': 'dump'}}")
+
+    with pytest.raises(RuntimeError, match="unexpected response for mix RDTMAK5uy_abc") as excinfo:
+        music.get_playlist("RDTMAK5uy_abc", yt=Odd([]))
+    assert "huge" not in str(excinfo.value)
