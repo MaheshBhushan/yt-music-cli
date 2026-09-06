@@ -66,8 +66,8 @@ def _truncate(title, width=QUEUE_COLUMN_WIDTH):
     return title if len(title) <= width else title[:width - 1] + "…"
 
 
-#: cells kept free on the queue row for the "vol NNN" label plus a gap
-VOLUME_LABEL_WIDTH = 8
+#: cells kept free on the queue row for the "vol NNN" label plus its margin
+VOLUME_LABEL_WIDTH = 10
 
 
 def queue_summary_layout(width=None, height=None, max_width=DEFAULT_QUEUE_COLUMN_MAX_WIDTH):
@@ -218,14 +218,12 @@ class NowPlaying(Vertical):
             with Vertical(id="now-playing-text"):
                 # fills the dead space above the title/artist with what
                 # just played and what plays next
-                # the volume floats in the strip's top-right corner on its
-                # own layer (see app.tcss), so it stays there whether the
-                # queue columns fill the rows above the title or not
-                with Horizontal(id="now-playing-corner"):
-                    yield Static("vol 100", id="now-playing-volume")
                 with Horizontal(id="now-playing-queue"):
                     yield Static("", id="now-playing-played")
                     yield Static("", id="now-playing-upnext")
+                    # the volume reads on the PLAYED / UP NEXT heading row,
+                    # right after the columns, where the eye already is
+                    yield Static("vol 100", id="now-playing-volume")
                 yield Static("nothing playing", id="now-playing-track")
                 yield Static("", id="now-playing-artist")
                 with Horizontal(id="now-playing-bar"):
