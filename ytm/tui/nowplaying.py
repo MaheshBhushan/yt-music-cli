@@ -295,10 +295,12 @@ class NowPlaying(Vertical):
         text_width = self.query_one("#now-playing-text").size.width
         width = text_width or width
         height = height or self.size.height
-        # the volume label shares the row, so the columns get the rest
-        layout = queue_summary_layout(
-            max(1, width - VOLUME_LABEL_WIDTH), height, self._queue_column_width
-        )
+        # the volume label shares the row, so the columns get the rest; before
+        # the first layout the pane has no size yet (width None or 0) and the
+        # helper's own default applies
+        if width:
+            width = max(1, width - VOLUME_LABEL_WIDTH)
+        layout = queue_summary_layout(width, height, self._queue_column_width)
         self.query_one("#now-playing-played", Static).styles.width = layout.column_width
         self.query_one("#now-playing-upnext", Static).styles.width = layout.column_width
         played, up_next = split_queue(
