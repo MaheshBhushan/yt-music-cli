@@ -1,6 +1,7 @@
 """Authentication module."""
 import getpass
 import json
+import threading
 import re
 import subprocess
 import sys
@@ -60,6 +61,10 @@ _SIGNED_OUT_HINT = (
     "YouTube Music is treating these credentials as signed out: the library "
     "and home feed came back empty instead of failing. Browser cookies have "
     "expired or were copied from a signed-out tab. Run 'ytm auth' again."
+)
+
+_REFRESH_FAILED_HINT = (
+    " ytm tried to re-extract them from {browser} and could not: {reason}"
 )
 
 _OAUTH_EXPIRED_HINT = (
@@ -500,6 +505,7 @@ def from_browser(browser=None, path=AUTH_PATH, client_factory=None, profile=None
         make_client(path).search("test", limit=1)
     except Exception as exc:
         path.unlink(missing_ok=True)
+        source_path(path).unlink(missing_ok=True)
         if _is_network_error(exc):
             raise AuthError(
                 "Browser cookies were extracted, but the check against YouTube Music "
@@ -514,7 +520,63 @@ def from_browser(browser=None, path=AUTH_PATH, client_factory=None, profile=None
             "in at https://music.youtube.com and try again. "
             f"Underlying error: {exc}"
         ) from exc
+    # remember where these came from, so a stale set can be re-extracted
+    # without asking (see refresh_from_browser)
+    _write_source(path, {"browser": name, "profile": profile, "authuser": authuser})
     return path
+
+
+def source_path(path=AUTH_PATH):
+    """Where the browser an auth file came from is recorded (a sidecar, since
+    every key in auth.json itself is sent to YouTube as a request header)."""
+    path = Path(path)
+    return path.with_name(path.stem + ".source.json")
+
+
+def _write_source(path, source):
+    with open(source_path(path), "w", encoding="utf-8") as file:
+        json.dump(source, file)
+
+
+def browser_source(path=AUTH_PATH):
+    """The browser, profile and authuser the auth at `path` was extracted from,
+    or None if it was pasted, came from OAuth, or predates the record."""
+    try:
+        with open(source_path(path), encoding="utf-8") as file:
+            source = json.load(file)
+    except (OSError, ValueError):
+        return None
+    if not isinstance(source, dict) or not source.get("browser"):
+        return None
+    return source
+
+
+_refresh_lock = threading.Lock()
+
+
+def refresh_from_browser(path=AUTH_PATH, client_factory=None):
+    """Re-extract cookies from the browser the current auth came from.
+
+    Google rotates the session tokens in the browser every day or so, and
+    the copy ytm holds is then treated as signed out. When that happens the
+    catalogue layer calls this once and retries; the browser still has the
+    live session, so the user never has to run 'ytm auth' by hand.
+
+    Raises AuthError when there is no browser to go back to (pasted headers,
+    OAuth) or when the extraction itself fails, for example because the
+    browser is signed out too.
+    """
+    source = browser_source(path)
+    if source is None:
+        raise AuthError("these credentials were not extracted from a browser")
+    with _refresh_lock:
+        return from_browser(
+            source["browser"],
+            path=path,
+            client_factory=client_factory,
+            profile=source.get("profile"),
+            authuser=source.get("authuser"),
+        )
 
 
 def load_headers(path=AUTH_PATH):
