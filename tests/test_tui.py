@@ -1697,3 +1697,18 @@ def test_playlist_count_after_an_add_never_drops_below_what_was_shown():
             pane.set_count("nope", 5, added=1)  # unknown playlist: no crash
 
     asyncio.run(scenario())
+
+
+def test_queue_summary_refresh_before_the_pane_has_a_size_does_not_crash():
+    """on_resize can fire before layout gives the strip a width; the label
+    reservation must not subtract from None (TypeError seen in 0.5.14)."""
+    async def scenario():
+        stub = StubClient()
+        app = YTMApp(client=stub)
+        async with app.run_test() as pilot:
+            await settle(pilot)
+            pane = app.query_one(NowPlaying)
+            pane._refresh_queue_summary(width=None, height=0)
+            pane._refresh_queue_summary(width=0, height=None)
+
+    asyncio.run(scenario())
