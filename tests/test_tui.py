@@ -1641,9 +1641,9 @@ def test_volume_keys_work_while_the_search_box_has_focus():
     asyncio.run(scenario())
 
 
-def test_volume_label_sits_in_the_top_right_corner_of_the_strip():
-    """The volume is read in the corner the queue columns leave free, on the
-    strip's first row, not squeezed after the clock on the progress row."""
+def test_volume_label_follows_the_up_next_column_on_the_heading_row():
+    """The volume is read right after the PLAYED / UP NEXT columns, not
+    squeezed after the clock on the progress row nor off at the far edge."""
     async def scenario():
         stub = StubClient()
         app = YTMApp(client=stub)
@@ -1652,11 +1652,11 @@ def test_volume_label_sits_in_the_top_right_corner_of_the_strip():
             stub.push("state_changed", {"paused": False, "volume": 55})
             await settle(pilot)
             label = app.query_one("#now-playing-volume")
-            text = app.query_one("#now-playing-text")
+            upnext = app.query_one("#now-playing-upnext")
             bar = app.query_one("#now-playing-bar")
             assert str(label.render()) == "vol 55"
-            assert label.region.y == text.region.y  # first row of the strip
-            assert label.region.right == text.region.right  # flush right
+            assert label.region.y == upnext.region.y  # the heading row
+            assert label.region.x == upnext.region.right + 2  # right after the column
             assert label.region.y < bar.region.y
 
     asyncio.run(scenario())

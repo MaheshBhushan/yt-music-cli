@@ -86,23 +86,11 @@ Screen {
     margin-left: 1;
 }
 
-/* the volume floats in the strip's top-right corner: the text column has
-   two layers, and the corner row sits on the upper one so it never takes a
-   row from the queue columns, title or progress bar */
-#now-playing-text {
-    layers: base corner;
-}
-
-#now-playing-corner {
-    layer: corner;
-    dock: right;
-    width: auto;
-    height: 1;
-}
-
+/* the volume label follows the UP NEXT column on the heading row */
 #now-playing-volume {
     width: auto;
     height: 1;
+    margin-left: 2;
     color: $text;
 }
 
