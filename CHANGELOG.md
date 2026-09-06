@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.5.14 — 2026-09-07
+
+- A song added to a remote playlist (or liked into Liked Music) shows up in that playlist right away, and playing the playlist straight after includes it. YouTube acknowledges an add immediately but takes a few seconds to list it, so opening the playlist at once used to show the old tracklist while the count had already moved. The TUI now remembers what it just added and merges it into the fetched list until YouTube shows it (likes at the top of Liked Music, adds at the end of a playlist). The count in the playlists pane can no longer drop below what it showed plus what was just added.
+
 ## 0.5.13 — 2026-09-06
 
 - The volume label sits right after the UP NEXT column on the heading row of the player strip. In 0.5.11 it was pinned to the strip's far right edge, which on a wide terminal is a long way from anything else and was reported as missing.
