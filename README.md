@@ -96,7 +96,7 @@ Cookies expire after a few weeks; re-run `ytm auth` when the app says so. OAuth 
 
 Log in at <https://music.youtube.com>, then run `ytm auth`. It tries each browser in turn and, within a browser, every profile (Chromium's `Default`, `Profile 1`, ...; System and Guest profiles are skipped), taking the first with a YouTube session. To read one profile only, name its directory: `ytm auth --from-browser helium --profile "Profile 1"` (for Firefox, the profile folder name). If none works, the error says why for each browser: not installed, no such profile, cookies could not be decrypted, database locked, no YouTube login, or a network failure while checking the cookies against YouTube Music.
 
-If the browser is signed in to more than one Google account, set `auth.x-goog-authuser` in `config.toml` before running `ytm auth` to choose the account index YouTube Music should use.
+If the browser is signed in to more than one Google account, pass `ytm auth --authuser 1` (0 is the first account, 1 the second, ...) or set `auth.x-goog-authuser` in `config.toml` to make it the default.
 
 > [!WARNING]
 > **Windows:** Chrome, Edge, Brave, Vivaldi and Opera encrypt their cookies with App-Bound Encryption (Chrome 127 and newer), which no other program can read, so `ytm auth` cannot import from them. Either log in with **Firefox** and run `ytm auth --from-browser firefox`, or use `--manual` (works with Chrome) or `--oauth`.
