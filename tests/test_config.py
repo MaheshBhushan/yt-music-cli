@@ -16,6 +16,7 @@ def test_missing_file_yields_documented_defaults(tmp_path):
             "confirm_remote_delete": True,
             "authenticated_streams": False,
         },
+        "auth": {"x-goog-authuser": "0"},
         "ui": {"theme": "dark", "art": "blocks"},
         "tui": {"queue_column_width": 40},
         "pot": {"enabled": True, "base_url": "http://127.0.0.1:4416"},
@@ -54,6 +55,7 @@ def test_partial_config_overrides_only_its_own_keys(tmp_path):
         "confirm_remote_delete": True,
         "authenticated_streams": False,
     }
+    assert config["auth"] == {"x-goog-authuser": "0"}
     assert config["ui"] == {"theme": "dark", "art": "blocks"}
     assert config["tui"] == {"queue_column_width": 40}
 
@@ -86,6 +88,30 @@ def test_tui_queue_column_width_rejects_negative_values(tmp_path, capsys):
         """
     )
     assert config_mod.load(path)["tui"]["queue_column_width"] == 40
+    captured = capsys.readouterr()
+    assert "config warning" in captured.err
+
+
+def test_auth_config_uses_numeric_string_authuser(tmp_path):
+    path = tmp_path / "config.toml"
+    path.write_text(
+        """
+        [auth]
+        x-goog-authuser = "2"
+        """
+    )
+    assert config_mod.load(path)["auth"]["x-goog-authuser"] == "2"
+
+
+def test_auth_config_rejects_non_numeric_authuser(tmp_path, capsys):
+    path = tmp_path / "config.toml"
+    path.write_text(
+        """
+        [auth]
+        x-goog-authuser = "work"
+        """
+    )
+    assert config_mod.load(path)["auth"]["x-goog-authuser"] == "0"
     captured = capsys.readouterr()
     assert "config warning" in captured.err
 
