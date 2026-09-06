@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.5.15 — 2026-09-07
+
+- Fixes a crash on startup or resize introduced in 0.5.11 (`TypeError: unsupported operand type(s) for -: 'NoneType' and 'int'` in the now-playing strip): the queue summary could be laid out before the strip had a width.
+
 ## 0.5.14 — 2026-09-07
 
 - A song added to a remote playlist (or liked into Liked Music) shows up in that playlist right away, and playing the playlist straight after includes it. YouTube acknowledges an add immediately but takes a few seconds to list it, so opening the playlist at once used to show the old tracklist while the count had already moved. The TUI now remembers what it just added and merges it into the fetched list until YouTube shows it (likes at the top of Liked Music, adds at the end of a playlist). The count in the playlists pane can no longer drop below what it showed plus what was just added.
