@@ -4,12 +4,54 @@ Owns nothing YouTube Music already owns. Every function takes an optional
 `yt` client so tests inject a fake; results come back as the small Track and
 Playlist records the CLI needs and nothing more.
 """
+import functools
 import re
 from dataclasses import asdict, dataclass
 
 from ytmusicapi.exceptions import YTMusicError
 
-from ytm.auth import AuthExpired, _EXPIRED_HINT, _SIGNED_OUT_HINT, client, is_expiry
+from ytm import auth as auth_mod
+from ytm.auth import (
+    AuthError,
+    AuthExpired,
+    _EXPIRED_HINT,
+    _REFRESH_FAILED_HINT,
+    _SIGNED_OUT_HINT,
+    client,
+    is_expiry,
+)
+
+
+def _refreshing(fn):
+    """Retry `fn` once with re-extracted browser cookies when the stored ones
+    have gone stale.
+
+    Google rotates the browser's session tokens about daily; the copy in
+    auth.json is then answered with the signed-out page (or a 401/403) and
+    `fn` raises AuthExpired. If the auth came from a browser, pull the live
+    cookies from it again and retry, so the TUI recovers by itself. Only
+    applies when `fn` builds its own client: a caller that passes `yt` owns
+    that client, and the error is theirs to handle.
+    """
+    @functools.wraps(fn)
+    def wrapper(*args, yt=None, **kwargs):
+        if yt is not None:
+            return fn(*args, yt=yt, **kwargs)
+        try:
+            return fn(*args, **kwargs)
+        except AuthExpired as stale:
+            source = auth_mod.browser_source(auth_mod.AUTH_PATH)
+            if source is None:
+                raise
+            try:
+                auth_mod.refresh_from_browser(auth_mod.AUTH_PATH)
+            except AuthError as exc:
+                raise AuthExpired(
+                    str(stale) + _REFRESH_FAILED_HINT.format(browser=source["browser"], reason=exc)
+                ) from exc
+            return fn(*args, **kwargs)
+
+    return wrapper
 
 #: search results whose videoType is an upload are out of scope for this player
 UPLOAD_VIDEO_TYPE = "MUSIC_VIDEO_TYPE_PRIVATELY_OWNED_TRACK"
@@ -128,6 +170,7 @@ def to_playlist(result, local=False):
     )
 
 
+@_refreshing
 def search(query, limit=20, yt=None):
     """Search the YouTube Music catalogue for songs and return Tracks.
 
@@ -145,6 +188,7 @@ def search(query, limit=20, yt=None):
     return to_tracks(results)[:limit]
 
 
+@_refreshing
 def get_lyrics(video_id, yt=None):
     """Fetch lyrics for a track, or None if it has none.
 
@@ -177,6 +221,7 @@ def is_mix_id(playlist_id):
     return (playlist_id or "").startswith(MIX_ID_PREFIX)
 
 
+@_refreshing
 def mixes(yt=None):
     """Personal daily mixes (My Supermix, Discover Mix, ...) from the home feed.
 
@@ -219,6 +264,7 @@ def _mixes_from_home(shelves):
     return result
 
 
+@_refreshing
 def library_playlists(limit=25, yt=None):
     """Return the user's remote playlists as Playlist objects."""
     yt = yt if yt is not None else client()
@@ -268,6 +314,7 @@ def _wrap_ytmusic_error(exc):
     return exc
 
 
+@_refreshing
 def get_playlist(playlist_id, limit=100, yt=None):
     """Fetch one remote playlist's details and tracks.
 
@@ -294,6 +341,7 @@ def get_playlist(playlist_id, limit=100, yt=None):
     return playlist, tracks
 
 
+@_refreshing
 def playlist_count(playlist_id, yt=None):
     """How many tracks a remote playlist holds.
 
@@ -315,6 +363,7 @@ def playlist_count(playlist_id, yt=None):
         return None
 
 
+@_refreshing
 def create_playlist(title, description="", privacy="PRIVATE", yt=None):
     """Create a remote playlist and return its playlist id."""
     yt = yt if yt is not None else client()
@@ -329,6 +378,7 @@ def create_playlist(title, description="", privacy="PRIVATE", yt=None):
     return result or ""
 
 
+@_refreshing
 def add_playlist_items(playlist_id, video_ids, yt=None):
     """Add tracks (by video id) to a remote playlist."""
     yt = yt if yt is not None else client()
@@ -338,6 +388,7 @@ def add_playlist_items(playlist_id, video_ids, yt=None):
         raise _wrap_ytmusic_error(exc) from exc
 
 
+@_refreshing
 def remove_playlist_items(playlist_id, video_ids, yt=None):
     """Remove tracks (by video id) from a remote playlist.
 
@@ -360,6 +411,7 @@ def remove_playlist_items(playlist_id, video_ids, yt=None):
         raise _wrap_ytmusic_error(exc) from exc
 
 
+@_refreshing
 def edit_playlist(playlist_id, title=None, description=None, privacy=None, yt=None):
     """Edit a remote playlist's metadata."""
     yt = yt if yt is not None else client()
@@ -376,6 +428,7 @@ def edit_playlist(playlist_id, title=None, description=None, privacy=None, yt=No
         raise _wrap_ytmusic_error(exc) from exc
 
 
+@_refreshing
 def delete_playlist(playlist_id, yt=None):
     """Delete a remote playlist. Irreversible -- callers must confirm first."""
     yt = yt if yt is not None else client()
@@ -393,6 +446,7 @@ def watch_url(video_id):
     return f"https://music.youtube.com/watch?v={video_id}"
 
 
+@_refreshing
 def song(video_id, yt=None):
     """Metadata for one track by id, as a Track; None if YouTube has nothing."""
     yt = yt if yt is not None else client()
@@ -415,6 +469,7 @@ def song(video_id, yt=None):
     )
 
 
+@_refreshing
 def radio(video_id, limit=25, yt=None):
     """Tracks YouTube Music would play after `video_id`, seed excluded."""
     yt = yt if yt is not None else client()
@@ -429,6 +484,7 @@ def radio(video_id, limit=25, yt=None):
     ][:limit]
 
 
+@_refreshing
 def like(video_id, yt=None):
     """Mark `video_id` as liked in the user's account."""
     yt = yt if yt is not None else client()

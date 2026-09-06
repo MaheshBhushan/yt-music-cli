@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Stale browser cookies fix themselves. Google rotates the browser's session tokens about daily, after which YouTube answers ytm's copy with the signed-out page: empty library, no playlists, mixes that fail to open. `ytm auth --from-browser` now records which browser and profile the cookies came from (`auth.source.json`), and the first request that comes back signed out (or 401/403) re-extracts the cookies from that browser and retries by itself. If the browser is signed out too, the error says the automatic re-extraction failed and why. Pasted headers and OAuth are left alone. Run `ytm auth --from-browser` once after upgrading so the source is recorded.
+
 ## 0.5.11 — 2026-09-06
 
 - The volume is now the system's output volume. ytm used to change mpv's own software volume, which the desktop never saw: `vol 70` in ytm next to 55 % in the tray, and the keyboard's volume keys moved the tray while ytm's number stayed put. `+`/`-` and `ytm volume` now set the default output through `wpctl` (PipeWire) or `pactl` (PulseAudio), and changes made anywhere else (media keys, the tray slider) appear in the TUI within a moment. mpv's own volume is pinned to 100. `control = "player"` under `[audio]` restores the old behaviour, and it is also what you get when neither tool is installed.
