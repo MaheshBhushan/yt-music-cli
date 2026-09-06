@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.5.13 — 2026-09-06
+
+- The volume label sits right after the UP NEXT column on the heading row of the player strip. In 0.5.11 it was pinned to the strip's far right edge, which on a wide terminal is a long way from anything else and was reported as missing.
+
 ## 0.5.12 — 2026-09-06
 
 - Stale browser cookies fix themselves. Google rotates the browser's session tokens about daily, after which YouTube answers ytm's copy with the signed-out page: empty library, no playlists, mixes that fail to open. `ytm auth --from-browser` now records which browser and profile the cookies came from (`auth.source.json`), and the first request that comes back signed out (or 401/403) re-extracts the cookies from that browser and retries by itself. If the browser is signed out too, the error says the automatic re-extraction failed and why. Pasted headers and OAuth are left alone. Run `ytm auth --from-browser` once after upgrading so the source is recorded.
