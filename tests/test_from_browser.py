@@ -33,6 +33,10 @@ def _fake_client_fails(path):
     return _Client()
 
 
+def _config(authuser="0"):
+    return {"auth": {"x-goog-authuser": authuser}}
+
+
 def test_cookie_header_built_from_jar_with_authuser():
     jar = _jar(
         _FakeCookie("SID", "sid-value"),
@@ -53,13 +57,27 @@ def test_from_browser_writes_headers_with_authuser_and_mode_0600(tmp_path, monke
     )
     monkeypatch.setattr(auth, "extract_cookies_from_browser", lambda name, profile=None, logger=None: jar)
 
-    auth.from_browser("chrome", path=path, client_factory=_fake_client_ok)
+    auth.from_browser("chrome", path=path, client_factory=_fake_client_ok, config=_config())
 
     assert path.stat().st_mode & 0o777 == 0o600
     headers = json.loads(path.read_text())
     assert headers["x-goog-authuser"] == "0"
     assert "SID=sid-value" in headers["cookie"]
     assert "__Secure-3PAPISID=papisid-value" in headers["cookie"]
+
+
+def test_from_browser_uses_configured_authuser(tmp_path, monkeypatch):
+    path = tmp_path / "config" / "auth.json"
+    jar = _jar(
+        _FakeCookie("SID", "sid-value"),
+        _FakeCookie("__Secure-3PAPISID", "papisid-value"),
+    )
+    monkeypatch.setattr(auth, "extract_cookies_from_browser", lambda name, profile=None, logger=None: jar)
+
+    auth.from_browser("chrome", path=path, client_factory=_fake_client_ok, config=_config("2"))
+
+    headers = json.loads(path.read_text())
+    assert headers["x-goog-authuser"] == "2"
 
 
 def test_from_browser_autodetect_skips_browser_with_no_youtube_cookies(tmp_path, monkeypatch):
@@ -76,7 +94,7 @@ def test_from_browser_autodetect_skips_browser_with_no_youtube_cookies(tmp_path,
     monkeypatch.setattr(auth, "extract_cookies_from_browser", fake_extract)
     monkeypatch.setattr(auth, "_AUTODETECT_BROWSERS", ("chrome", "chromium"))
 
-    auth.from_browser(None, path=path, client_factory=_fake_client_ok)
+    auth.from_browser(None, path=path, client_factory=_fake_client_ok, config=_config())
 
     headers = json.loads(path.read_text())
     assert "__Secure-3PAPISID=papisid-value" in headers["cookie"]
@@ -88,7 +106,7 @@ def test_from_browser_no_session_anywhere_raises_actionable_error(tmp_path, monk
     monkeypatch.setattr(auth, "_AUTODETECT_BROWSERS", ("chrome", "firefox"))
 
     with pytest.raises(auth.AuthError) as excinfo:
-        auth.from_browser(None, path=path, client_factory=_fake_client_ok)
+        auth.from_browser(None, path=path, client_factory=_fake_client_ok, config=_config())
 
     message = str(excinfo.value)
     assert "chrome" in message
@@ -103,7 +121,7 @@ def test_from_browser_validation_failure_does_not_leave_broken_auth_file(tmp_pat
     monkeypatch.setattr(auth, "extract_cookies_from_browser", lambda name, profile=None, logger=None: jar)
 
     with pytest.raises(auth.AuthError) as excinfo:
-        auth.from_browser("chrome", path=path, client_factory=_fake_client_fails)
+        auth.from_browser("chrome", path=path, client_factory=_fake_client_fails, config=_config())
 
     assert not path.exists()
     assert "did not authenticate" in str(excinfo.value)
@@ -126,7 +144,7 @@ def test_error_names_the_reason_per_browser(tmp_path, monkeypatch):
     monkeypatch.setattr(auth, "extract_cookies_from_browser", fake_extract)
     monkeypatch.setattr(auth, "_AUTODETECT_BROWSERS", ("chrome", "edge", "firefox"))
     with pytest.raises(auth.AuthError) as excinfo:
-        auth.from_browser(None, path=path, client_factory=_fake_client_ok)
+        auth.from_browser(None, path=path, client_factory=_fake_client_ok, config=_config())
     message = str(excinfo.value)
     assert "chrome: 312 cookies could not be decrypted" in message
     assert "edge: not installed or no profile found" in message
@@ -144,7 +162,7 @@ def test_windows_chromium_decrypt_failure_gets_the_app_bound_hint(tmp_path, monk
 
     monkeypatch.setattr(auth, "extract_cookies_from_browser", fake_extract)
     with pytest.raises(auth.AuthError) as excinfo:
-        auth.from_browser("chrome", path=path, client_factory=_fake_client_ok)
+        auth.from_browser("chrome", path=path, client_factory=_fake_client_ok, config=_config())
     message = str(excinfo.value)
     assert "App-Bound Encryption" in message
     assert "--from-browser firefox" in message and "--manual" in message and "--oauth" in message
@@ -155,11 +173,11 @@ def test_no_windows_hint_on_linux_or_without_decrypt_failures(tmp_path, monkeypa
     monkeypatch.setattr(auth, "extract_cookies_from_browser", lambda name, profile=None, logger=None: _jar())
     monkeypatch.setattr(auth.sys, "platform", "linux")
     with pytest.raises(auth.AuthError) as excinfo:
-        auth.from_browser("chrome", path=path, client_factory=_fake_client_ok)
+        auth.from_browser("chrome", path=path, client_factory=_fake_client_ok, config=_config())
     assert "App-Bound" not in str(excinfo.value)
     monkeypatch.setattr(auth.sys, "platform", "win32")
     with pytest.raises(auth.AuthError) as excinfo:
-        auth.from_browser("chrome", path=path, client_factory=_fake_client_ok)
+        auth.from_browser("chrome", path=path, client_factory=_fake_client_ok, config=_config())
     assert "App-Bound" not in str(excinfo.value)  # plain "no login" is not an encryption problem
 
 
@@ -168,7 +186,7 @@ def test_locked_database_reason(tmp_path, monkeypatch):
         raise Exception("sqlite3.OperationalError: database is locked")
     monkeypatch.setattr(auth, "extract_cookies_from_browser", fake_extract)
     with pytest.raises(auth.AuthError) as excinfo:
-        auth.from_browser("brave", path=tmp_path / "a.json", client_factory=_fake_client_ok)
+        auth.from_browser("brave", path=tmp_path / "a.json", client_factory=_fake_client_ok, config=_config())
     assert "brave: cookie database locked; close the browser and retry" in str(excinfo.value)
 
 
