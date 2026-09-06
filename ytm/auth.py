@@ -440,18 +440,27 @@ def _is_network_error(exc):
     return False
 
 
-def from_browser(browser=None, path=AUTH_PATH, client_factory=None, profile=None, config=None):
+def from_browser(browser=None, path=AUTH_PATH, client_factory=None, profile=None, config=None, authuser=None):
     """Extract YouTube cookies from a local browser profile and store credentials at path.
 
     If browser is None, tries each of _AUTODETECT_BROWSERS in turn and uses the first
     that yields a logged-in YouTube cookie set. `profile` names one browser profile
     directory (Chromium: "Default", "Profile 1"; Firefox: the profile folder name)
-    instead of letting the newest one win. Validates the extracted credentials with
+    instead of letting the newest one win. `authuser` is the index of the Google
+    account when the browser is signed in to several (the x-goog-authuser header);
+    it overrides `auth.x-goog-authuser` in config.toml. Validates the extracted credentials with
     a live call before leaving the auth file in place; on failure the file is removed
     and AuthError is raised so a dead auth file is never left behind silently.
     """
-    cfg = config if config is not None else config_mod.load()
-    authuser = cfg["auth"]["x-goog-authuser"]
+    if authuser is None:
+        cfg = config if config is not None else config_mod.load()
+        authuser = (cfg.get("auth") or config_mod.DEFAULTS["auth"])["x-goog-authuser"]
+    authuser = str(authuser)
+    if not authuser.isdecimal():
+        raise AuthError(
+            f"--authuser must be the numeric index of the Google account in the browser "
+            f"(0 for the first, 1 for the second, ...), not {authuser!r}."
+        )
     candidates = [browser] if browser else list(_AUTODETECT_BROWSERS)
     cookie_header = None
     reasons = {}

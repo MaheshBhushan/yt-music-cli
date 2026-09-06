@@ -336,3 +336,21 @@ def test_validation_network_failure_is_reported_as_network_not_login(tmp_path, m
     assert not path.exists()
     message = str(excinfo.value)
     assert "network problem" in message and "did not authenticate" not in message
+
+
+def test_authuser_flag_overrides_config(tmp_path, monkeypatch):
+    path = tmp_path / "auth.json"
+    jar = _jar(_FakeCookie("__Secure-3PAPISID", "v"))
+    monkeypatch.setattr(auth, "extract_cookies_from_browser", lambda name, profile=None, logger=None: jar)
+
+    auth.from_browser("chrome", path=path, client_factory=_fake_client_ok, config=_config("2"), authuser=1)
+    assert json.loads(path.read_text())["x-goog-authuser"] == "1"
+
+
+def test_authuser_flag_must_be_numeric(tmp_path, monkeypatch):
+    jar = _jar(_FakeCookie("__Secure-3PAPISID", "v"))
+    monkeypatch.setattr(auth, "extract_cookies_from_browser", lambda name, profile=None, logger=None: jar)
+
+    with pytest.raises(auth.AuthError, match="--authuser must be the numeric index"):
+        auth.from_browser("chrome", path=tmp_path / "auth.json", client_factory=_fake_client_ok, authuser="work")
+    assert not (tmp_path / "auth.json").exists()
