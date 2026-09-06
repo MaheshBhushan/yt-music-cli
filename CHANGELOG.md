@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.5.10 — 2026-09-06
+
+- Opening a mix after the browser cookies have gone stale now says the credentials are signed out and to run `ytm auth`, like the library and mix list already did. YouTube serves the anonymous page for a personal mix, ytmusicapi fails a field lookup, and the TUI banner used to show the whole raw response.
+
 ## 0.5.9 — 2026-09-06
 
 - `ytm auth` can pick which Google account to use when the browser is signed in to several: `--authuser N` on the command line (0 is the first account), or `x-goog-authuser` under `[auth]` in `config.toml` as the default. Previously the first account was always used. Config option contributed by @paul-sx (#29).
