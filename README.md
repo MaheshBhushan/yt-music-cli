@@ -52,7 +52,7 @@ The TUI is `ytm` with no arguments. Results appear as you type; Enter plays the 
 | `space` | Play / pause |
 | `n` `p` | Next / previous |
 | `←` `→` | Seek 5 s |
-| `+` `-` | Volume |
+| `+` `-` | Volume (`=` also raises it). This is the system output volume, so it matches the tray and the media keys; see `[audio] control` |
 | `a` | Add the selected song to a playlist: `a`, pick the list with `↑` `↓`, `a` or `Enter` |
 | `l` | Focus playlists |
 | `r` | Refresh your mixes (a mix keeps the same tracklist until you do) |
@@ -137,7 +137,8 @@ OAuth has no browser cookies, so streams always resolve anonymously for OAuth us
 
 ```toml
 [audio]
-volume = 70
+control = "system"              # "system": the desktop's output volume; "player": mpv's own
+volume = 70                     # mpv's starting volume, only with control = "player"
 device = "auto"                 # an mpv --audio-device name
 
 [behaviour]
@@ -170,6 +171,8 @@ quit = "e"
 check = true                    # ask PyPI once a day, toast in the TUI when newer
 auto = false                    # true: install it (and fresh yt-dlp) automatically
 ```
+
+`control = "system"` makes the volume in ytm the same one the desktop shows: `+`/`-` and `ytm volume` move the default output through `wpctl` (PipeWire) or `pactl` (PulseAudio), and a media key or the tray slider shows up in the TUI. mpv's own volume is held at 100 so the stream is not attenuated twice. Without either tool, or with `control = "player"`, ytm uses mpv's software volume, which only ytm sees.
 
 `art = "blocks"` draws the cover with coloured half-cell glyphs and works in every terminal, tmux included. `kitty` and `sixel` use the terminal's pixel protocol; Sixel is known to freeze the pane in Konsole, which is why it is opt-in.
 

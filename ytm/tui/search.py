@@ -23,11 +23,27 @@ def _truncated(value, width):
     return text
 
 
+#: keys the search box lets through to the app's volume bindings. Textual
+#: hands an Input every printable key before priority bindings are tried;
+#: `+` and `-` slip past only because their key names ("plus", "minus")
+#: have no character mapping, while "equals_sign" does.
+VOLUME_KEYS = frozenset({"plus", "minus", "equals_sign"})
+
+
+class SearchInput(Input):
+    """The search box: every printable key is text except the volume keys."""
+
+    def check_consume_key(self, key, character):
+        if key in VOLUME_KEYS:
+            return False
+        return super().check_consume_key(key, character)
+
+
 class SearchPane(Vertical):
     """Search box on top, results table below."""
 
     def compose(self):
-        yield Input(placeholder="Search...", id="search-input")
+        yield SearchInput(placeholder="Search...", id="search-input")
         table = SelectOnClickTable(id="search-results", cursor_type="row")
         for column in COLUMNS:
             table.add_column(column, key=column, width=MIN_COLUMN_WIDTH)

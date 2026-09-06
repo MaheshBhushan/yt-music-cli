@@ -1,4 +1,5 @@
-"""Now-playing pane: cover art, current track, progress bar and volume."""
+"""Now-playing pane: cover art, current track, progress bar, and the volume
+in the top-right corner."""
 
 import io
 import urllib.request
@@ -63,6 +64,10 @@ class QueueSummaryLayout:
 
 def _truncate(title, width=QUEUE_COLUMN_WIDTH):
     return title if len(title) <= width else title[:width - 1] + "…"
+
+
+#: cells kept free on the queue row for the "vol NNN" label plus a gap
+VOLUME_LABEL_WIDTH = 8
 
 
 def queue_summary_layout(width=None, height=None, max_width=DEFAULT_QUEUE_COLUMN_MAX_WIDTH):
@@ -213,6 +218,11 @@ class NowPlaying(Vertical):
             with Vertical(id="now-playing-text"):
                 # fills the dead space above the title/artist with what
                 # just played and what plays next
+                # the volume floats in the strip's top-right corner on its
+                # own layer (see app.tcss), so it stays there whether the
+                # queue columns fill the rows above the title or not
+                with Horizontal(id="now-playing-corner"):
+                    yield Static("vol 100", id="now-playing-volume")
                 with Horizontal(id="now-playing-queue"):
                     yield Static("", id="now-playing-played")
                     yield Static("", id="now-playing-upnext")
@@ -223,7 +233,6 @@ class NowPlaying(Vertical):
                         id="now-playing-progress", show_eta=False, show_percentage=False
                     )
                     yield Static("0:00 / 0:00", id="now-playing-time")
-                    yield Static("vol 100", id="now-playing-volume")
 
     def _render_track_line(self):
         icon = "||" if self._paused else ">"
@@ -288,7 +297,10 @@ class NowPlaying(Vertical):
         text_width = self.query_one("#now-playing-text").size.width
         width = text_width or width
         height = height or self.size.height
-        layout = queue_summary_layout(width, height, self._queue_column_width)
+        # the volume label shares the row, so the columns get the rest
+        layout = queue_summary_layout(
+            max(1, width - VOLUME_LABEL_WIDTH), height, self._queue_column_width
+        )
         self.query_one("#now-playing-played", Static).styles.width = layout.column_width
         self.query_one("#now-playing-upnext", Static).styles.width = layout.column_width
         played, up_next = split_queue(

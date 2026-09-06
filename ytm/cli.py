@@ -53,13 +53,15 @@ AUTOPLAY_SCRIPT = os.path.join(os.path.dirname(__file__), "mpv", "autoplay.lua")
 
 def player(spawn=True, **player_kwargs):
     """A connected Player, configured from config.toml and the stored auth."""
-    from ytm import auth, config
+    from ytm import auth, config, volume
 
     cfg = config.load()
     pot = cfg["pot"]
     autoplay = cfg["behaviour"]["autoplay_radio"]
+    mixer = volume.SystemVolume.detect() if cfg["audio"]["control"] == "system" else None
     return Player(
         spawn=spawn,
+        mixer=mixer,
         **player_kwargs,
         # radio autoplay lives inside mpv: a Lua script asks `ytm radio` for
         # more when the last queued track starts (see ytm/mpv/autoplay.lua)
@@ -78,7 +80,9 @@ def player(spawn=True, **player_kwargs):
         js_runtimes=_js_runtime(),
         audio_device=cfg["audio"]["device"],
         extra_args=[
-            f"--volume={cfg['audio']['volume']}",
+            # with a system mixer mpv's own volume stays at 100 (see
+            # Player.volume); the configured level is for mpv-only control
+            f"--volume={100 if mixer else cfg['audio']['volume']}",
             # mpv runs detached with no terminal, so this file is the only
             # place a failed resolve or a dead audio device is ever reported
             f"--log-file={LOG_PATH}",

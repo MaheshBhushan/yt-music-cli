@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- The volume is now the system's output volume. ytm used to change mpv's own software volume, which the desktop never saw: `vol 70` in ytm next to 55 % in the tray, and the keyboard's volume keys moved the tray while ytm's number stayed put. `+`/`-` and `ytm volume` now set the default output through `wpctl` (PipeWire) or `pactl` (PulseAudio), and changes made anywhere else (media keys, the tray slider) appear in the TUI within a moment. mpv's own volume is pinned to 100. `control = "player"` under `[audio]` restores the old behaviour, and it is also what you get when neither tool is installed.
+- The volume indicator moved from the end of the progress row to the top-right corner of the player strip, in the space beside the PLAYED / UP NEXT columns.
+- `=` raises the volume like `+`, so the key works unshifted.
+
 ## 0.5.10 — 2026-09-06
 
 - Opening a mix after the browser cookies have gone stale now says the credentials are signed out and to run `ytm auth`, like the library and mix list already did. YouTube serves the anonymous page for a personal mix, ytmusicapi fails a field lookup, and the TUI banner used to show the whole raw response.

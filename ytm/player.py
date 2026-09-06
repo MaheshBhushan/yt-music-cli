@@ -128,10 +128,19 @@ class Player:
     """One connection to the persistent mpv."""
 
     def __init__(
-        self, ipc_path=None, spawn=True, spawner=spawn_mpv, timeout=REPLY_TIMEOUT, **mpv_options
+        self,
+        ipc_path=None,
+        spawn=True,
+        spawner=spawn_mpv,
+        timeout=REPLY_TIMEOUT,
+        mixer=None,
+        **mpv_options,
     ):
         self._ipc_path = ipc_path or default_ipc_path()
         self._mpv_options = mpv_options
+        #: a `ytm.volume.SystemVolume`: then `volume()` is the desktop's
+        #: output volume and mpv's own stays at 100 (None: mpv's volume)
+        self.mixer = mixer
         #: None for a connection that sits in `observe()` indefinitely
         self._timeout = timeout
         self._file = None
@@ -365,10 +374,22 @@ class Player:
         self.command("seek", seconds, "absolute" if absolute else "relative")
 
     def volume(self, level=None):
-        """Set the volume to `level` (0-100) if given; return the current one."""
+        """Set the volume to `level` (0-100) if given; return the current one.
+
+        With a mixer this is the system output volume, and mpv's software
+        volume is pinned to 100 so the two never attenuate the stream twice
+        (an mpv started before the mixer existed may still sit at 70).
+        """
+        if self.mixer is None:
+            if level is not None:
+                self.set("volume", max(0, min(100, level)))
+            return self.get("volume", 0)
         if level is not None:
-            self.set("volume", max(0, min(100, level)))
-        return self.get("volume", 0)
+            if self.get("volume", 100) != 100:
+                self.set("volume", 100)
+            return self.mixer.set(level)
+        current = self.mixer.get()
+        return self.get("volume", 0) if current is None else current
 
     def quit(self):
         """Ask mpv to exit; the connection is closed afterwards."""
@@ -429,7 +450,7 @@ class Player:
             "position": 0.0 if idle else float(self.get("playback-time", 0.0) or 0.0),
             "duration": 0.0 if idle else float(self.get("duration", 0.0) or 0.0),
             "paused": bool(self.get("pause", False)),
-            "volume": self.get("volume", 0),
+            "volume": self.volume(),
             "index": index,
             "count": int(self.get("playlist-count", 0) or 0),
         }

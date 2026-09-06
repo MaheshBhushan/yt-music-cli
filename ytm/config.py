@@ -4,6 +4,7 @@ Reads ``~/.config/ytm/config.toml`` (stdlib ``tomllib``, no dependency) at
 startup. The shape and defaults are::
 
     [audio]
+    control = "system"
     volume = 70
     device = "auto"
 
@@ -54,7 +55,12 @@ from pathlib import Path
 CONFIG_PATH = Path.home() / ".config" / "ytm" / "config.toml"
 
 DEFAULTS = {
-    "audio": {"volume": 70, "device": "auto"},
+    # control: "system" makes ytm's volume the desktop's default output
+    # volume (wpctl/pactl), so it matches the tray and the media keys;
+    # "player" keeps mpv's own software volume, which only ytm sees.
+    # Without wpctl or pactl "system" quietly behaves like "player".
+    # volume: mpv's starting volume; only applies with control = "player".
+    "audio": {"control": "system", "volume": 70, "device": "auto"},
     # authenticated_streams: hand the account cookies to yt-dlp when mpv
     # resolves a stream. Off by default: with cookies YouTube serves URLs
     # that need an account-bound PO token, which the provider does not
@@ -95,6 +101,7 @@ DEFAULTS = {
 #: expected Python type for each known (section, key) -- bool is checked
 #: before int since bool is a subclass of int in Python
 _TYPES = {
+    ("audio", "control"): str,
     ("audio", "volume"): int,
     ("audio", "device"): str,
     ("behaviour", "autoplay_radio"): bool,
@@ -173,6 +180,12 @@ def load(path=None):
                 _warn(
                     f"'{section}.{key}' must be a string representation of a "
                     f"number in {path}; using default"
+                )
+                continue
+            if (section, key) == ("audio", "control") and value not in ("system", "player"):
+                _warn(
+                    f"'{section}.{key}' must be \"system\" or \"player\" in {path}; "
+                    "using default"
                 )
                 continue
             if (section, key) == ("tui", "queue_column_width") and value < 0:

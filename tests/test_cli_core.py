@@ -21,6 +21,8 @@ def track(video_id, title="T", artist="A", album="B", seconds=200):
 class FakePlayer:
     """Records calls; reports a tiny playlist as mpv would."""
 
+    mixer = None  # mpv's own volume, no system mixer (see Player.mixer)
+
     def __init__(self):
         self.calls = []
         self.entries = []

@@ -597,7 +597,7 @@ def _config_with_keys(**overrides):
     keys = {"toggle": "space", "next": "n", "prev": "p", "search": "/", "quit": "q"}
     keys.update(overrides)
     return {
-        "audio": {"volume": 70, "device": "auto"},
+        "audio": {"control": "system", "volume": 70, "device": "auto"},
         "behaviour": {"autoplay_radio": True, "confirm_remote_delete": True},
         "ui": {"theme": "dark"},
         "keys": keys,
@@ -1634,6 +1634,43 @@ def test_volume_keys_work_while_the_search_box_has_focus():
             await settle(pilot)
             start = app._volume
             await pilot.press("plus")
+            await settle(pilot)
+            assert app._volume == start + 5
+            assert app.query_one("#search-input").value == ""
+
+    asyncio.run(scenario())
+
+
+def test_volume_label_sits_in_the_top_right_corner_of_the_strip():
+    """The volume is read in the corner the queue columns leave free, on the
+    strip's first row, not squeezed after the clock on the progress row."""
+    async def scenario():
+        stub = StubClient()
+        app = YTMApp(client=stub)
+        async with app.run_test(size=(120, 40)) as pilot:
+            await settle(pilot)
+            stub.push("state_changed", {"paused": False, "volume": 55})
+            await settle(pilot)
+            label = app.query_one("#now-playing-volume")
+            text = app.query_one("#now-playing-text")
+            bar = app.query_one("#now-playing-bar")
+            assert str(label.render()) == "vol 55"
+            assert label.region.y == text.region.y  # first row of the strip
+            assert label.region.right == text.region.right  # flush right
+            assert label.region.y < bar.region.y
+
+    asyncio.run(scenario())
+
+
+def test_equals_key_raises_the_volume_like_plus():
+    async def scenario():
+        stub = StubClient()
+        app = YTMApp(client=stub)
+        async with app.run_test() as pilot:
+            await pilot.click("#search-input")
+            await settle(pilot)
+            start = app._volume
+            await pilot.press("equals_sign")
             await settle(pilot)
             assert app._volume == start + 5
             assert app.query_one("#search-input").value == ""

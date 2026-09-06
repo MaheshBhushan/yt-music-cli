@@ -10,7 +10,7 @@ from ytm import config as config_mod
 def test_missing_file_yields_documented_defaults(tmp_path):
     config = config_mod.load(tmp_path / "does-not-exist.toml")
     assert config == {
-        "audio": {"volume": 70, "device": "auto"},
+        "audio": {"control": "system", "volume": 70, "device": "auto"},
         "behaviour": {
             "autoplay_radio": True,
             "confirm_remote_delete": True,
