@@ -1,6 +1,6 @@
 import pytest
 
-from ytm import auth, music, update
+from ytm import auth, cache, music, update
 
 REAL_LATEST_VERSION = update.latest_version
 
@@ -10,6 +10,12 @@ def no_network_update_check(monkeypatch, tmp_path):
     """Tests must never reach PyPI or touch the real update cache."""
     monkeypatch.setattr(update, "CHECK_PATH", tmp_path / "update-check.json")
     monkeypatch.setattr(update, "latest_version", lambda timeout=3.0, opener=None: None)
+
+
+@pytest.fixture(autouse=True)
+def no_real_audio_cache(monkeypatch, tmp_path):
+    """Playback tests never inspect or touch the developer's audio cache."""
+    monkeypatch.setattr(cache, "DEFAULT_CACHE_DIR", tmp_path / "tracks")
 
 
 @pytest.fixture

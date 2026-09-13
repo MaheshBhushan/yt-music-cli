@@ -7,6 +7,8 @@ track count per refresh of the playlists pane.
 """
 
 import json
+import multiprocessing
+import threading
 import time
 
 import pytest
@@ -17,6 +19,17 @@ from ytm.music import Track
 
 def track(video_id, title="T", artist="A"):
     return Track(video_id, title, artist, "", "3:00", 180)
+
+
+def _remember_in_child(path, video_id, gate):
+    """Spawn-safe helper for the cross-process state update test."""
+    from ytm import state as child_state
+    from ytm.music import Track as ChildTrack
+
+    gate.wait(5)
+    child_state.remember_tracks(
+        [ChildTrack(video_id, video_id, "", "", "", 0)], path
+    )
 
 
 # -- state: one read serves the whole queue -----------------------------------
@@ -41,11 +54,12 @@ def _count_reads(monkeypatch):
 def test_tracks_for_reads_the_state_file_once(tmp_path, monkeypatch):
     path = tmp_path / "s.json"
     state.remember_tracks([track("a"), track("b"), track("c")], path)
+    state.reset_cache()
     reads = _count_reads(monkeypatch)
     found = state.tracks_for(["a", "b", "zz", "", None], path)
     assert sorted(found) == ["a", "b"]
     assert found["b"].title == "T"
-    assert len(reads) <= 1
+    assert len(reads) == 1
 
 
 def test_an_unchanged_state_file_is_parsed_once(tmp_path, monkeypatch):
@@ -68,6 +82,24 @@ def test_a_state_file_rewritten_elsewhere_is_picked_up(tmp_path):
                          "duration": "", "duration_seconds": 0, "thumbnail": ""}},
     }))
     assert state.track_for("a", path).title == "Second"
+
+
+def test_concurrent_processes_do_not_lose_track_updates(tmp_path):
+    path = tmp_path / "s.json"
+    context = multiprocessing.get_context("spawn")
+    gate = context.Event()
+    workers = [
+        context.Process(target=_remember_in_child, args=(path, video_id, gate))
+        for video_id in ("a", "b")
+    ]
+    for worker in workers:
+        worker.start()
+    gate.set()
+    for worker in workers:
+        worker.join(10)
+        assert worker.exitcode == 0
+    state.reset_cache()
+    assert set(state.tracks_for(["a", "b"], path)) == {"a", "b"}
 
 
 def test_the_temp_file_is_this_process_alone(tmp_path, monkeypatch):
@@ -156,6 +188,60 @@ def test_a_missing_auth_file_still_raises_every_time():
             music.shared_client()
 
 
+def test_client_construction_does_not_hold_the_cache_lock(monkeypatch):
+    """An OAuth refresh may be slow; reset_client must not wait behind it."""
+    started = threading.Event()
+    release = threading.Event()
+    calls = []
+
+    def build(path):
+        calls.append(1)
+        if len(calls) == 1:
+            started.set()
+            release.wait(5)
+        return object()
+
+    monkeypatch.setattr(music, "client", build)
+    result = []
+    worker = threading.Thread(target=lambda: result.append(music.shared_client()))
+    worker.start()
+    assert started.wait(2)
+    before = time.monotonic()
+    music.reset_client()
+    assert time.monotonic() - before < 0.2
+    release.set()
+    worker.join(5)
+    assert not worker.is_alive()
+    assert result and len(calls) == 2
+
+
+def test_concurrent_first_call_builds_one_client(monkeypatch):
+    started = threading.Event()
+    release = threading.Event()
+    calls = []
+
+    def build(path):
+        calls.append(1)
+        started.set()
+        release.wait(5)
+        return object()
+
+    monkeypatch.setattr(music, "client", build)
+    results = []
+    workers = [
+        threading.Thread(target=lambda: results.append(music.shared_client()))
+        for _ in range(2)
+    ]
+    for worker in workers:
+        worker.start()
+    assert started.wait(2)
+    release.set()
+    for worker in workers:
+        worker.join(5)
+    assert len(calls) == 1
+    assert len(results) == 2 and results[0] is results[1]
+
+
 def test_a_stored_visitor_id_spares_the_home_page_fetch(browser_auth, monkeypatch, tmp_path):
     """Without it ytmusicapi downloads music.youtube.com on first use, once
     per client, purely to read a visitor id out of the page."""
@@ -172,6 +258,25 @@ def test_a_stale_visitor_id_is_not_reused(browser_auth, monkeypatch, tmp_path):
     }))
     assert music._read_visitor_id() is None
     assert "X-Goog-Visitor-Id" not in music.shared_client().headers_given
+
+
+def test_a_future_visitor_id_is_not_reused(monkeypatch, tmp_path):
+    monkeypatch.setattr(music, "VISITOR_PATH", tmp_path / "visitor.json")
+    music.VISITOR_PATH.write_text(json.dumps({
+        "visitor_id": "FROM-THE-FUTURE", "written_at": time.time() + 60,
+    }))
+    assert music._read_visitor_id() is None
+
+
+def test_failed_visitor_replace_removes_the_temp_file(monkeypatch, tmp_path):
+    monkeypatch.setattr(music, "VISITOR_PATH", tmp_path / "visitor.json")
+
+    def fail_replace(*args):
+        raise OSError("no")
+
+    monkeypatch.setattr(music.os, "replace", fail_replace)
+    music._write_visitor_id("visitor")
+    assert not list(tmp_path.glob("visitor.json.tmp*"))
 
 
 def test_the_visitor_id_youtube_hands_out_is_remembered(browser_auth, monkeypatch, tmp_path):

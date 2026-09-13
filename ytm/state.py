@@ -19,13 +19,17 @@ read-only.
 
 import json
 import os
+import sys
 import threading
+from contextlib import contextmanager
 from dataclasses import asdict
 from pathlib import Path
 
 from ytm.music import track_from_dict
 
-STATE_PATH = Path.home() / ".local" / "state" / "ytm" / "session.json"
+STATE_PATH = Path(
+    os.environ.get("XDG_STATE_HOME", os.path.expanduser("~/.local/state"))
+) / "ytm" / "session.json"
 
 #: how many tracks' metadata to remember before forgetting the oldest
 TRACK_MEMORY = 500
@@ -35,6 +39,41 @@ _WRITE_LOCK = threading.RLock()
 
 #: the last parse of the state file: {"key": (path, mtime_ns, size), "data": {...}}
 _CACHE = {"key": None, "data": None}
+
+
+def reset_cache():
+    """Forget the in-process parse, primarily after a fork or in tests."""
+    with _WRITE_LOCK:
+        _CACHE.update(key=None, data=None)
+
+
+@contextmanager
+def _file_lock(path):
+    """Serialize session read-modify-write operations across processes."""
+    path = Path(path or STATE_PATH)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lock_path = path.with_name(path.name + ".lock")
+    with open(lock_path, "a+b") as lock:
+        if sys.platform.startswith("win"):
+            import msvcrt
+
+            if lock.seek(0, os.SEEK_END) == 0:
+                lock.write(b"\0")
+                lock.flush()
+            lock.seek(0)
+            msvcrt.locking(lock.fileno(), msvcrt.LK_LOCK, 1)
+        else:
+            import fcntl
+
+            fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            if sys.platform.startswith("win"):
+                lock.seek(0)
+                msvcrt.locking(lock.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
 
 
 def _stamp(path):
@@ -100,7 +139,8 @@ def save(data, path=None):
 
 
 def remember_search(tracks, path=None):
-    with _WRITE_LOCK:
+    with _file_lock(path), _WRITE_LOCK:
+        reset_cache()
         data = load(path)
         data["last_search"] = [asdict(t) for t in tracks]
         _remember(data, tracks)
@@ -115,7 +155,8 @@ def remember_tracks(tracks, path=None):
     tracks = list(tracks)
     if not tracks:
         return
-    with _WRITE_LOCK:
+    with _file_lock(path), _WRITE_LOCK:
+        reset_cache()
         data = load(path)
         _remember(data, tracks)
         save(data, path)

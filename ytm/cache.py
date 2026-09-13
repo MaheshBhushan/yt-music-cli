@@ -26,17 +26,18 @@ import shutil
 import tempfile
 from pathlib import Path
 
-import yt_dlp
-
 from ytm import config as config_mod
 
 #: default location for cached track audio
-DEFAULT_CACHE_DIR = Path.home() / ".cache" / "ytm" / "tracks"
+DEFAULT_CACHE_DIR = Path(
+    os.environ.get("XDG_CACHE_HOME", os.path.expanduser("~/.cache"))
+) / "ytm" / "tracks"
 
 #: default total size cap for the cache, in bytes
 DEFAULT_CAP_BYTES = 2 * 1024**3
 
 _WATCH_URL = "https://www.youtube.com/watch?v={video_id}"
+_PLAYBACK_URL = "https://music.youtube.com/watch?v={video_id}"
 
 
 class CacheError(Exception):
@@ -105,7 +106,7 @@ def remove(video_id, cache_dir=None):
     return removed
 
 
-def download(video_id, cache_dir=None, cap_bytes=DEFAULT_CAP_BYTES, ydl_class=yt_dlp.YoutubeDL):
+def download(video_id, cache_dir=None, cap_bytes=DEFAULT_CAP_BYTES, ydl_class=None):
     """Download `video_id`'s audio into the cache and return its local path.
 
     Downloads to a private temporary directory first; the file is only
@@ -114,6 +115,10 @@ def download(video_id, cache_dir=None, cap_bytes=DEFAULT_CAP_BYTES, ydl_class=yt
     something that looks like a complete cache entry. Applies the LRU size
     cap (if any) after the download lands.
     """
+    if ydl_class is None:
+        from yt_dlp import YoutubeDL
+
+        ydl_class = YoutubeDL
     cache_dir = _resolve_cache_dir(cache_dir)
     tmp_root = cache_dir / ".tmp"
     tmp_root.mkdir(parents=True, exist_ok=True)
@@ -162,6 +167,12 @@ def enforce_cap(cap_bytes, cache_dir=None):
 
 
 # -- playback integration -----------------------------------------------------
+
+
+def playback_url(video_id, cache_dir=None):
+    """Return cached audio when available, otherwise its YouTube watch URL."""
+    cached = get_cached_path(video_id, cache_dir=cache_dir)
+    return str(cached) if cached is not None else _PLAYBACK_URL.format(video_id=video_id)
 
 
 def _ydl_opts(outtmpl):

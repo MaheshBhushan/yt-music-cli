@@ -17,11 +17,11 @@ from ytmusicapi.exceptions import YTMusicError
 
 from ytm import auth as auth_mod
 from ytm.auth import (
-    AuthError,
-    AuthExpired,
     _EXPIRED_HINT,
     _REFRESH_FAILED_HINT,
     _SIGNED_OUT_HINT,
+    AuthError,
+    AuthExpired,
     client,
     is_expiry,
 )
@@ -34,7 +34,14 @@ from ytm.auth import (
 #: listing a library of ten playlists made a dozen handshakes and a dozen
 #: home-page downloads for twelve API calls.
 _CLIENT_LOCK = threading.RLock()
-_CLIENT = {"key": None, "client": None, "visitor_saved": False}
+_CLIENT_READY = threading.Condition(_CLIENT_LOCK)
+_CLIENT = {
+    "key": None,
+    "client": None,
+    "visitor_saved": False,
+    "building": False,
+    "generation": 0,
+}
 
 #: Where the visitor id YouTube handed out is kept, so a one-shot CLI run
 #: does not have to fetch the home page to learn it again.
@@ -73,7 +80,11 @@ def _read_visitor_id(path=None, now=None):
     if not isinstance(stored, dict):
         return None
     written = stored.get("written_at")
-    if not isinstance(written, (int, float)) or now - written > VISITOR_TTL:
+    if (
+        not isinstance(written, (int, float))
+        or written > now
+        or now - written > VISITOR_TTL
+    ):
         return None
     visitor_id = stored.get("visitor_id")
     return visitor_id if isinstance(visitor_id, str) and visitor_id else None
@@ -82,14 +93,17 @@ def _read_visitor_id(path=None, now=None):
 def _write_visitor_id(visitor_id, path=None, now=None):
     """Remember `visitor_id`; a failure to write is never worth an error."""
     path = Path(path or VISITOR_PATH)
+    tmp = path.with_name(path.name + f".tmp{os.getpid()}")
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_name(path.name + f".tmp{os.getpid()}")
         with open(tmp, "w", encoding="utf-8") as file:
             json.dump({"visitor_id": visitor_id, "written_at": time.time() if now is None else now}, file)
         os.replace(tmp, path)
     except OSError:
-        pass
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
 
 
 def _live_visitor_id(yt):
@@ -125,8 +139,10 @@ def _remember_visitor_id():
 
 def reset_client():
     """Drop the cached client; the next call builds a fresh one."""
-    with _CLIENT_LOCK:
+    with _CLIENT_READY:
         _CLIENT.update(key=None, client=None, visitor_saved=False)
+        _CLIENT["generation"] += 1
+        _CLIENT_READY.notify_all()
 
 
 def shared_client():
@@ -136,14 +152,41 @@ def shared_client():
     exactly as a per-call client did, and the next call tries again.
     """
     path = auth_mod.AUTH_PATH
-    key = _auth_stamp(path)
-    with _CLIENT_LOCK:
-        if _CLIENT["key"] == key and _CLIENT["client"] is not None:
-            return _CLIENT["client"]
-        headers = _seeded_headers(path)
-        built = client(path) if headers is None else auth_mod.client_from_headers(headers, path)
-        _CLIENT.update(key=key, client=built, visitor_saved=False)
-        return built
+    while True:
+        key = _auth_stamp(path)
+        with _CLIENT_READY:
+            if _CLIENT["key"] == key and _CLIENT["client"] is not None:
+                return _CLIENT["client"]
+            if _CLIENT["building"]:
+                _CLIENT_READY.wait()
+                continue
+            _CLIENT["building"] = True
+            generation = _CLIENT["generation"]
+        try:
+            # OAuth construction may refresh a token over the network. Keep
+            # reset_client() and readers of an existing client responsive.
+            headers = _seeded_headers(path)
+            built = (
+                client(path)
+                if headers is None
+                else auth_mod.client_from_headers(headers, path)
+            )
+        except BaseException:
+            with _CLIENT_READY:
+                _CLIENT["building"] = False
+                _CLIENT_READY.notify_all()
+            raise
+        with _CLIENT_READY:
+            unchanged = (
+                generation == _CLIENT["generation"]
+                and key == _auth_stamp(path)
+            )
+            if unchanged:
+                _CLIENT.update(key=key, client=built, visitor_saved=False)
+            _CLIENT["building"] = False
+            _CLIENT_READY.notify_all()
+            if unchanged:
+                return built
 
 
 def _seeded_headers(path):
