@@ -22,6 +22,7 @@ mpv is the only long-running process. `ytm` starts it once, idle, with a JSON IP
 ```bash
 pipx install ytm              # or: uv tool install ytm   /   pip install ytm
 
+ytm install-mpv               # mpv plays the audio and pip cannot install it
 ytm auth                      # cookies from a logged-in browser, see Authentication
 ytm play "daft punk"          # search, play the first hit, radio follows
 ytm                           # the TUI
@@ -37,7 +38,7 @@ pip install -e '.[dev]'
 ```
 
 > [!IMPORTANT]
-> `mpv` must be on your `PATH`; pip cannot install it. `pacman -S mpv`, `apt install mpv`, `brew install mpv`, or the installers at <https://mpv.io>. Node is optional but recommended: yt-dlp uses it to solve YouTube's JavaScript challenges.
+> `mpv` must be on your `PATH`. It is a separate program and pip cannot install it, so `ytm install-mpv` does: it runs your own package manager (`brew install mpv`, `sudo apt-get install -y mpv`, `sudo pacman -S mpv`, `scoop install mpv`, ...), showing the command first. Or install it yourself from <https://mpv.io>. Node is optional but recommended: yt-dlp uses it to solve YouTube's JavaScript challenges.
 
 ## Usage
 
@@ -74,6 +75,7 @@ ytm pause | resume | toggle | next | prev | stop
 ytm seek -10 | seek --to 90 | volume 60 | clear | shuffle
 ytm quit                       # stop mpv entirely
 ytm update                     # upgrade ytm and yt-dlp; --check only reports
+ytm install-mpv                # install mpv with this machine's package manager
 ```
 
 The queue never holds a track twice: playing something already queued jumps to it, and radio skips what is there.
