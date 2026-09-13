@@ -6,6 +6,7 @@ import os
 import sys
 import threading
 import time
+from pathlib import Path
 
 from textual.app import App, ComposeResult
 from textual.binding import Binding, BindingsMap
@@ -45,18 +46,26 @@ class DaemonEvent(Message):
         self.data = data
 
 
-def _trace(line):
-    """Append one line to the file named by YTM_TUI_LOG, if set.
+#: where the TUI keeps a trace of the current run: the keys it received,
+#: focus moves, backend requests with their timing, errors and resizes.
+#: Truncated at every start, so it is always the last run. A keyboard or
+#: focus problem in one particular terminal cannot be reproduced from a bug
+#: report alone; this is the report. YTM_TUI_LOG moves it elsewhere.
+TRACE_PATH = Path(
+    os.environ.get("XDG_STATE_HOME", os.path.expanduser("~/.local/state"))
+) / "ytm" / "tui.log"
 
-    A keyboard or focus problem in someone's terminal cannot be reproduced
-    from a bug report alone; with this set, the keys the app received, where
-    focus went, what it asked the backend and what came back are on disk.
-    """
-    path = os.environ.get("YTM_TUI_LOG")
-    if not path:
-        return
+
+def _trace_path():
+    return Path(os.environ.get("YTM_TUI_LOG") or TRACE_PATH)
+
+
+def _trace(line, mode="a"):
+    """Append one line to the trace file; never let logging break the app."""
     try:
-        with open(path, "a", encoding="utf-8") as file:
+        path = _trace_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, mode, encoding="utf-8") as file:
             file.write(f"{time.strftime('%H:%M:%S')} {line}\n")
     except OSError:
         pass
@@ -276,6 +285,9 @@ class YTMApp(App):
             self.query_one("#queue-table", DataTable).focus()
 
     def on_mount(self):
+        from ytm.update import installed_version
+
+        _trace(f"ytm {installed_version()} started, size {self.size.width}x{self.size.height}", mode="w")
         if self._client_error is not None:
             self._show_error(self._client_error)
             return
