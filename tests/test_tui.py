@@ -1259,7 +1259,6 @@ def test_add_to_playlist_updates_the_count_and_keeps_the_cursor():
             await settle(pilot)
             add_calls = [c for c in stub.calls if c[0] == "playlist_add"]
             assert add_calls[0][1]["playlist_id"] == "local-1"
-            # the refresh re-lists (stub says 12) but must not move the highlight
             assert table.cursor_row == 1
             assert app.query_one(PlaylistsPane).selected_playlist_id() == "local-1"
 
@@ -1710,5 +1709,64 @@ def test_queue_summary_refresh_before_the_pane_has_a_size_does_not_crash():
             pane = app.query_one(NowPlaying)
             pane._refresh_queue_summary(width=None, height=0)
             pane._refresh_queue_summary(width=0, height=None)
+
+    asyncio.run(scenario())
+
+
+def test_adding_a_track_does_not_re_list_every_playlist():
+    """The row's count is updated in place. Re-listing the library -- and a
+    track count for each playlist in it -- to learn one number the add
+    already reported is a round of requests for nothing."""
+    async def scenario():
+        stub = StubClient()
+        app = YTMApp(client=stub)
+        async with app.run_test() as pilot:
+            await _search(pilot)
+            app.query_one("#search-results", DataTable).focus()
+            await settle(pilot)
+            await pilot.press("l")
+            await settle(pilot)
+            listings_before = len([c for c in stub.calls if c[0] == "playlist_list"])
+            await pilot.press("a")
+            await settle(pilot)
+            assert [c[0] for c in stub.calls].count("playlist_add") == 1
+            assert len([c for c in stub.calls if c[0] == "playlist_list"]) == listings_before
+            # the count still moves, from what the add itself answered
+            table = app.query_one("#playlists-table", DataTable)
+            assert str(table.get_cell("remote-1", "count")) == "413"
+
+    asyncio.run(scenario())
+
+
+def test_creating_a_playlist_still_re_lists_them():
+    """A new row can only come from a listing."""
+    async def scenario():
+        stub = StubClient()
+        app = YTMApp(client=stub)
+        async with app.run_test() as pilot:
+            await settle(pilot)
+            app._create_playlist("Road Trip")
+            await settle(pilot)
+            assert len([c for c in stub.calls if c[0] == "playlist_list"]) >= 2
+
+    asyncio.run(scenario())
+
+
+def test_a_burst_of_queue_changes_redraws_once():
+    """Loading a playlist changes mpv's playlist once per track it holds;
+    each change used to redraw every row of the queue and the strip."""
+    async def scenario():
+        stub = StubClient()
+        app = YTMApp(client=stub)
+        async with app.run_test() as pilot:
+            await settle(pilot)
+            drawn = []
+            app._set_queue = lambda data: drawn.append(data)
+            for n in range(1, 21):
+                app._apply_event("queue_changed", _queue(n, 0))
+            assert len(drawn) == 1  # the first; the other nineteen coalesce
+            await pilot.pause(app.QUEUE_REDRAW_INTERVAL + 0.1)
+            assert len(drawn) == 2
+            assert len(drawn[-1]["tracks"]) == 20  # and it is the latest state
 
     asyncio.run(scenario())
