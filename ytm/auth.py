@@ -123,6 +123,77 @@ class _QuietLogger:
         return 0
 
 
+#: macOS keeps one app out of another's data until the asking app has Full
+#: Disk Access. Chrome's profile is then present but unreadable, and yt-dlp
+#: reports the cookie database as missing -- which reads as "Chrome is not
+#: installed" and sends people looking for the wrong problem entirely.
+_MACOS_UNREADABLE = (
+    "installed, but macOS will not let {app} read it without Full Disk Access"
+)
+
+_MACOS_ACCESS_HINT = (
+    " On macOS a program may not read another app's data until it has Full "
+    "Disk Access: open System Settings > Privacy & Security > Full Disk "
+    "Access, switch {app} on (add it with + if it is not listed), quit {app} "
+    "completely and reopen it, then run 'ytm auth' again. Or skip the "
+    "browser: 'ytm auth --manual' pastes the request headers from DevTools "
+    "and 'ytm auth --oauth' signs in with a code -- neither needs any of this."
+)
+
+#: TERM_PROGRAM values worth showing by their proper name
+_TERMINALS = {
+    "Apple_Terminal": "Terminal",
+    "iTerm.app": "iTerm",
+    "WarpTerminal": "Warp",
+    "ghostty": "Ghostty",
+    "vscode": "Visual Studio Code",
+    "Hyper": "Hyper",
+    "WezTerm": "WezTerm",
+    "tabby": "Tabby",
+    "rio": "Rio",
+    "kitty": "kitty",
+}
+
+
+def _terminal_name(environ=None):
+    """What to call the app that needs Full Disk Access, so the instruction
+    names the window the user is actually looking at."""
+    environ = os.environ if environ is None else environ
+    program = environ.get("TERM_PROGRAM")
+    if program:
+        return _TERMINALS.get(program, program)
+    # kitty and Alacritty set no TERM_PROGRAM
+    if environ.get("KITTY_WINDOW_ID") or environ.get("TERM", "").startswith("xterm-kitty"):
+        return "kitty"
+    if environ.get("ALACRITTY_WINDOW_ID") or environ.get("ALACRITTY_SOCKET"):
+        return "Alacritty"
+    if environ.get("WEZTERM_PANE"):
+        return "WezTerm"
+    return "your terminal"
+
+
+def _unreadable_directory(text, isdir=None, readable=None):
+    """The directory a yt-dlp "could not find" message names, when it is
+    there but shut to us. None when it is genuinely absent.
+
+    yt-dlp cannot tell the two apart: it walks the profile directory, the
+    walk yields nothing because the OS denied it, and it reports the
+    database as missing.
+    """
+    isdir = os.path.isdir if isdir is None else isdir
+    readable = (lambda path: os.access(path, os.R_OK)) if readable is None else readable
+    match = re.search(r'["\'](.+?)["\']', text)
+    if match is None:
+        return None
+    path = match.group(1)
+    # yt-dlp names the profiles directory for Firefox and the browser's own
+    # directory for the Chromium family; a parent that is shut counts too
+    for candidate in (path, os.path.dirname(path)):
+        if candidate and isdir(candidate) and not readable(candidate):
+            return candidate
+    return None
+
+
 class AuthError(Exception):
     """Base class for authentication problems."""
 
@@ -417,6 +488,8 @@ def _extract_browser_cookie_header(browser_name, profile=None):
         if "could not find profile" in text:
             return None, f'profile "{profile}" not found'
         if isinstance(exc, FileNotFoundError) or "could not find" in text:
+            if _unreadable_directory(text) is not None:
+                return None, _MACOS_UNREADABLE.format(app=_terminal_name())
             return None, "not installed or no profile found"
         if "locked" in text.lower():
             return None, "cookie database locked; close the browser and retry"
@@ -428,6 +501,13 @@ def _extract_browser_cookie_header(browser_name, profile=None):
     if failed:
         return None, f"{failed} cookies could not be decrypted"
     return None, "no YouTube login"
+
+
+def _macos_access_hint(reasons):
+    """The Full Disk Access instruction, when that is what stood in the way."""
+    if not any("Full Disk Access" in reason for reason in reasons.values()):
+        return ""
+    return _MACOS_ACCESS_HINT.format(app=_terminal_name())
 
 
 def _windows_chromium_hint(reasons):
@@ -488,11 +568,21 @@ def from_browser(browser=None, path=AUTH_PATH, client_factory=None, profile=None
         reasons[name] = reason
     if cookie_header is None:
         details = "; ".join(f"{name}: {reason}" for name, reason in reasons.items())
+        blocked = _macos_access_hint(reasons)
+        # being locked out of every browser is not the same as having no
+        # login in any of them, and "log in first" is the wrong thing to
+        # tell someone who already is
+        closing = (
+            "."
+            if blocked
+            else ". Log in at https://music.youtube.com in one of these browsers "
+            "first, then run 'ytm auth --from-browser' again."
+        )
         raise AuthError(
             "No logged-in YouTube session found. "
             + details
-            + ". Log in at https://music.youtube.com in one of these browsers first, "
-            "then run 'ytm auth --from-browser' again."
+            + closing
+            + blocked
             + _windows_chromium_hint(reasons)
         )
 
