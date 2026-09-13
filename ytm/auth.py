@@ -13,7 +13,6 @@ from pathlib import Path
 import requests
 import ytmusicapi
 from ytm import config as config_mod
-from yt_dlp.cookies import extract_cookies_from_browser
 from ytmusicapi.auth.oauth.credentials import OAuthCredentials
 from ytmusicapi.auth.oauth.exceptions import BadOAuthClient, UnauthorizedOAuthClient
 from ytmusicapi.auth.oauth.token import OAuthToken
@@ -76,6 +75,19 @@ _OAUTH_CLIENT_MISSING_HINT = (
     "OAuth client credentials are missing (expected alongside {path}). "
     "Run 'ytm auth --oauth' to set them up again."
 )
+
+
+def extract_cookies_from_browser(*args, **kwargs):
+    """yt-dlp's browser cookie extraction, imported on first use.
+
+    Importing yt_dlp pulls in its whole extractor and downloader tree, some
+    25 ms, and only `ytm auth` and the automatic cookie refresh ever reach
+    it -- while every search, every lyrics lookup and every autoplay radio
+    spawn paid for it just by importing this module.
+    """
+    from yt_dlp.cookies import extract_cookies_from_browser as extract
+
+    return extract(*args, **kwargs)
 
 
 class _QuietLogger:
@@ -654,6 +666,21 @@ def client(path=AUTH_PATH, credentials_factory=None):
     headers = load_headers(path)
     if OAuthToken.is_oauth(headers):
         return _oauth_client(path, credentials_factory)
+    return client_from_headers(headers, path)
+
+
+def browser_headers(path=AUTH_PATH):
+    """The stored browser request headers, or None when the auth is OAuth.
+
+    Exposed so a caller can add to them (ytmusicapi treats the dict it is
+    given as the client's base headers) before building the client.
+    """
+    headers = load_headers(path)
+    return None if OAuthToken.is_oauth(headers) else headers
+
+
+def client_from_headers(headers, path=AUTH_PATH):
+    """A ytmusicapi client for browser headers that are already in hand."""
     try:
         return ytmusicapi.YTMusic(headers)
     except YTMusicError as exc:

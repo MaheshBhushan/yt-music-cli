@@ -98,7 +98,10 @@ def _browser_auth(monkeypatch, tmp_path, refresh_ok=True):
         state["refreshed"] = True
 
     monkeypatch.setattr(auth, "refresh_from_browser", refresh)
-    monkeypatch.setattr(music, "client", lambda: Stale(lambda: state["refreshed"]))
+    monkeypatch.setattr(
+        music, "client",
+        lambda path=None, credentials_factory=None: Stale(lambda: state["refreshed"]),
+    )
     return state
 
 
@@ -124,7 +127,9 @@ def test_pasted_headers_are_not_refreshed(monkeypatch, tmp_path):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps({"cookie": "SID=old"}))
     monkeypatch.setattr(auth, "refresh_from_browser", lambda *a, **k: pytest.fail("must not refresh"))
-    monkeypatch.setattr(music, "client", lambda: Stale(lambda: False))
+    monkeypatch.setattr(
+        music, "client", lambda path=None, credentials_factory=None: Stale(lambda: False)
+    )
     with pytest.raises(AuthExpired, match="signed out") as excinfo:
         music.library_playlists()
     assert "re-extract" not in str(excinfo.value)
@@ -148,5 +153,5 @@ def test_expired_headers_on_search_are_refreshed_too(monkeypatch, tmp_path):
                 raise YTMusicError("Server returned HTTP 401: Unauthorized")
             return [{"videoId": "v1", "title": "T", "artists": [{"name": "A"}], "duration": "1:00"}]
 
-    monkeypatch.setattr(music, "client", lambda: Client())
+    monkeypatch.setattr(music, "client", lambda path=None, credentials_factory=None: Client())
     assert [t.video_id for t in music.search("q")] == ["v1"]

@@ -1,6 +1,6 @@
 import pytest
 
-from ytm import auth, update
+from ytm import auth, music, update
 
 REAL_LATEST_VERSION = update.latest_version
 
@@ -23,3 +23,14 @@ def no_real_auth(monkeypatch, tmp_path):
     one there would make the catalogue layer try a real browser refresh."""
     monkeypatch.setattr(auth, "AUTH_PATH", tmp_path / "auth" / "auth.json")
     monkeypatch.setattr(auth, "COOKIES_PATH", tmp_path / "auth" / "cookies.txt")
+
+
+@pytest.fixture(autouse=True)
+def fresh_catalogue_client(monkeypatch, tmp_path):
+    """Each test starts with no cached ytmusicapi client and its own visitor
+    id file, so one test's fake client can never serve the next one and the
+    developer's real ~/.local/state/ytm/visitor.json is never touched."""
+    monkeypatch.setattr(music, "VISITOR_PATH", tmp_path / "visitor.json")
+    music.reset_client()
+    yield
+    music.reset_client()

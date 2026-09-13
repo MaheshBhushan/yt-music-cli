@@ -54,6 +54,15 @@ class FakePlayer:
         self.calls.append(("enqueue", url, title))
         self._add(url, title, not self.entries)
 
+    def enqueue_many(self, items):
+        added = 0
+        for url, title in items:
+            if url.rsplit("v=", 1)[-1] in self.queued_ids():
+                continue
+            self.enqueue(url, title)
+            added += 1
+        return added
+
     def enqueue_next(self, url, title=None):
         self.calls.append(("enqueue_next", url, title))
         cur = self._current()
@@ -140,6 +149,35 @@ def run(*argv):
     code = cli.main(list(argv), out=out, err=err)
     return code, out.getvalue(), err.getvalue()
 
+
+# -- the bare command ---------------------------------------------------------
+
+
+def test_bare_ytm_opens_the_tui_and_exits_cleanly(monkeypatch):
+    """`cmd_tui` answers (data, text) like every other command, and a
+    two-None tuple is truthy: `main` used to hand that tuple to sys.exit, so
+    every TUI session printed "(None, None)" and left exit code 1 behind."""
+    opened = []
+    monkeypatch.setattr(cli, "cmd_tui", lambda args: (opened.append(1), (None, None))[1])
+    code, out, err = run()
+    assert opened == [1]
+    assert code == 0
+    assert (out, err) == ("", "")
+
+
+def test_a_network_failure_is_reported_not_traced(fake, monkeypatch):
+    import requests
+
+    from ytm import music
+
+    def unreachable(query, limit=20, yt=None):
+        raise requests.exceptions.ConnectionError("name resolution failed")
+
+    monkeypatch.setattr(music, "search", unreachable)
+    code, out, err = run("search", "anything")
+    assert code == 1
+    assert "could not reach YouTube Music" in err
+    assert "Traceback" not in err
 
 # -- installing mpv -----------------------------------------------------------
 

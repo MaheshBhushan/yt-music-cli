@@ -2,7 +2,21 @@
 
 ## Unreleased
 
+- Far fewer requests to YouTube. ytm built a new ytmusicapi client for every single catalogue call, and each one opened a fresh connection and downloaded the music.youtube.com home page just to read a visitor id out of it — so opening the playlists pane with ten playlists made about a dozen handshakes and a dozen page downloads to make a dozen API calls. One client now serves the whole process, retired only when `ytm auth` rewrites the credentials, and the visitor id is kept for a day in `~/.local/state/ytm/visitor.json` so one-shot commands do not have to fetch it again either.
+- Adding a song to a playlist no longer re-lists the entire library behind it. The count in the pane was already updated in place; the refresh that followed fetched the playlist list plus a track count for every playlist in it, to learn a number the add itself had already reported.
+- Track counts missing from the library listing (Liked Music, Episodes for Later) are looked up once per session instead of on every refresh of the playlists pane, and an empty mix list is taken as an answer rather than re-fetching the whole home feed each time.
+- Lyrics and search results are remembered for the session, so coming back round to a song, or backspacing over a query, does not ask YouTube again.
+- Loading a playlist or a radio station is much faster. Each track was appended with its own round trip to mpv that first re-read the whole playlist, so queueing 100 tracks meant 100 reads of a list that grew with every one — and the TUI redrew every row of the queue after each. Appends now share one read, and queue redraws are coalesced.
+- The queue pane read and re-parsed the remembered-track file once per row, on every queue change. It is read once per redraw, and only when it has actually changed on disk.
+- `ytm status` and every transport key ask mpv for all their properties in one batch rather than eight, and the play/pause key no longer shells out to `wpctl` twice.
+- Plain `ytm` (the TUI) exited with status 1 and printed `(None, None)` when it closed.
+- Network commands start about a quarter quicker (roughly 25 ms off each run): yt-dlp, which only `ytm auth` and the cookie refresh reach, is no longer imported just by importing ytm. mpv's autoplay script pays this on every radio top-up.
+- A dropped connection during a command now says it could not reach YouTube Music, instead of printing a traceback, and auth errors in the TUI banner no longer arrive prefixed with the exception's class name.
+- The session file is written through a temp file scoped to the writing process. The CLI, the TUI and the `ytm radio` that mpv's autoplay script spawns all write it, and they shared one temp name, so one could rename another's half-written copy into place.
+- Removed `ytm/api.py`, a compatibility shim for the daemon and the old Textual TUI, both of which are gone. Import from `ytm.music` instead.
+- A video id is read only from the real `v=` parameter of a URL, not from the tail of another parameter that happens to end in `v=`.
 - `ytm install-mpv` installs mpv with whatever package manager the machine has (Homebrew, apt, dnf, pacman, zypper, apk, xbps, pkg, scoop, winget, Chocolatey), printing the command and asking before it runs it. mpv is a C program and cannot come from PyPI — the `mpv` and `python-mpv` packages there are bindings to libmpv, not the player — so `uv tool install ytm` leaves this one step, and a fresh install used to meet `error: could not start mpv (mpv): [Errno 2] No such file or directory: 'mpv'` with no hint that mpv is a separate program or how to get one. That error now says so, and names the exact command for the machine it is on.
+
 
 ## 0.5.15 — 2026-09-07
 
