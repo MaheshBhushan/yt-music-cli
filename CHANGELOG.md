@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- `ytm install-mpv` installs mpv with whatever package manager the machine has (Homebrew, apt, dnf, pacman, zypper, apk, xbps, pkg, scoop, winget, Chocolatey), printing the command and asking before it runs it. mpv is a C program and cannot come from PyPI — the `mpv` and `python-mpv` packages there are bindings to libmpv, not the player — so `uv tool install ytm` leaves this one step, and a fresh install used to meet `error: could not start mpv (mpv): [Errno 2] No such file or directory: 'mpv'` with no hint that mpv is a separate program or how to get one. That error now says so, and names the exact command for the machine it is on.
+
 ## 0.5.15 — 2026-09-07
 
 - Fixes a crash on startup or resize introduced in 0.5.11 (`TypeError: unsupported operand type(s) for -: 'NoneType' and 'int'` in the now-playing strip): the queue summary could be laid out before the strip had a width.
