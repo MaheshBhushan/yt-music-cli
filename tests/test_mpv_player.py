@@ -57,18 +57,21 @@ class FakeMpv:
             except OSError:
                 return
             with conn, conn.makefile("rwb", buffering=0) as f:
-                for line in f:
-                    request = json.loads(line)
-                    reply = self._handle(request["command"])
-                    reply["request_id"] = request["request_id"]
-                    # an unsolicited event first, to prove replies are matched
-                    f.write(b'{"event":"property-change","name":"x"}\n')
-                    for event in self.pending_events:
-                        f.write((json.dumps(event) + "\n").encode())
-                    self.pending_events.clear()
-                    f.write((json.dumps(reply) + "\n").encode())
-                    if request["command"][0] == "quit":
-                        return
+                try:
+                    for line in f:
+                        request = json.loads(line)
+                        reply = self._handle(request["command"])
+                        reply["request_id"] = request["request_id"]
+                        # an unsolicited event first, to prove replies are matched
+                        f.write(b'{"event":"property-change","name":"x"}\n')
+                        for event in self.pending_events:
+                            f.write((json.dumps(event) + "\n").encode())
+                        self.pending_events.clear()
+                        f.write((json.dumps(reply) + "\n").encode())
+                        if request["command"][0] == "quit":
+                            return
+                except (ConnectionResetError, OSError):
+                    pass
 
     def _handle(self, command):
         self.commands.append(command)
@@ -370,6 +373,8 @@ def test_video_id_of():
     assert video_id_of(None) is None
     # "v=" also occurs inside another parameter's name; only the real one counts
     assert video_id_of("https://example.com/watch?rv=notmine") is None
+    assert video_id_of("/tmp/tracks/dQw4w9WgXcQ.m4a") == "dQw4w9WgXcQ"
+    assert video_id_of(r"C:\cache\dQw4w9WgXcQ.webm") == "dQw4w9WgXcQ"
 
 
 def test_get_many_reads_every_property_in_one_round_trip(mpv):

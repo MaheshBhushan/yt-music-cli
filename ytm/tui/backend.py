@@ -14,11 +14,13 @@ import threading
 import time
 from dataclasses import asdict
 
-from ytm import music, playlists_local, state
+import requests
+from ytmusicapi.exceptions import YTMusicError
+
+from ytm import cache, music, playlists_local, state
 from ytm.auth import AuthError
 from ytm.music import Track
-from ytm.player import Player, PlayerError, watch_url
-
+from ytm.player import PlayerError
 
 #: YouTube's auto-playlists: ids are fixed and they cannot take plain inserts
 LIKED_MUSIC_ID = "LM"
@@ -36,6 +38,8 @@ SEARCH_TTL = 300.0
 #: how many queries and how many tracklists of lyrics to keep
 SEARCH_CACHE_SIZE = 32
 LYRICS_CACHE_SIZE = 64
+
+REMOTE_ERRORS = (AuthError, requests.RequestException, YTMusicError)
 
 
 class BackendError(Exception):
@@ -208,7 +212,7 @@ class Backend:
             method = self._player.enqueue_next
         else:
             method = self._player.enqueue
-        method(watch_url(track.video_id), title=_label(track))
+        method(cache.playback_url(track.video_id), title=_label(track))
         return self._status(args)
 
     def _transport(self, name):
@@ -264,9 +268,9 @@ class Backend:
             raise BackendError(f"no radio available for {seed.video_id}")
         state.remember_tracks([seed] + tracks)
         self._player.stop()
-        self._player.play(watch_url(seed.video_id), title=_label(seed))
+        self._player.play(cache.playback_url(seed.video_id), title=_label(seed))
         self._player.enqueue_many(
-            (watch_url(track.video_id), _label(track)) for track in tracks
+            (cache.playback_url(track.video_id), _label(track)) for track in tracks
         )
         return self._queue()
 
@@ -289,7 +293,7 @@ class Backend:
         local = playlists_local.list_playlists()
         try:
             return self._playlist_list_remote(local)
-        except Exception as exc:
+        except REMOTE_ERRORS as exc:
             # signed out, or YouTube unreachable: still list the local
             # playlists, and say why the rest is missing instead of
             # silently showing fewer rows
@@ -302,7 +306,9 @@ class Backend:
             # playlist, once -- the answer is remembered for the session so
             # a refresh of the pane is one request, not one per playlist
             if not playlist.track_count:
-                playlist.track_count = self._count_of(playlist.playlist_id)
+                count = self._count_of(playlist.playlist_id)
+                if count is not None:
+                    playlist.track_count = count
         if self._mixes is None:
             # [] is an answer (a signed-out home feed has no mixes); asking
             # again on every listing is not
@@ -318,9 +324,10 @@ class Backend:
             return self._playlist_counts[playlist_id]
         try:
             count = music.playlist_count(playlist_id)
-        except Exception:
+        except REMOTE_ERRORS:
             return None  # not remembered: a failure is worth retrying
-        self._playlist_counts[playlist_id] = count
+        if count is not None:
+            self._playlist_counts[playlist_id] = count
         return count
 
     def _mixes_refresh(self, args):
@@ -411,10 +418,13 @@ class Backend:
             # count so the row is right without waiting for the next refresh
             self._playlist_counts.pop(playlist_id, None)
             try:
-                result["track_count"] = music.playlist_count(playlist_id)
-                self._playlist_counts[playlist_id] = result["track_count"]
-            except Exception:
+                count = music.playlist_count(playlist_id)
+            except REMOTE_ERRORS:
                 pass
+            else:
+                if count is not None:
+                    result["track_count"] = count
+                    self._playlist_counts[playlist_id] = count
         return result
 
     def _playlist_play(self, args):
@@ -425,9 +435,9 @@ class Backend:
         tracks = [_from_args(entry) for entry in tracks]
         state.remember_tracks(tracks)
         self._player.stop()
-        self._player.play(watch_url(tracks[0].video_id), title=_label(tracks[0]))
+        self._player.play(cache.playback_url(tracks[0].video_id), title=_label(tracks[0]))
         self._player.enqueue_many(
-            (watch_url(track.video_id), _label(track)) for track in tracks[1:]
+            (cache.playback_url(track.video_id), _label(track)) for track in tracks[1:]
         )
         return self._queue()
 
