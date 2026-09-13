@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.6.0 — 2026-09-13
 
 - Far fewer requests to YouTube. ytm built a new ytmusicapi client for every single catalogue call, and each one opened a fresh connection and downloaded the music.youtube.com home page just to read a visitor id out of it — so opening the playlists pane with ten playlists made about a dozen handshakes and a dozen page downloads to make a dozen API calls. One client now serves the whole process, retired only when `ytm auth` rewrites the credentials, and the visitor id is kept for a day in `~/.local/state/ytm/visitor.json` so one-shot commands do not have to fetch it again either.
 - Adding a song to a playlist no longer re-lists the entire library behind it. The count in the pane was already updated in place; the refresh that followed fetched the playlist list plus a track count for every playlist in it, to learn a number the add itself had already reported.
@@ -16,7 +16,6 @@
 - Removed `ytm/api.py`, a compatibility shim for the daemon and the old Textual TUI, both of which are gone. Import from `ytm.music` instead.
 - A video id is read only from the real `v=` parameter of a URL, not from the tail of another parameter that happens to end in `v=`.
 - `ytm install-mpv` installs mpv with whatever package manager the machine has (Homebrew, apt, dnf, pacman, zypper, apk, xbps, pkg, scoop, winget, Chocolatey), printing the command and asking before it runs it. mpv is a C program and cannot come from PyPI — the `mpv` and `python-mpv` packages there are bindings to libmpv, not the player — so `uv tool install ytm` leaves this one step, and a fresh install used to meet `error: could not start mpv (mpv): [Errno 2] No such file or directory: 'mpv'` with no hint that mpv is a separate program or how to get one. That error now says so, and names the exact command for the machine it is on.
-
 
 ## 0.5.15 — 2026-09-07
 
