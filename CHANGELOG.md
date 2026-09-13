@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- `ytm version` prints the running version, and mentions a newer release when the daily PyPI check has already seen one. It never touches the network; `ytm update --check` does.
+
 ## 0.8.0 — 2026-09-13
 
 - **`ytm auth` now signs in with Google.** OAuth is the default: the first run takes a Google Desktop-app client JSON (`--client-file`) or a TV client id and secret and remembers them; every later `ytm auth` reuses them. Importing cookies from a browser is now explicit: `ytm auth --from-browser` auto-detects, `ytm auth --from-browser firefox` names one. `--oauth` is gone: there is nothing left for it to select.

@@ -509,6 +509,19 @@ def cmd_cache(args):
     ) or "cache is empty"
 
 
+def cmd_version(args):
+    """The running ytm version, plus what the last PyPI check knew (no network)."""
+    from ytm import update
+
+    installed = update.installed_version()
+    info = update.check(fetch=lambda: None)  # cached result only; `ytm update --check` asks PyPI
+    latest = info["latest"]
+    line = f"ytm {installed}"
+    if info["newer"]:
+        line += f" ({latest} is available: ytm update)"
+    return {"version": installed, "latest": latest, "newer": info["newer"]}, line
+
+
 def cmd_update(args):
     """Upgrade ytm and yt-dlp in place, or just report what is available."""
     from ytm import update
@@ -622,6 +635,7 @@ def build_parser():
     cache_sub.add_parser("list")
     p.set_defaults(cache_command="list")
 
+    add("version", cmd_version, "print the ytm version")
     p = add("update", cmd_update, "upgrade ytm and yt-dlp to the latest release")
     p.add_argument("--check", action="store_true", help="only report whether a newer version exists")
     p.add_argument("--force", action="store_true", help="reinstall even when already current")

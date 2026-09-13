@@ -75,6 +75,7 @@ ytm status | queue | lyrics | like
 ytm pause | resume | toggle | next | prev | stop
 ytm seek -10 | seek --to 90 | volume 60 | clear | shuffle
 ytm quit                       # stop mpv entirely
+ytm version                    # the running version (and a newer one, if the daily check saw it)
 ytm update                     # upgrade ytm and yt-dlp; --check only reports
 ytm install-mpv                # install mpv with this machine's package manager
 ```
