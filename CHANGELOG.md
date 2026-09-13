@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.6.1 — 2026-09-13
 
 - `ytm auth` on macOS no longer reports an installed browser as missing. macOS withholds one app's data from another until the asking app has Full Disk Access, and a blocked profile directory looks empty to yt-dlp, which reports the cookie database as missing — so `ytm auth` said "chrome: not installed or no profile found" on a Mac with Chrome open and logged in, and told the user to go and log in. It now tells a directory that is shut apart from one that is absent, says which it is per browser, and explains Full Disk Access (naming the terminal it is talking about) along with `--manual` and `--oauth`, which need none of it.
 - ytm no longer gives up on an mpv that is still starting. It waited a fixed 10 s for mpv to open its IPC socket, and mpv's first start after installation is slower than that — 11 s on a Mac where Homebrew had just put it there, one second past the limit — so the first run after installing mpv failed with `mpv started but never opened its IPC endpoint` and the next one worked. The wait is now long enough for a cold start, and an mpv that has actually *died* is reported the moment it exits instead of at the end of the wait, so a real failure is quicker to hear about than it used to be.
