@@ -212,3 +212,18 @@ def test_cli_version_flag(capsys):
         cli.main(["--version"])
     assert exc.value.code == 0
     assert capsys.readouterr().out.startswith("ytm ")
+
+
+def test_cli_version_command_reports_installed_and_cached_latest(monkeypatch, tmp_path):
+    monkeypatch.setattr(update, "installed_version", lambda: "0.8.0")
+    monkeypatch.setattr(update, "CHECK_PATH", tmp_path / "update-check.json")
+    out = io.StringIO()
+    assert cli.main(["version"], out=out) == 0
+    assert out.getvalue().strip() == "ytm 0.8.0"  # no cache, no network: just the version
+    (tmp_path / "update-check.json").write_text(json.dumps({"latest": "0.9.0", "checked_at": 4e9}))
+    out = io.StringIO()
+    assert cli.main(["version"], out=out) == 0
+    assert out.getvalue().strip() == "ytm 0.8.0 (0.9.0 is available: ytm update)"
+    out = io.StringIO()
+    assert cli.main(["--json", "version"], out=out) == 0
+    assert json.loads(out.getvalue()) == {"version": "0.8.0", "latest": "0.9.0", "newer": True}
