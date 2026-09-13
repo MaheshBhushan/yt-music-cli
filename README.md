@@ -89,7 +89,7 @@ ytm auth                          # 1. cookies from a browser you are logged in 
 ytm auth --from-browser firefox   #    or name one: chrome, chromium, edge, brave, vivaldi, opera, helium, firefox
 ytm auth --from-browser helium --profile "Profile 1"   # pick a browser profile (default: the one that is logged in)
 ytm auth --manual                 # 2. paste request headers copied from the browser's DevTools
-ytm auth --oauth                  # 3. OAuth device code: for SSH, headless boxes, or Windows without Firefox
+ytm auth --oauth                  # 3. Google sign-in: a desktop browser, or a device code for SSH and headless boxes
 ```
 
 Cookies expire after a few weeks; re-run `ytm auth` when the app says so. OAuth tokens refresh themselves.
@@ -119,19 +119,31 @@ Works with any browser on any OS, including Chrome on Windows.
 
 ### OAuth
 
-`ytm auth --oauth` prints a URL and a short code. Open the URL on any device, sign in, enter the code, and `ytm` stores a token that refreshes itself. YouTube removed ytmusicapi's shared OAuth client in November 2024, so you need your own from Google Cloud once:
+`ytm auth --oauth` stores a token that refreshes itself, so there are no cookies to go stale. YouTube removed ytmusicapi's shared OAuth client in November 2024, so you need your own from Google Cloud once:
 
 1. Go to <https://console.cloud.google.com/> and create or pick a project.
 2. **APIs & Services → Library**: enable **YouTube Data API v3**.
 3. **APIs & Services → OAuth consent screen**: External is fine. Add your own Google account under **Test users**.
-4. **APIs & Services → Credentials → Create credentials → OAuth client ID**. Application type: **TVs and Limited Input devices**. Name it and create.
-5. Copy the **Client ID** and **Client secret**, then:
+4. **APIs & Services → Credentials → Create credentials → OAuth client ID**. Pick one of the two application types below, name it and create.
+
+**Desktop app** (a browser on the machine running ytm): download the client JSON, then
+
+```bash
+ytm auth --oauth --client-file ~/Downloads/client_secret_....json
+ytm auth --oauth                  # later: the client is remembered
+```
+
+Open the printed link in a browser on the same computer and approve YouTube access. The callback listens only on loopback, uses PKCE, and gives up after 15 minutes. `YTM_OAUTH_CLIENT_FILE` can name the JSON instead of the flag. The client is remembered in `~/.config/ytm/oauth_desktop_client.json`; a failed or incomplete sign-in leaves your existing credentials untouched.
+
+**TVs and Limited Input devices** (SSH and headless boxes: the link can be opened on any device): copy the **Client ID** and **Client secret**, then
 
 ```bash
 ytm auth --oauth --client-id YOUR_CLIENT_ID --client-secret YOUR_CLIENT_SECRET
 ```
 
-The flags can also come from `YTM_OAUTH_CLIENT_ID` / `YTM_OAUTH_CLIENT_SECRET`, and with neither set `ytm` prompts for them. They are kept in `~/.config/ytm/oauth_client.json` (mode 0600) because every token refresh needs them again. Revoking access in your Google account is reported as expired auth; run `ytm auth --oauth` again.
+ytm prints a URL and a short code; open the URL anywhere, sign in and enter the code. The flags can also come from `YTM_OAUTH_CLIENT_ID` / `YTM_OAUTH_CLIENT_SECRET`, and with neither set `ytm` prompts for them.
+
+Either way the client ID and secret are kept in `~/.config/ytm/oauth_client.json` (mode 0600) because every token refresh needs them again. Revoking access in your Google account is reported as expired auth; run `ytm auth --oauth` again.
 
 OAuth has no browser cookies, so streams always resolve anonymously for OAuth users. Search, library and playback of the normal catalogue are unaffected; private or age-gated tracks are not.
 
