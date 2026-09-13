@@ -545,11 +545,12 @@ def test_auth_defaults_to_oauth_and_from_browser_imports_cookies(monkeypatch, tm
     monkeypatch.setattr(auth, "cookies_file", lambda: None)
     assert run("auth")[0] == 0
     assert calls[-1][0] == "oauth" and calls[-1][1]["client_file"] is None
-    assert run("auth", "--oauth", "--client-file", "c.json")[0] == 0
+    assert run("auth", "--client-file", "c.json")[0] == 0
     assert calls[-1] == ("oauth", {"client_id": None, "client_secret": None, "client_file": "c.json"})
     assert run("auth", "--from-browser")[0] == 0
     assert calls[-1][:2] == ("browser", None)
     assert run("auth", "--from-browser", "helium", "--profile", "Profile 1")[0] == 0
     assert calls[-1] == ("browser", "helium", {"profile": "Profile 1", "authuser": None})
-    with pytest.raises(SystemExit):
-        run("auth", "--manual")  # gone: there is no header-pasting mode any more
+    for gone in ("--manual", "--oauth"):  # no header-pasting mode, and OAuth needs no flag
+        with pytest.raises(SystemExit):
+            run("auth", gone)
