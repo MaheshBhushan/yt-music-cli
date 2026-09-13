@@ -58,6 +58,18 @@ def _js_runtime():
 AUTOPLAY_SCRIPT = os.path.join(os.path.dirname(__file__), "mpv", "autoplay.lua")
 
 
+def _log_path():
+    """LOG_PATH, with its directory made. mpv does not create it and does
+    not complain when it cannot write there, so without this the log the
+    README points at simply never appears -- and it is the only place a
+    failed resolve or a dead audio device is ever reported."""
+    try:
+        os.makedirs(os.path.dirname(LOG_PATH), exist_ok=True)
+    except OSError:
+        pass
+    return LOG_PATH
+
+
 def player(spawn=True, **player_kwargs):
     """A connected Player, configured from config.toml and the stored auth."""
     from ytm import auth, config, volume
@@ -92,7 +104,7 @@ def player(spawn=True, **player_kwargs):
             f"--volume={100 if mixer else cfg['audio']['volume']}",
             # mpv runs detached with no terminal, so this file is the only
             # place a failed resolve or a dead audio device is ever reported
-            f"--log-file={LOG_PATH}",
+            f"--log-file={_log_path()}",
             "--msg-level=all=warn,ytdl_hook=v",
         ],
     )

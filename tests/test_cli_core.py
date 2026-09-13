@@ -182,6 +182,24 @@ def test_a_network_failure_is_reported_not_traced(fake, monkeypatch):
 # -- installing mpv -----------------------------------------------------------
 
 
+def test_the_mpv_log_directory_is_made_before_mpv_is_told_to_write_there(tmp_path, monkeypatch):
+    """mpv does not create it and does not complain when it cannot write, so
+    the log the README points at never appeared -- and it is the only place a
+    failed resolve or a dead audio device is ever reported."""
+    log = tmp_path / "state" / "ytm" / "mpv.log"
+    monkeypatch.setattr(cli, "LOG_PATH", str(log))
+    assert not log.parent.exists()
+    assert cli._log_path() == str(log)
+    assert log.parent.is_dir()
+
+
+def test_an_unwritable_log_directory_does_not_stop_playback(tmp_path, monkeypatch):
+    monkeypatch.setattr(cli, "LOG_PATH", "/proc/nope/ytm/mpv.log")
+    assert cli._log_path() == "/proc/nope/ytm/mpv.log"  # no raise
+
+
+
+
 def test_install_mpv_runs_the_command_for_this_machine(monkeypatch):
     ran = []
     # mpv is on PATH only once the package manager has actually run
