@@ -203,7 +203,7 @@ def test_an_unwritable_log_directory_does_not_stop_playback(tmp_path, monkeypatc
 def test_install_mpv_runs_the_command_for_this_machine(monkeypatch):
     ran = []
     # mpv is on PATH only once the package manager has actually run
-    monkeypatch.setattr(cli.shutil, "which", lambda tool: "/opt/homebrew/bin/mpv" if ran else None)
+    monkeypatch.setattr(cli, "find_mpv", lambda: "/opt/homebrew/bin/mpv" if ran else None)
     monkeypatch.setattr(cli, "mpv_install_command", lambda: ["brew", "install", "mpv"])
     monkeypatch.setattr(cli.subprocess, "call", lambda command: (ran.append(command), 0)[1])
     code, out, _ = run("install-mpv", "--yes")
@@ -213,14 +213,14 @@ def test_install_mpv_runs_the_command_for_this_machine(monkeypatch):
 
 
 def test_install_mpv_does_nothing_when_mpv_is_already_there(monkeypatch):
-    monkeypatch.setattr(cli.shutil, "which", lambda tool: "/usr/bin/mpv")
+    monkeypatch.setattr(cli, "find_mpv", lambda: "/usr/bin/mpv")
     monkeypatch.setattr(cli.subprocess, "call", lambda command: pytest.fail("must not install"))
     code, out, _ = run("install-mpv", "--yes")
     assert code == 0 and "already installed" in out
 
 
 def test_install_mpv_reports_a_failing_package_manager(monkeypatch):
-    monkeypatch.setattr(cli.shutil, "which", lambda tool: None)
+    monkeypatch.setattr(cli, "find_mpv", lambda: None)
     monkeypatch.setattr(cli, "mpv_install_command", lambda: ["sudo", "apt-get", "install", "-y", "mpv"])
     monkeypatch.setattr(cli.subprocess, "call", lambda command: 100)
     code, _, err = run("install-mpv", "--yes")
@@ -229,7 +229,7 @@ def test_install_mpv_reports_a_failing_package_manager(monkeypatch):
 
 
 def test_install_mpv_without_a_package_manager_says_where_to_get_it(monkeypatch):
-    monkeypatch.setattr(cli.shutil, "which", lambda tool: None)
+    monkeypatch.setattr(cli, "find_mpv", lambda: None)
     monkeypatch.setattr(cli, "mpv_install_command", lambda: None)
     code, _, err = run("install-mpv", "--yes")
     assert code == 1
@@ -239,7 +239,7 @@ def test_install_mpv_without_a_package_manager_says_where_to_get_it(monkeypatch)
 def test_a_package_manager_that_lies_about_success_is_caught(monkeypatch):
     """`apt install` exiting 0 with nothing on PATH is worse than a failure:
     the next run would report the same missing mpv with no explanation."""
-    monkeypatch.setattr(cli.shutil, "which", lambda tool: None)
+    monkeypatch.setattr(cli, "find_mpv", lambda: None)
     monkeypatch.setattr(cli, "mpv_install_command", lambda: ["brew", "install", "mpv"])
     monkeypatch.setattr(cli.subprocess, "call", lambda command: 0)
     code, _, err = run("install-mpv", "--yes")
@@ -516,3 +516,22 @@ def test_add_next_puts_the_song_right_after_the_current_one(fake, catalogue):
     assert code == 0 and out.startswith("Up next:")
     assert fake.calls[-1][0] == "enqueue_next"
     assert [e["video_id"] for e in fake.entries] == ["id505", "idIWB", "abcdefghijk"]
+
+
+def test_install_mpv_accepts_winget_already_installed(monkeypatch):
+    """`winget install` of a package that is already there exits 0x8A15002B
+    ("No available upgrade found"); that is mpv being present, not a failure."""
+    found = []
+    monkeypatch.setattr(cli, "find_mpv", lambda: r"C:\Users\u\AppData\Local\Microsoft\WinGet\Links\mpv.exe" if found else None)
+    monkeypatch.setattr(cli, "mpv_install_command", lambda: ["winget", "install", "-e", "--id", "shinchiro.mpv"])
+    monkeypatch.setattr(cli.subprocess, "call", lambda command: (found.append(1), 2316632107)[1])
+    code, out, err = run("install-mpv", "--yes")
+    assert code == 0, err
+    assert "mpv installed at" in out and "WinGet" in out
+
+
+def test_install_mpv_finds_an_mpv_the_shell_cannot_see_yet(monkeypatch):
+    monkeypatch.setattr(cli, "find_mpv", lambda: r"C:\Users\u\scoop\shims\mpv.exe")
+    monkeypatch.setattr(cli.subprocess, "call", lambda command: pytest.fail("must not install"))
+    code, out, _ = run("install-mpv", "--yes")
+    assert code == 0 and "already installed" in out

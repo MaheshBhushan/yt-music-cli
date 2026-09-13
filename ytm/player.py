@@ -147,6 +147,51 @@ MPV_INSTALLERS = {
 
 MPV_SITE = "https://mpv.io"
 
+#: winget exit codes that mean mpv was there all along, not that the
+#: install failed: APPINSTALLER_CLI_ERROR_UPDATE_NOT_APPLICABLE (installed,
+#: and no newer version to upgrade to) and ..._PACKAGE_ALREADY_INSTALLED.
+#: `winget install` of an installed package exits with these, so the plain
+#: "exit != 0 is failure" reading turned "already installed" into an error.
+WINGET_ALREADY_INSTALLED = {0x8A15002B, 0x8A150061}
+
+#: where the Windows package managers put mpv.exe when it is not (yet) on
+#: PATH: winget and scoop add their directory to the *user* PATH, which only
+#: terminals opened afterwards see, so the shell that ran the install still
+#: cannot find it. Environment variable name, then path below it.
+WINDOWS_MPV_DIRS = [
+    ("LOCALAPPDATA", ("Microsoft", "WinGet", "Links")),
+    ("USERPROFILE", ("scoop", "shims")),
+    ("ProgramData", ("chocolatey", "bin")),
+]
+
+
+def install_succeeded(command, code):
+    """Whether a package manager's exit status means mpv is installed."""
+    if code == 0:
+        return True
+    return bool(command) and command[0] == "winget" and (code & 0xFFFFFFFF) in WINGET_ALREADY_INSTALLED
+
+
+def find_mpv(mpv_bin="mpv", which=None, environ=None, platform=None):
+    """The mpv to run: `mpv_bin` on PATH, or on Windows where a package
+    manager put it when PATH has not caught up yet. None when there is none.
+    """
+    which = which or shutil.which  # looked up at call time so tests can stub it
+    found = which(mpv_bin)
+    if found or mpv_bin != "mpv" or not (platform or sys.platform).startswith("win"):
+        return found
+    environ = os.environ if environ is None else environ
+    for variable, parts in WINDOWS_MPV_DIRS:
+        base = environ.get(variable)
+        if base and os.path.isfile(os.path.join(base, *parts, "mpv.exe")):
+            return os.path.join(base, *parts, "mpv.exe")
+    # a winget portable package that made no link: the package directory itself
+    base = environ.get("LOCALAPPDATA")
+    if base:
+        for path in sorted(Path(base, "Microsoft", "WinGet", "Packages").glob("shinchiro.mpv_*/**/mpv.exe")):
+            return str(path)
+    return None
+
 
 def _platform_key(platform=None):
     platform = platform or sys.platform
@@ -214,8 +259,10 @@ def spawn_mpv(args):
     slowly from one that has already died -- they look identical from the
     socket's side, which is nothing.
     """
-    if shutil.which(args[0]) is None:
+    mpv_path = find_mpv(args[0])
+    if mpv_path is None:
         raise PlayerError(mpv_missing_message(args[0]))
+    args = [mpv_path, *args[1:]]
     kwargs = {
         "stdin": subprocess.DEVNULL,
         "stdout": subprocess.DEVNULL,

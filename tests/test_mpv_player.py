@@ -547,7 +547,8 @@ def test_an_mpv_that_is_present_is_still_spawned(monkeypatch):
     monkeypatch.setattr(player_mod.shutil, "which", lambda tool: "/usr/bin/mpv")
     monkeypatch.setattr(player_mod.subprocess, "Popen", lambda args, **kw: spawned.append(args))
     spawn_mpv(["mpv", "--idle=yes"])
-    assert spawned == [["mpv", "--idle=yes"]]
+    # spawned by the path that was found, so an mpv that PATH cannot see yet still runs
+    assert spawned == [["/usr/bin/mpv", "--idle=yes"]]
 
 
 # -- a slow start is not a failed one -----------------------------------------
@@ -651,3 +652,36 @@ def test_spawn_keeps_what_mpv_says(tmp_path, monkeypatch):
     args = ["mpv", f"--input-ipc-server={tmp_path / 'mpv.sock'}"]
     assert spawn_mpv(args) == "process"
     assert (tmp_path / "mpv-start.log").read_bytes() == b"mpv complained"
+
+
+def test_winget_saying_mpv_is_already_installed_counts_as_success():
+    winget = ["winget", "install", "-e", "--id", "shinchiro.mpv"]
+    assert player_mod.install_succeeded(winget, 0)
+    assert player_mod.install_succeeded(winget, 2316632107)  # UPDATE_NOT_APPLICABLE, as cmd printed it
+    assert player_mod.install_succeeded(winget, 0x8A15002B)
+    assert player_mod.install_succeeded(winget, 0x8A150061)  # PACKAGE_ALREADY_INSTALLED
+    assert not player_mod.install_succeeded(winget, 1)
+    assert not player_mod.install_succeeded(["brew", "install", "mpv"], 2316632107)
+
+
+def test_find_mpv_looks_where_windows_package_managers_put_it(tmp_path):
+    links = tmp_path / "Microsoft" / "WinGet" / "Links"
+    links.mkdir(parents=True)
+    env = {"LOCALAPPDATA": str(tmp_path), "USERPROFILE": str(tmp_path / "home")}
+    nothing = lambda name: None
+    # not on PATH and not installed anywhere: None, on every platform
+    assert player_mod.find_mpv(which=nothing, environ=env, platform="win32") is None
+    assert player_mod.find_mpv(which=nothing, environ=env, platform="linux") is None
+    (links / "mpv.exe").write_bytes(b"")
+    assert player_mod.find_mpv(which=nothing, environ=env, platform="win32") == str(links / "mpv.exe")
+    # only Windows gets the fallback, and only for the bare "mpv" name
+    assert player_mod.find_mpv(which=nothing, environ=env, platform="linux") is None
+    assert player_mod.find_mpv("C:/tools/mpv.exe", which=nothing, environ=env, platform="win32") is None
+    # PATH wins when it has one
+    assert player_mod.find_mpv(which=lambda name: "C:/on/path/mpv.exe", environ=env, platform="win32") == "C:/on/path/mpv.exe"
+    # a portable winget package without a link
+    (links / "mpv.exe").unlink()
+    package = tmp_path / "Microsoft" / "WinGet" / "Packages" / "shinchiro.mpv_Microsoft.Winget.Source_8wekyb3d8bbwe"
+    package.mkdir(parents=True)
+    (package / "mpv.exe").write_bytes(b"")
+    assert player_mod.find_mpv(which=nothing, environ=env, platform="win32") == str(package / "mpv.exe")

@@ -23,6 +23,8 @@ from ytm.player import (
     MPV_SITE,
     Player,
     PlayerError,
+    find_mpv,
+    install_succeeded,
     mpv_install_command,
 )
 
@@ -431,7 +433,7 @@ def cmd_install_mpv(args):
     The command is printed before it runs, and it runs attached to this
     terminal so sudo and Homebrew can ask their own questions.
     """
-    existing = shutil.which("mpv")
+    existing = find_mpv()
     if existing and not args.force:
         return {"installed": True, "path": existing, "ran": None}, f"mpv is already installed at {existing}"
     command = mpv_install_command()
@@ -456,13 +458,14 @@ def cmd_install_mpv(args):
         code = subprocess.call(command)
     except OSError as exc:
         raise CliError(f"could not run {command[0]}: {exc}") from exc
-    if code != 0:
+    if not install_succeeded(command, code):
         raise CliError(f"{printed} failed (exit {code})")
-    path = shutil.which("mpv")
+    path = find_mpv()
     if path is None:
         raise CliError(
             f"{printed} reported success but mpv is still not on PATH. "
-            "Open a new shell, or check where the package manager put it."
+            "A package manager adds its directory to the PATH of terminals opened "
+            "afterwards, so open a new one, or check where it put mpv."
         )
     return {"installed": True, "path": path, "ran": command}, f"mpv installed at {path}"
 
