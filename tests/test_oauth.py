@@ -1,4 +1,4 @@
-"""Tests for `ytm auth --oauth` (T23): device-code flow and dual auth-kind support."""
+"""Tests for OAuth sign-in (the `ytm auth` default): device-code flow and dual auth-kind support."""
 import json
 
 import pytest
@@ -193,7 +193,7 @@ def test_client_surfaces_auth_expired_for_revoked_oauth_refresh_token(tmp_path, 
 
     monkeypatch.setattr(auth.ytmusicapi, "YTMusic", _RealishYTMusic)
 
-    with pytest.raises(AuthExpired, match="ytm auth --oauth"):
+    with pytest.raises(AuthExpired, match="ytm auth"):
         auth.client(path=path, credentials_factory=_FailingRefreshCredentials)
 
 
@@ -219,5 +219,5 @@ def test_oauth_client_missing_raises_auth_missing(tmp_path):
     path.write_text(json.dumps(_oauth_token_dict(expired=False)))
     # no oauth_client.json written
 
-    with pytest.raises(AuthMissing, match="ytm auth --oauth"):
+    with pytest.raises(AuthMissing, match="ytm auth"):
         auth.client(path=path)

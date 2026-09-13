@@ -535,3 +535,21 @@ def test_install_mpv_finds_an_mpv_the_shell_cannot_see_yet(monkeypatch):
     monkeypatch.setattr(cli.subprocess, "call", lambda command: pytest.fail("must not install"))
     code, out, _ = run("install-mpv", "--yes")
     assert code == 0 and "already installed" in out
+
+
+def test_auth_defaults_to_oauth_and_from_browser_imports_cookies(monkeypatch, tmp_path):
+    from ytm import auth
+    calls = []
+    monkeypatch.setattr(auth, "oauth_setup", lambda **kw: (calls.append(("oauth", kw)), tmp_path / "auth.json")[1])
+    monkeypatch.setattr(auth, "from_browser", lambda browser, **kw: (calls.append(("browser", browser, kw)), tmp_path / "auth.json")[1])
+    monkeypatch.setattr(auth, "cookies_file", lambda: None)
+    assert run("auth")[0] == 0
+    assert calls[-1][0] == "oauth" and calls[-1][1]["client_file"] is None
+    assert run("auth", "--oauth", "--client-file", "c.json")[0] == 0
+    assert calls[-1] == ("oauth", {"client_id": None, "client_secret": None, "client_file": "c.json"})
+    assert run("auth", "--from-browser")[0] == 0
+    assert calls[-1][:2] == ("browser", None)
+    assert run("auth", "--from-browser", "helium", "--profile", "Profile 1")[0] == 0
+    assert calls[-1] == ("browser", "helium", {"profile": "Profile 1", "authuser": None})
+    with pytest.raises(SystemExit):
+        run("auth", "--manual")  # gone: there is no header-pasting mode any more

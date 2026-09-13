@@ -165,7 +165,7 @@ def test_windows_chromium_decrypt_failure_gets_the_app_bound_hint(tmp_path, monk
         auth.from_browser("chrome", path=path, client_factory=_fake_client_ok, config=_config())
     message = str(excinfo.value)
     assert "App-Bound Encryption" in message
-    assert "--from-browser firefox" in message and "--manual" in message and "--oauth" in message
+    assert "--from-browser firefox" in message and "'ytm auth' signs in with Google" in message
 
 
 def test_no_windows_hint_on_linux_or_without_decrypt_failures(tmp_path, monkeypatch):
@@ -425,7 +425,7 @@ def test_being_locked_out_does_not_tell_you_to_log_in(tmp_path, monkeypatch):
         auth.from_browser(None, path=tmp_path / "auth.json", client_factory=_fake_client_ok, authuser="0")
     message = str(excinfo.value)
     assert "Full Disk Access" in message and "Ghostty" in message
-    assert "ytm auth --manual" in message and "ytm auth --oauth" in message
+    assert "plain 'ytm auth' signs in with Google" in message and "--manual" not in message
     assert "Log in at https://music.youtube.com in one of these browsers first" not in message
 
 

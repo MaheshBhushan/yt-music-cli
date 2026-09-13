@@ -222,11 +222,3 @@ def test_cookies_exposed_for_stream_resolution(tmp_path):
     path = tmp_path / "auth.json"
     path.write_text(json.dumps({"Cookie": "SID=abc; HSID=def", "authorization": "SAPISIDHASH x"}))
     assert auth.load_cookies(path) == "SID=abc; HSID=def"
-
-
-def test_setup_writes_file_with_mode_0600(tmp_path, monkeypatch):
-    path = tmp_path / "config" / "auth.json"
-    monkeypatch.setattr(auth.ytmusicapi, "setup", lambda: json.dumps({"cookie": "SID=abc"}))
-    auth.setup(path)
-    assert path.stat().st_mode & 0o777 == 0o600
-    assert json.loads(path.read_text())["cookie"] == "SID=abc"
