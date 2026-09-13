@@ -119,6 +119,9 @@ class YTMApp(App):
             self._client_error = str(exc)
         self._listener_thread = None
         self._lyrics_video_id = None
+        self._queue_timer = None      # pending coalesced queue redraw
+        self._pending_queue = None    # the payload it will render
+        self._last_queue_render = 0.0
 
     @staticmethod
     def _resolve_theme(name):
@@ -309,6 +312,11 @@ class YTMApp(App):
 
     #: seconds between reconnect attempts after the event connection drops
     LISTEN_RETRY = 1.0
+    #: queue redraws are coalesced to at most one per this long. Loading a
+    #: playlist changes mpv's playlist once per track, and each change
+    #: re-renders every row of the queue pane and the now-playing columns;
+    #: a 100-track playlist used to redraw the whole table a hundred times.
+    QUEUE_REDRAW_INTERVAL = 0.15
     #: live search: wait this long after the last keystroke before asking YouTube
     SEARCH_DEBOUNCE = 0.35
     #: and only once the query is at least this long
@@ -379,7 +387,7 @@ class YTMApp(App):
             if volume is not None:
                 self._volume = volume
         elif event == "queue_changed":
-            self._set_queue(data)
+            self._queue_changed(data)
         elif event == "error":
             self._show_error((data or {}).get("error") or "daemon error")
 
@@ -437,6 +445,31 @@ class YTMApp(App):
     def _set_queue(self, data):
         self.query_one(QueuePane).set_queue(data)
         self.query_one(NowPlaying).set_queue(data)
+
+    def _queue_changed(self, data):
+        """Render a pushed queue change, at most once per redraw interval.
+
+        The first change is drawn straight away; a burst behind it is drawn
+        once, when the interval is up, with whatever arrived last.
+        """
+        self._pending_queue = data
+        if self._queue_timer is not None:
+            return
+        waited = time.monotonic() - self._last_queue_render
+        if waited >= self.QUEUE_REDRAW_INTERVAL:
+            self._flush_queue()
+            return
+        self._queue_timer = self.set_timer(
+            self.QUEUE_REDRAW_INTERVAL - waited, self._flush_queue, name="queue-redraw"
+        )
+
+    def _flush_queue(self):
+        self._queue_timer = None
+        data, self._pending_queue = self._pending_queue, None
+        if data is None:
+            return
+        self._last_queue_render = time.monotonic()
+        self._set_queue(data)
 
     def _refresh_queue(self):
         self._request_async("queue_get", then=self._set_queue)
@@ -726,9 +759,12 @@ class YTMApp(App):
             return
 
         def added(data):
+            # the row's count is updated in place; re-listing the library
+            # (and a track count for every playlist in it) to learn one
+            # number that the add already reported is a whole round of
+            # requests for nothing
             self.notify(f"Added {track_args.get('title') or 'track'} to {pane.title_of(playlist_id) or 'playlist'}")
             pane.set_count(playlist_id, (data or {}).get("track_count"), added=1)
-            self._refresh_playlists()
 
         self._request_async(
             "playlist_add",
