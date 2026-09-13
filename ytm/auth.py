@@ -239,6 +239,11 @@ def _oauth_client_path(path):
     return path.parent / "oauth_client.json"
 
 
+def _desktop_client_path(path):
+    """Where the Google desktop client used by `ytm auth --oauth --client-file` is remembered."""
+    return path.parent / "oauth_desktop_client.json"
+
+
 def _write_json_0600(path, data):
     path.parent.mkdir(parents=True, exist_ok=True)
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
@@ -282,6 +287,7 @@ def oauth_setup(
     path=AUTH_PATH,
     credentials_factory=None,
     sleep=time.sleep,
+    client_file=None,
 ):
     """Run the OAuth device-code flow and store the resulting refreshable token at path.
 
@@ -291,9 +297,19 @@ def oauth_setup(
     persisted separately (see _oauth_client_path) since they are needed again for
     every future token refresh.
     """
+    desktop_file = client_file or os.environ.get("YTM_OAUTH_CLIENT_FILE")
+    stored_desktop = _desktop_client_path(path)
+    tv_client_given = bool(client_id or client_secret or os.environ.get("YTM_OAUTH_CLIENT_ID")
+                           or os.environ.get("YTM_OAUTH_CLIENT_SECRET"))
+    if not desktop_file and stored_desktop.exists() and not tv_client_given:
+        desktop_file = stored_desktop
+    if desktop_file:
+        return desktop_oauth_setup(desktop_file, path=path)
     path.parent.mkdir(parents=True, exist_ok=True)
     client_id, client_secret = _resolve_oauth_client(client_id, client_secret)
     _write_json_0600(_oauth_client_path(path), {"client_id": client_id, "client_secret": client_secret})
+    # The remembered desktop client would no longer match oauth_client.json.
+    stored_desktop.unlink(missing_ok=True)
 
     make_credentials = credentials_factory or OAuthCredentials
     credentials = make_credentials(client_id, client_secret)
@@ -334,6 +350,78 @@ def oauth_setup(
     }
     _write_json_0600(path, token)
     return path
+
+
+def desktop_oauth_setup(client_file, path=AUTH_PATH):
+    """Authorize a desktop client using PKCE and a loopback callback."""
+    from google_auth_oauthlib.flow import InstalledAppFlow
+
+    try:
+        data = json.loads(Path(client_file).read_text(encoding="utf-8"))
+        client_config = data["installed"]
+        client_id = client_config["client_id"]
+        client_secret = client_config["client_secret"]
+        if not client_id or not client_secret:
+            raise ValueError("empty client credentials")
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        raise AuthError("Could not read a Google desktop OAuth client JSON.") from exc
+    # Use Google's endpoints, never endpoints supplied by an imported file.
+    desktop_config = {"installed": {
+        "client_id": client_id, "client_secret": client_secret,
+        "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+        "token_uri": "https://oauth2.googleapis.com/token",
+    }}
+    scope = "https://www.googleapis.com/auth/youtube"
+    flow = InstalledAppFlow.from_client_config(
+        desktop_config, scopes=[scope], autogenerate_code_verifier=True,
+    )
+    print("Sign in on this computer and approve YouTube access for ytm.", flush=True)
+    try:
+        flow.run_local_server(
+            host="127.0.0.1", port=0, open_browser=False, timeout_seconds=900,
+            authorization_prompt_message="Authorize ytm: {url}",
+            success_message="Authorization received. You can return to ytm.",
+            prompt="consent", access_type="offline",
+        )
+    except Exception as exc:
+        # OAuth exceptions can include the callback URL or token response.
+        raise AuthError("Google sign-in failed or timed out. Run 'ytm auth --oauth' again.") from exc
+    raw = flow.oauth2session.token
+    if not raw.get("refresh_token") or not raw.get("access_token"):
+        raise AuthError("Google did not return a refreshable token; retry and approve YouTube access.")
+    granted = raw.get("scope", [])
+    if isinstance(granted, str):
+        granted = granted.split()
+    if scope not in granted:
+        raise AuthError("YouTube access was not granted. Existing credentials were kept.")
+    token = _ytmusicapi_token(raw, granted)
+    _write_json_0600(_oauth_client_path(path), {"client_id": client_id, "client_secret": client_secret})
+    _write_json_0600(_desktop_client_path(path), desktop_config)
+    _write_json_0600(path, token)
+    return path
+
+
+def _ytmusicapi_token(raw, granted):
+    """Reduce a google-auth-oauthlib token to exactly what ytmusicapi's OAuthToken accepts.
+
+    oauthlib adds keys ytmusicapi does not know (id_token, expires_at as a
+    float, refresh_token_expires_in, ...). ytmusicapi before 1.11 passes the
+    whole file to the Token dataclass, so an unknown key is a TypeError at
+    every client start; is_oauth() also needs every Token field present.
+    """
+    expires_in = int(raw.get("expires_in") or 3600)
+    expires_at = raw.get("expires_at")
+    expires_at = int(expires_at) if expires_at else int(time.time()) + expires_in
+    token = {
+        "scope": " ".join(granted),
+        "token_type": raw.get("token_type") or "Bearer",
+        "access_token": raw["access_token"],
+        "refresh_token": raw["refresh_token"],
+        "expires_at": expires_at,
+        "expires_in": expires_in,
+    }
+    assert set(token) == set(OAuthToken.members())
+    return token
 
 
 def _cookie_header_from_jar(jar):

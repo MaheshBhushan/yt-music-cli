@@ -480,7 +480,8 @@ def cmd_auth(args):
     from ytm import auth
 
     if args.oauth:
-        path = auth.oauth_setup(client_id=args.client_id, client_secret=args.client_secret)
+        path = auth.oauth_setup(client_id=args.client_id, client_secret=args.client_secret,
+                                client_file=args.client_file)
     elif args.manual:
         path = auth.setup()
     else:
@@ -606,7 +607,8 @@ def build_parser():
         help="Google account index when the browser is signed in to several (default: auth.x-goog-authuser in config.toml, 0)",
     )
     p.add_argument("--manual", action="store_true", help="paste request headers instead")
-    p.add_argument("--oauth", action="store_true", help="OAuth device flow, for SSH")
+    p.add_argument("--oauth", action="store_true", help="sign in with Google")
+    p.add_argument("--client-file", default=None, help="Google 'Desktop app' OAuth client JSON; sign in via a browser on this machine")
     p.add_argument("--client-id", default=None)
     p.add_argument("--client-secret", default=None)
 
