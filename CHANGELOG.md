@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- `ytm auth` on macOS no longer reports an installed browser as missing. macOS withholds one app's data from another until the asking app has Full Disk Access, and a blocked profile directory looks empty to yt-dlp, which reports the cookie database as missing — so `ytm auth` said "chrome: not installed or no profile found" on a Mac with Chrome open and logged in, and told the user to go and log in. It now tells a directory that is shut apart from one that is absent, says which it is per browser, and explains Full Disk Access (naming the terminal it is talking about) along with `--manual` and `--oauth`, which need none of it.
+
 ## 0.6.0 — 2026-09-13
 
 - Far fewer requests to YouTube. ytm built a new ytmusicapi client for every single catalogue call, and each one opened a fresh connection and downloaded the music.youtube.com home page just to read a visitor id out of it — so opening the playlists pane with ten playlists made about a dozen handshakes and a dozen page downloads to make a dozen API calls. One client now serves the whole process, retired only when `ytm auth` rewrites the credentials, and the visitor id is kept for a day in `~/.local/state/ytm/visitor.json` so one-shot commands do not have to fetch it again either.

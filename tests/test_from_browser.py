@@ -354,3 +354,105 @@ def test_authuser_flag_must_be_numeric(tmp_path, monkeypatch):
     with pytest.raises(auth.AuthError, match="--authuser must be the numeric index"):
         auth.from_browser("chrome", path=tmp_path / "auth.json", client_factory=_fake_client_ok, authuser="work")
     assert not (tmp_path / "auth.json").exists()
+
+
+# -- macOS keeps one app out of another's data ---------------------------------
+
+
+def _blocked(path):
+    """A filesystem where `path` exists but cannot be read, as macOS presents
+    another app's data directory to a terminal without Full Disk Access."""
+    return {
+        "isdir": lambda candidate: candidate == path,
+        "readable": lambda candidate: candidate != path,
+    }
+
+
+CHROME_DIR = "/Users/x/Library/Application Support/Google/Chrome"
+NOT_FOUND = f'could not find chrome cookies database in "{CHROME_DIR}"'
+
+
+def test_a_profile_that_is_there_but_shut_is_told_apart_from_a_missing_one():
+    """yt-dlp cannot tell the two apart: it walks the profile directory, the
+    walk yields nothing because the OS denied it, and it reports the database
+    as missing -- which reads as "Chrome is not installed"."""
+    assert auth._unreadable_directory(NOT_FOUND, **_blocked(CHROME_DIR)) == CHROME_DIR
+    # genuinely absent: nothing is there to be shut
+    assert auth._unreadable_directory(
+        NOT_FOUND, isdir=lambda c: False, readable=lambda c: True
+    ) is None
+    # there and readable: yt-dlp meant what it said
+    assert auth._unreadable_directory(
+        NOT_FOUND, isdir=lambda c: True, readable=lambda c: True
+    ) is None
+    assert auth._unreadable_directory("no path in this message") is None
+
+
+def test_the_firefox_profiles_parent_counts_as_shut():
+    """yt-dlp names the profiles directory for Firefox; macOS blocks the
+    Firefox directory above it."""
+    profiles = "/Users/x/Library/Application Support/Firefox/Profiles"
+    parent = "/Users/x/Library/Application Support/Firefox"
+    message = f"could not find firefox cookies database in '{profiles}'"
+    assert auth._unreadable_directory(message, **_blocked(parent)) == parent
+
+
+def test_the_blocked_browser_reason_names_the_terminal(monkeypatch):
+    monkeypatch.setattr(auth, "_unreadable_directory", lambda text: CHROME_DIR)
+    monkeypatch.setattr(auth, "_terminal_name", lambda environ=None: "kitty")
+
+    def missing(name, profile=None, logger=None):
+        raise FileNotFoundError(NOT_FOUND)
+
+    monkeypatch.setattr(auth, "extract_cookies_from_browser", missing)
+    header, reason = auth._extract_browser_cookie_header("chrome")
+    assert header is None
+    assert reason == "installed, but macOS will not let kitty read it without Full Disk Access"
+
+
+def test_being_locked_out_does_not_tell_you_to_log_in(tmp_path, monkeypatch):
+    """Someone shut out of every browser is usually already logged in; the
+    thing to fix is the permission, and the two ways round it."""
+    monkeypatch.setattr(auth, "_unreadable_directory", lambda text: CHROME_DIR)
+    monkeypatch.setattr(auth, "_terminal_name", lambda environ=None: "Ghostty")
+    monkeypatch.setattr(auth, "_AUTODETECT_BROWSERS", ("chrome",))
+
+    def missing(name, profile=None, logger=None):
+        raise FileNotFoundError(NOT_FOUND)
+
+    monkeypatch.setattr(auth, "extract_cookies_from_browser", missing)
+    with pytest.raises(auth.AuthError) as excinfo:
+        auth.from_browser(None, path=tmp_path / "auth.json", client_factory=_fake_client_ok, authuser="0")
+    message = str(excinfo.value)
+    assert "Full Disk Access" in message and "Ghostty" in message
+    assert "ytm auth --manual" in message and "ytm auth --oauth" in message
+    assert "Log in at https://music.youtube.com in one of these browsers first" not in message
+
+
+def test_a_browser_that_really_is_absent_still_says_to_log_in(tmp_path, monkeypatch):
+    monkeypatch.setattr(auth, "_unreadable_directory", lambda text: None)
+    monkeypatch.setattr(auth, "_AUTODETECT_BROWSERS", ("chrome",))
+
+    def missing(name, profile=None, logger=None):
+        raise FileNotFoundError(NOT_FOUND)
+
+    monkeypatch.setattr(auth, "extract_cookies_from_browser", missing)
+    with pytest.raises(auth.AuthError) as excinfo:
+        auth.from_browser(None, path=tmp_path / "auth.json", client_factory=_fake_client_ok, authuser="0")
+    message = str(excinfo.value)
+    assert "Log in at https://music.youtube.com" in message
+    assert "Full Disk Access" not in message
+
+
+def test_the_terminal_is_named_from_the_environment():
+    assert auth._terminal_name({"TERM_PROGRAM": "Apple_Terminal"}) == "Terminal"
+    assert auth._terminal_name({"TERM_PROGRAM": "iTerm.app"}) == "iTerm"
+    assert auth._terminal_name({"TERM_PROGRAM": "ghostty"}) == "Ghostty"
+    # kitty and Alacritty set no TERM_PROGRAM
+    assert auth._terminal_name({"TERM": "xterm-kitty"}) == "kitty"
+    assert auth._terminal_name({"KITTY_WINDOW_ID": "3"}) == "kitty"
+    assert auth._terminal_name({"ALACRITTY_SOCKET": "/tmp/s"}) == "Alacritty"
+    assert auth._terminal_name({"WEZTERM_PANE": "0"}) == "WezTerm"
+    # an unknown one is named as it names itself, rather than guessed at
+    assert auth._terminal_name({"TERM_PROGRAM": "Foo.app"}) == "Foo.app"
+    assert auth._terminal_name({}) == "your terminal"
