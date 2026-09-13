@@ -738,8 +738,13 @@ _VIDEO_ID_PARAM = re.compile(r"[?&]v=([^&]*)")
 
 
 def video_id_of(url):
-    """The YouTube video id in a watch URL, or None for anything else."""
+    """The YouTube video id in a watch URL or ytm cache path, if present."""
     if not url:
         return None
     match = _VIDEO_ID_PARAM.search(url)
-    return match.group(1) if match else None
+    if match:
+        return match.group(1)
+    # Cached audio is named ``<video id>.<extension>``. Recovering the id
+    # keeps queue metadata and duplicate detection identical offline.
+    stem = Path(str(url).replace("\\", "/")).stem
+    return stem if re.fullmatch(r"[A-Za-z0-9_-]{11}", stem) else None

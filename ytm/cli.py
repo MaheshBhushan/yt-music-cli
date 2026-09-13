@@ -12,19 +12,18 @@ the formatting entirely, which is what makes the TUI a client of this CLI.
 
 import argparse
 import json
-from dataclasses import asdict
 import os
 import re
 import shutil
 import subprocess
 import sys
+from dataclasses import asdict
 
 from ytm.player import (
     MPV_SITE,
     Player,
     PlayerError,
     mpv_install_command,
-    watch_url,
 )
 
 _VIDEO_ID = re.compile(r"^[A-Za-z0-9_-]{11}$")
@@ -160,7 +159,9 @@ def current_track(p):
 
 def _enqueue_all(p, tracks):
     """Append `tracks` to mpv's playlist in one batch."""
-    return p.enqueue_many((watch_url(t.video_id), _label(t)) for t in tracks)
+    from ytm import cache
+
+    return p.enqueue_many((cache.playback_url(t.video_id), _label(t)) for t in tracks)
 
 
 def _label(track):
@@ -233,17 +234,17 @@ def cmd_search(args):
 
 
 def _load(args, flags):
-    from ytm import state
+    from ytm import cache, state
 
     track = select(" ".join(args.what))
     state.remember_tracks([track])
     with player() as p:
         if flags == "play":
-            p.play(watch_url(track.video_id), title=_label(track))
+            p.play(cache.playback_url(track.video_id), title=_label(track))
         elif flags == "next":
-            p.enqueue_next(watch_url(track.video_id), title=_label(track))
+            p.enqueue_next(cache.playback_url(track.video_id), title=_label(track))
         else:
-            p.enqueue(watch_url(track.video_id), title=_label(track))
+            p.enqueue(cache.playback_url(track.video_id), title=_label(track))
     verb = {"play": "Playing", "next": "Up next"}.get(flags, "Queued")
     text = "\n".join([f"{verb}:", track.title, track.artist] + ([track.album] if track.album else []))
     return {"track": fmt_track(track), "action": flags}, text
@@ -260,7 +261,7 @@ def cmd_add(args):
 
 
 def cmd_radio(args):
-    from ytm import music, state
+    from ytm import cache, music, state
 
     with player() as p:
         if args.what:
@@ -287,7 +288,7 @@ def cmd_radio(args):
                 break
         state.remember_tracks([seed] + tracks)
         if args.what:
-            p.play(watch_url(seed.video_id), title=_label(seed))
+            p.play(cache.playback_url(seed.video_id), title=_label(seed))
         _enqueue_all(p, tracks)
     return (
         {"seed": fmt_track(seed), "tracks": [fmt_track(t) for t in tracks]},
@@ -297,7 +298,7 @@ def cmd_radio(args):
 
 def cmd_mix(args):
     """List personal mixes, or replace the queue with one and play it."""
-    from ytm import music, state
+    from ytm import cache, music, state
 
     mixes = music.mixes()
     if not args.name:
@@ -318,7 +319,7 @@ def cmd_mix(args):
     state.remember_tracks(tracks)
     with player() as p:
         p.stop()
-        p.play(watch_url(tracks[0].video_id), title=_label(tracks[0]))
+        p.play(cache.playback_url(tracks[0].video_id), title=_label(tracks[0]))
         _enqueue_all(p, tracks[1:])
     return (
         {"playlist": asdict(playlist), "tracks": [fmt_track(t) for t in tracks]},
@@ -525,7 +526,6 @@ def cmd_update(args):
     ok, text = update.upgrade(kind=kind)
     if not ok:
         raise CliError(text)
-    after = update.installed_version()
     return (
         dict(info, upgraded=True, kind=kind, output=text),
         f"{line}\nupgraded via {kind}; restart ytm to run the new version",

@@ -4,8 +4,7 @@ import json
 import pytest
 from ytmusicapi.exceptions import YTMusicServerError
 
-from ytm import auth
-from ytm import music as api
+from ytm import api, auth
 
 # Hand-written fixture mirroring the shapes ytmusicapi 1.12.1 actually returns
 # for search(filter="songs"), including the degenerate ones.

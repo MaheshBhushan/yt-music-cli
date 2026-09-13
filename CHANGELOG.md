@@ -6,6 +6,14 @@
 - ytm no longer gives up on an mpv that is still starting. It waited a fixed 10 s for mpv to open its IPC socket, and mpv's first start after installation is slower than that — 11 s on a Mac where Homebrew had just put it there, one second past the limit — so the first run after installing mpv failed with `mpv started but never opened its IPC endpoint` and the next one worked. The wait is now long enough for a cold start, and an mpv that has actually *died* is reported the moment it exits instead of at the end of the wait, so a real failure is quicker to hear about than it used to be.
 - When mpv does fail to start, ytm says what mpv said. Its output went to `/dev/null`, so a missing library or a refused option left nothing to report but the absence of a socket; it is now kept beside the socket and quoted in the error, and where mpv stayed silent the error says where the rest is.
 - `~/.local/state/ytm/` is created before mpv is told to write its log there. mpv does not create the directory and does not complain when it cannot write, so on a machine that had never had it the log the README points at — the only place a failed resolve or a dead audio device is ever reported — was never written at all.
+- Cached downloads are now used for CLI, TUI, radio and playlist playback; cached filenames retain their YouTube video id so queue metadata and duplicate detection still work offline.
+- Session updates are serialized across processes, preventing the CLI, TUI and autoplay helper from overwriting one another's remembered searches or tracks.
+- State, local-playlist and audio-cache files now honor `XDG_STATE_HOME` and `XDG_CACHE_HOME` consistently.
+- Slow OAuth client construction no longer holds the catalogue cache lock. Concurrent first callers still share one client, while reauthentication can invalidate an in-progress build safely.
+- Visitor ids dated in the future are rejected, and failed visitor-file writes clean up their temporary file.
+- Playlist fallback handling now catches expected authentication and network failures without hiding programmer errors; missing playlist counts remain uncached and keep the displayed zero.
+- Restored `ytm.api` as a compatibility re-export for integrations written before 0.6.0.
+- The fake mpv test server now treats a client disconnect as normal instead of emitting an unhandled thread warning.
 
 ## 0.6.0 — 2026-09-13
 

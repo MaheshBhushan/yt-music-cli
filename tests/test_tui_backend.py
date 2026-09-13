@@ -1,12 +1,13 @@
 """Tests for the TUI backend: the old request/event vocabulary over the
 mpv Player and the catalogue, with both faked."""
 
-import pytest
 import time
 
+import pytest
+
+from tests.test_cli_core import FakePlayer, track
 from ytm import music, state
 from ytm.tui.backend import Backend, BackendError
-from tests.test_cli_core import FakePlayer, track
 
 
 @pytest.fixture
@@ -201,6 +202,51 @@ def test_playlist_list_fills_in_missing_remote_counts(backend, catalogue, monkey
     assert [(p["title"], p["track_count"]) for p in lists] == [("Liked Music", 9), ("Mix", 12)]
 
 
+def test_playlist_list_keeps_zero_when_count_lookup_returns_none(
+    backend, catalogue, monkeypatch, tmp_path
+):
+    from ytm import playlists_local
+
+    monkeypatch.setattr(playlists_local, "DEFAULT_PATH", tmp_path / "pl.json")
+    monkeypatch.setattr(
+        music,
+        "library_playlists",
+        lambda limit=25, yt=None: [music.Playlist("LM", "Liked Music", 0)],
+    )
+    asked = []
+    monkeypatch.setattr(
+        music, "playlist_count", lambda pid, yt=None: (asked.append(pid), None)[1]
+    )
+    assert backend.request("playlist_list")["playlists"][0]["track_count"] == 0
+    assert backend.request("playlist_list")["playlists"][0]["track_count"] == 0
+    assert asked == ["LM", "LM"]
+
+
+def test_playlist_list_does_not_hide_programmer_errors(
+    backend, catalogue, monkeypatch, tmp_path
+):
+    from ytm import playlists_local
+
+    monkeypatch.setattr(playlists_local, "DEFAULT_PATH", tmp_path / "pl.json")
+    monkeypatch.setattr(
+        music,
+        "library_playlists",
+        lambda limit=25, yt=None: (_ for _ in ()).throw(TypeError("bug")),
+    )
+    with pytest.raises(BackendError, match="TypeError: bug"):
+        backend.request("playlist_list")
+
+
+def test_play_prefers_cached_audio(backend):
+    from ytm import cache
+
+    cache.DEFAULT_CACHE_DIR.mkdir(parents=True)
+    cached = cache.DEFAULT_CACHE_DIR / "dQw4w9WgXcQ.m4a"
+    cached.write_bytes(b"audio")
+    backend.request("play", {"video_id": "dQw4w9WgXcQ", "title": "Cached"})
+    assert backend.fake.calls[0] == ("play", str(cached), "Cached")
+
+
 def test_playlist_create_remote_and_local(backend, monkeypatch, tmp_path):
     from ytm import playlists_local
 
@@ -257,12 +303,22 @@ def test_playlist_list_appends_mixes_after_library_playlists(backend, catalogue,
 
 
 def test_playlist_add_count_failure_does_not_undo_the_add(backend, monkeypatch):
+    import requests
+
     monkeypatch.setattr(music, "add_playlist_items", lambda pid, vids, yt=None: None)
     def boom(pid, yt=None):
-        raise RuntimeError("network")
+        raise requests.ConnectionError("network")
     monkeypatch.setattr(music, "playlist_count", boom)
     out = backend.request("playlist_add", {"playlist_id": "PL1", "video_ids": ["v1"]})
     assert out == {"playlist_id": "PL1", "added": 1}
+
+
+def test_playlist_add_does_not_cache_or_return_a_missing_count(backend, monkeypatch):
+    monkeypatch.setattr(music, "add_playlist_items", lambda pid, vids, yt=None: None)
+    monkeypatch.setattr(music, "playlist_count", lambda pid, yt=None: None)
+    out = backend.request("playlist_add", {"playlist_id": "PL1", "video_ids": ["v1"]})
+    assert out == {"playlist_id": "PL1", "added": 1}
+    assert "PL1" not in backend._playlist_counts
 
 
 def test_enqueue_next_route_uses_the_player(backend):

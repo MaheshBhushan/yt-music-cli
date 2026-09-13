@@ -22,7 +22,9 @@ from pathlib import Path
 from ytm import music as api
 from ytm.music import track_from_dict, track_to_dict
 
-DEFAULT_PATH = Path.home() / ".local" / "state" / "ytm" / "playlists.json"
+DEFAULT_PATH = Path(
+    os.environ.get("XDG_STATE_HOME", os.path.expanduser("~/.local/state"))
+) / "ytm" / "playlists.json"
 
 LOCAL_ID_PREFIX = "local-"
 

@@ -58,6 +58,18 @@ def test_uncached_video_reports_not_cached(tmp_path):
     assert cache.get_cached_path("abc123", cache_dir=tmp_path) is None
 
 
+def test_playback_url_prefers_a_cached_file(tmp_path):
+    path = tmp_path / "abc123.m4a"
+    path.write_bytes(b"audio")
+    assert cache.playback_url("abc123", cache_dir=tmp_path) == str(path)
+
+
+def test_playback_url_falls_back_to_youtube(tmp_path):
+    assert cache.playback_url("abc123", cache_dir=tmp_path) == (
+        "https://music.youtube.com/watch?v=abc123"
+    )
+
+
 def test_download_produces_a_cached_file(tmp_path):
     path = cache.download("abc123", cache_dir=tmp_path, ydl_class=FakeYDL)
     assert path.exists()
@@ -79,7 +91,7 @@ def test_interrupted_download_leaves_no_cache_entry(tmp_path):
 def test_lru_eviction_drops_least_recently_used(tmp_path):
     path_a = cache.download("a", cache_dir=tmp_path, ydl_class=FakeYDL)
     time.sleep(0.01)
-    path_b = cache.download("b", cache_dir=tmp_path, ydl_class=FakeYDL)
+    cache.download("b", cache_dir=tmp_path, ydl_class=FakeYDL)
 
     # touch "a" (mark it recently used) so "b" becomes the LRU entry
     time.sleep(0.01)
