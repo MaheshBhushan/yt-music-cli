@@ -1822,3 +1822,7 @@ def test_ytm_tui_log_records_keys_focus_requests_and_errors(tmp_path, monkeypatc
     assert "request playlist_play done in" in text
     assert "error 'boom'" in text
     assert "resize 120x40" in text
+    assert text.splitlines()[0].split(" ", 1)[1].startswith("ytm ") and "started" in text.splitlines()[0]
+    # a second run starts the file over: it is always the last run
+    asyncio.run(scenario())
+    assert log.read_text().count("started, size") == 1
