@@ -205,7 +205,7 @@ The proof-of-origin token provider is a yt-dlp plugin installed with `ytm`. It a
 - **Media keys.** `ytm` has no MPRIS of its own; install the [mpv-mpris](https://github.com/hoyon/mpv-mpris) plugin and mpv announces itself to your desktop.
 - **Updating.** `ytm update` upgrades ytm and yt-dlp through whatever installed them (pipx, `uv tool`, or pip), so the new version lands where the `ytm` command runs from. The TUI checks PyPI once a day and shows a toast when there is a newer release; set `auto = true` under `[update]` to have it install without asking. yt-dlp is why this matters: YouTube changes things and yt-dlp follows within days, so a stale copy is the usual cause of sudden "could not resolve" failures.
 - **Windows** works over a named pipe to mpv. Cookie import needs Firefox there, see Authentication.
-- **Logs.** mpv writes to `~/.local/state/ytm/mpv.log`.
+- **Logs.** mpv writes to `~/.local/state/ytm/mpv.log`. For a key or focus problem in the TUI, run `YTM_TUI_LOG=/tmp/ytm-tui.log ytm`: every key the app receives, each focus move, each backend request with its timing, and each error is appended to that file.
 
 ## Repository structure
 

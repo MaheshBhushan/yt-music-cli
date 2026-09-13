@@ -1798,3 +1798,27 @@ def test_down_from_the_search_box_reaches_the_lists_and_then_l_plays_a_playlist(
             assert "leave search" in str(app.query_one("#shortcut-bar").render())
 
     asyncio.run(scenario())
+
+
+def test_ytm_tui_log_records_keys_focus_requests_and_errors(tmp_path, monkeypatch):
+    log = tmp_path / "tui.log"
+    monkeypatch.setenv("YTM_TUI_LOG", str(log))
+
+    async def scenario():
+        stub = StubClient()
+        app = YTMApp(client=stub)
+        async with app.run_test(size=(120, 40)) as pilot:
+            await settle(pilot)
+            await pilot.press("escape", "l", "enter")
+            await settle(pilot)
+            app._show_error("boom")
+
+    asyncio.run(scenario())
+    text = log.read_text()
+    assert "key 'l' focus=search-results" in text
+    assert "focus -> playlists-table" in text
+    assert "selected playlists-table row=0 key='remote-1'" in text
+    assert "request playlist_play {'playlist_id': 'remote-1'}" in text
+    assert "request playlist_play done in" in text
+    assert "error 'boom'" in text
+    assert "resize 120x40" in text

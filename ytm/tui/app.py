@@ -2,6 +2,7 @@
 daemon events to widget updates without ever polling.
 """
 
+import os
 import sys
 import threading
 import time
@@ -42,6 +43,23 @@ class DaemonEvent(Message):
         super().__init__()
         self.event = event
         self.data = data
+
+
+def _trace(line):
+    """Append one line to the file named by YTM_TUI_LOG, if set.
+
+    A keyboard or focus problem in someone's terminal cannot be reproduced
+    from a bug report alone; with this set, the keys the app received, where
+    focus went, what it asked the backend and what came back are on disk.
+    """
+    path = os.environ.get("YTM_TUI_LOG")
+    if not path:
+        return
+    try:
+        with open(path, "a", encoding="utf-8") as file:
+            file.write(f"{time.strftime('%H:%M:%S')} {line}\n")
+    except OSError:
+        pass
 
 
 class RequestDone(Message):
@@ -243,6 +261,7 @@ class YTMApp(App):
     def on_resize(self, event):
         """Small terminals lose the results table, playlists and lyrics."""
         size = event.size
+        _trace(f"resize {size.width}x{size.height}")
         compact = size.width < self.COMPACT_WIDTH or size.height < self.COMPACT_HEIGHT
         self.screen.set_class(compact, "compact")
         if compact and self.focused is not None and not self.focused.display:
@@ -403,7 +422,12 @@ class YTMApp(App):
 
     # -- helpers ---------------------------------------------------------
 
+    def on_key(self, event):
+        # never consumes the key: this is the trace, the bindings do the work
+        _trace(f"key {event.key!r} focus={getattr(self.focused, 'id', None)}")
+
     def _show_error(self, message):
+        _trace(f"error {message!r}")
         banner = self.query_one("#error-banner", Static)
         banner.update(f"error: {message}")
         banner.display = True
@@ -434,12 +458,17 @@ class YTMApp(App):
         if self.client is None:
             return
 
+        _trace(f"request {cmd} {args!r}")
+
         def work():
+            started = time.monotonic()
             try:
                 data = self.client.request(cmd, args)
             except BackendError as exc:
+                _trace(f"request {cmd} failed after {time.monotonic() - started:.1f}s: {exc}")
                 self.post_message(RequestDone(cmd, None, str(exc), then))
             else:
+                _trace(f"request {cmd} done in {time.monotonic() - started:.1f}s")
                 self.post_message(RequestDone(cmd, data, None, then))
 
         self.run_worker(work, thread=True, name=cmd, group="requests")
@@ -564,6 +593,7 @@ class YTMApp(App):
     def on_data_table_row_selected(self, message: DataTable.RowSelected):
         """Enter or a mouse click on any of the three tables."""
         table_id = message.data_table.id
+        _trace(f"selected {table_id} row={message.cursor_row} key={getattr(message.row_key, 'value', None)!r}")
         if table_id == "search-results":
             self.action_play_selected()
         elif table_id == "queue-table":
@@ -622,6 +652,7 @@ class YTMApp(App):
         # (Focus, not RowHighlighted: a queue refresh re-adds rows and fires
         # highlights the user never made.)
         widget_id = getattr(message.widget, "id", None)
+        _trace(f"focus -> {widget_id}")
         if widget_id in ("search-results", "queue-table"):
             self._pick_pane = widget_id
         self.query_one("#shortcut-bar", Static).update(
