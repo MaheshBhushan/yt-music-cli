@@ -29,8 +29,21 @@ import threading
 import time
 from pathlib import Path
 
-#: how long to wait for a freshly spawned mpv to open its IPC endpoint
-SPAWN_TIMEOUT = 10.0
+#: How long to wait for a freshly spawned mpv to open its IPC endpoint.
+#: Generous on purpose: mpv's first start after it is installed can take
+#: ten seconds or more while the OS verifies a new binary and its libraries
+#: (macOS took 11 s for a just-brewed mpv, one second past the old 10 s
+#: limit, and ytm gave up while mpv was still coming up). Waiting this long
+#: costs nothing when mpv is merely slow, because an mpv that has *died* is
+#: noticed as soon as it exits rather than at the end of the wait.
+SPAWN_TIMEOUT = 60.0
+
+#: how often to look for the endpoint, and at the process, while waiting
+SPAWN_POLL = 0.05
+
+#: mpv's own start-up chatter, kept beside the socket so a failure to start
+#: can say what mpv said instead of only that nothing appeared
+STARTUP_LOG = "mpv-start.log"
 
 #: how long one reply may take; ytdl_hook resolution happens asynchronously
 #: in mpv, so no command blocks on the network, but a wedged mpv should not
@@ -179,12 +192,37 @@ def mpv_missing_message(mpv_bin="mpv", platform=None, which=shutil.which, root=N
     return f"{lead}. Run 'ytm install-mpv' (it runs: {' '.join(command)}), or see {MPV_SITE}."
 
 
+def startup_log_path(args):
+    """Where to keep mpv's start-up output: beside its socket, or nowhere.
+
+    Windows names a pipe rather than a file, so there is no directory to
+    put it in there and the caller falls back to discarding the output.
+    """
+    for arg in args:
+        if arg.startswith("--input-ipc-server="):
+            endpoint = arg.split("=", 1)[1]
+            if endpoint.startswith("\\\\"):  # \\.\pipe\... is not a path
+                return None
+            return Path(endpoint).parent / STARTUP_LOG
+    return None
+
+
 def spawn_mpv(args):
-    """Start mpv detached from this process so it outlives the CLI command."""
+    """Start mpv detached from this process so it outlives the CLI command.
+
+    Returns the `Popen`, so the caller can tell an mpv that is starting
+    slowly from one that has already died -- they look identical from the
+    socket's side, which is nothing.
+    """
+    if shutil.which(args[0]) is None:
+        raise PlayerError(mpv_missing_message(args[0]))
     kwargs = {
         "stdin": subprocess.DEVNULL,
         "stdout": subprocess.DEVNULL,
-        "stderr": subprocess.DEVNULL,
+        # mpv runs with --no-terminal and nothing attached, so without this
+        # a refused option or a missing library is lost and all ytm can
+        # report is that no socket turned up
+        "stderr": _startup_log_file(args),
     }
     if sys.platform.startswith("win"):
         kwargs["creationflags"] = (
@@ -192,12 +230,37 @@ def spawn_mpv(args):
         )
     else:
         kwargs["start_new_session"] = True
-    if shutil.which(args[0]) is None:
-        raise PlayerError(mpv_missing_message(args[0]))
     try:
-        subprocess.Popen(args, **kwargs)
+        return subprocess.Popen(args, **kwargs)
     except OSError as exc:
         raise PlayerError(f"could not start mpv ({args[0]}): {exc}") from exc
+    finally:
+        handle = kwargs["stderr"]
+        if handle != subprocess.DEVNULL:
+            handle.close()
+
+
+def _startup_log_file(args):
+    path = startup_log_path(args)
+    if path is None:
+        return subprocess.DEVNULL
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        return open(path, "wb")
+    except OSError:
+        return subprocess.DEVNULL
+
+
+def _mpv_said(args, limit=400):
+    """The tail of what mpv printed while starting, or "" if it said nothing."""
+    path = startup_log_path(args)
+    if path is None:
+        return ""
+    try:
+        said = path.read_text(encoding="utf-8", errors="replace").strip()
+    except OSError:
+        return ""
+    return said[-limit:] if said else ""
 
 
 class Player:
@@ -237,7 +300,8 @@ class Player:
             raise PlayerError(
                 f"mpv is not running (no IPC endpoint at {self._ipc_path})"
             )
-        spawner(mpv_args(self._ipc_path, **self._mpv_options))
+        args = mpv_args(self._ipc_path, **self._mpv_options)
+        process = spawner(args)
         deadline = time.monotonic() + SPAWN_TIMEOUT
         last = None
         while time.monotonic() < deadline:
@@ -246,11 +310,12 @@ class Player:
                 return
             except OSError as exc:
                 last = exc
-                time.sleep(0.05)
-        raise PlayerError(
-            f"mpv started but never opened its IPC endpoint at "
-            f"{self._ipc_path}: {last}"
-        )
+            # an mpv that has exited is never going to open the socket, and
+            # waiting out the whole timeout to say so helps nobody
+            if process is not None and process.poll() is not None:
+                raise PlayerError(_died_message(args, process.returncode))
+            time.sleep(SPAWN_POLL)
+        raise PlayerError(_never_ready_message(args, self._ipc_path, last))
 
     def _open(self):
         if sys.platform.startswith("win"):
@@ -616,6 +681,37 @@ class Player:
             return mpv_volume
         current = self.mixer.get()
         return mpv_volume if current is None else current
+
+
+def _log_file_of(args):
+    for arg in args:
+        if arg.startswith("--log-file="):
+            return arg.split("=", 1)[1]
+    return None
+
+
+def _died_message(args, code):
+    said = _mpv_said(args)
+    if said:
+        return f"mpv exited straight away (status {code}): {said}"
+    # ytm runs mpv with --no-terminal, which silences mpv's own messages --
+    # only what the OS writes (a missing library, say) reaches the capture,
+    # and an option mpv refuses is rejected before the log file is opened
+    log = _log_file_of(args)
+    where = f", and {log} has the rest" if log else ""
+    return (
+        f"mpv exited straight away (status {code}) without saying why{where}. "
+        f"Running mpv with the same options in a terminal shows what it objects to."
+    )
+
+
+def _never_ready_message(args, ipc_path, last):
+    said = _mpv_said(args)
+    detail = f". mpv said: {said}" if said else ""
+    return (
+        f"mpv is running but did not open its IPC endpoint at {ipc_path} "
+        f"within {SPAWN_TIMEOUT:g}s ({last}){detail}"
+    )
 
 
 def option_list(**options):

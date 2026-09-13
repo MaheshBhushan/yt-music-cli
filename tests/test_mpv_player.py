@@ -10,6 +10,7 @@ import json
 import os
 import socket
 import threading
+import time
 
 import pytest
 
@@ -22,6 +23,7 @@ from ytm.player import (
     mpv_install_command,
     mpv_missing_message,
     spawn_mpv,
+    startup_log_path,
     video_id_of,
 )
 
@@ -166,7 +168,7 @@ def test_refuses_to_spawn_when_asked_not_to(tmp_path):
 
 def test_spawn_that_never_opens_the_socket_is_an_error(tmp_path, monkeypatch):
     monkeypatch.setattr(player_mod, "SPAWN_TIMEOUT", 0.2)
-    with pytest.raises(PlayerError, match="never opened"):
+    with pytest.raises(PlayerError, match="did not open its IPC endpoint"):
         Player(ipc_path=str(tmp_path / "none.sock"), spawner=lambda args: None)
 
 
@@ -541,3 +543,106 @@ def test_an_mpv_that_is_present_is_still_spawned(monkeypatch):
     monkeypatch.setattr(player_mod.subprocess, "Popen", lambda args, **kw: spawned.append(args))
     spawn_mpv(["mpv", "--idle=yes"])
     assert spawned == [["mpv", "--idle=yes"]]
+
+
+# -- a slow start is not a failed one -----------------------------------------
+
+
+class _Process:
+    """A spawned mpv: alive until `exits_after` polls, then gone."""
+
+    def __init__(self, exits_after=None, returncode=1):
+        self.polls = 0
+        self._exits_after = exits_after
+        self.returncode = returncode
+
+    def poll(self):
+        self.polls += 1
+        if self._exits_after is None or self.polls < self._exits_after:
+            return None
+        return self.returncode
+
+
+def test_an_mpv_that_is_merely_slow_is_waited_for(tmp_path, monkeypatch):
+    """mpv's first start after installation took 11 s on macOS -- one second
+    past the old 10 s limit -- so ytm gave up on an mpv that was coming up
+    fine, and the next run worked."""
+    path = str(tmp_path / "mpv.sock")
+    started = []
+
+    def spawner(args):
+        threading.Timer(0.4, lambda: started.append(FakeMpv(path))).start()
+        return _Process()
+
+    with Player(ipc_path=path, spawner=spawner, timeout=2.0) as p:
+        assert p.get("volume") == 70.0
+    started[0].close()
+
+
+def test_an_mpv_that_died_is_reported_at_once(tmp_path, monkeypatch):
+    """Waiting out the full timeout to say what was known immediately is the
+    difference between a one-second error and a minute of nothing."""
+    monkeypatch.setattr(player_mod, "SPAWN_TIMEOUT", 30.0)
+    process = _Process(exits_after=2, returncode=4)
+    start = time.monotonic()
+    with pytest.raises(PlayerError, match="exited straight away"):
+        Player(ipc_path=str(tmp_path / "none.sock"), spawner=lambda args: process)
+    assert time.monotonic() - start < 5, "waited out the timeout instead of watching mpv"
+
+
+def test_what_mpv_printed_while_failing_is_quoted(tmp_path, monkeypatch):
+    """mpv runs with --no-terminal and nothing attached; without keeping its
+    output there is nothing to report but 'no socket appeared'."""
+    ipc = tmp_path / "mpv.sock"
+    (tmp_path / "mpv-start.log").write_text("Error parsing option ytdl-raw-options\n")
+    monkeypatch.setattr(player_mod, "SPAWN_TIMEOUT", 30.0)
+    with pytest.raises(PlayerError, match="Error parsing option"):
+        Player(ipc_path=str(ipc), spawner=lambda args: _Process(exits_after=1, returncode=2))
+
+
+def test_a_silent_death_says_where_to_look_instead(tmp_path, monkeypatch):
+    """--no-terminal silences mpv's own messages, and an option it refuses is
+    rejected before the log file is even opened, so the useful thing left to
+    say is where the rest is and how to see it."""
+    monkeypatch.setattr(player_mod, "SPAWN_TIMEOUT", 30.0)
+    spawner = lambda args: _Process(exits_after=1, returncode=1)
+    with pytest.raises(PlayerError) as excinfo:
+        Player(
+            ipc_path=str(tmp_path / "mpv.sock"),
+            spawner=spawner,
+            extra_args=[f"--log-file={tmp_path / 'mpv.log'}"],
+        )
+    message = str(excinfo.value)
+    assert str(tmp_path / "mpv.log") in message
+    assert "in a terminal" in message
+
+
+def test_a_spawner_that_returns_nothing_still_times_out(tmp_path, monkeypatch):
+    """The injected spawners in these tests hand back no process; the wait
+    then has only the clock to go on, as it always did."""
+    monkeypatch.setattr(player_mod, "SPAWN_TIMEOUT", 0.2)
+    with pytest.raises(PlayerError, match="did not open its IPC endpoint"):
+        Player(ipc_path=str(tmp_path / "none.sock"), spawner=lambda args: None)
+
+
+def test_mpv_startup_output_is_kept_beside_the_socket(tmp_path):
+    args = ["mpv", f"--input-ipc-server={tmp_path / 'mpv.sock'}"]
+    assert startup_log_path(args) == tmp_path / "mpv-start.log"
+    # a Windows named pipe is not a path with a directory to write into
+    assert startup_log_path(["mpv", r"--input-ipc-server=\\.\pipe\ytm-mpv"]) is None
+    assert startup_log_path(["mpv", "--idle=yes"]) is None
+
+
+def test_spawn_keeps_what_mpv_says(tmp_path, monkeypatch):
+    captured = {}
+
+    def popen(args, **kwargs):
+        captured.update(kwargs)
+        kwargs["stderr"].write(b"mpv complained")
+        return "process"
+
+    monkeypatch.setattr(player_mod.shutil, "which", lambda tool: "/usr/bin/mpv")
+    monkeypatch.setattr(player_mod.subprocess, "Popen", popen)
+    args = ["mpv", f"--input-ipc-server={tmp_path / 'mpv.sock'}"]
+    assert spawn_mpv(args) == "process"
+    assert (tmp_path / "mpv-start.log").read_bytes() == b"mpv complained"
