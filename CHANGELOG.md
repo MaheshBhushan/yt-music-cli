@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.8.0 — 2026-09-13
 
 - **`ytm auth` now signs in with Google.** OAuth is the default: the first run takes a Google Desktop-app client JSON (`--client-file`) or a TV client id and secret and remembers them; every later `ytm auth` reuses them. Importing cookies from a browser is now explicit: `ytm auth --from-browser` auto-detects, `ytm auth --from-browser firefox` names one. `--oauth` is gone: there is nothing left for it to select.
 - **The paste-your-headers mode is gone.** `ytm auth --manual`, which took request headers copied from DevTools, is removed along with its setup code; browser import or Google sign-in cover every case it did. Existing `auth.json` files written by it keep working until their cookies expire.
