@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- `ytm update` no longer claims to have upgraded when nothing changed. Right after a release, pip's HTTP cache and the index CDN can still call the old version the newest, so `pip install -U` (and `pipx upgrade`) exited 0 having installed nothing, and ytm said "upgraded, restart ytm" until a second run some minutes later actually did it. Installers are now told to skip their caches, pip is asked for the exact version PyPI reported, and a fresh interpreter is asked what is installed afterwards; if it is still the old version the command fails and says the index has not caught up yet.
+- The TUI no longer offers an update to a source checkout that is already ahead of PyPI. An editable install's recorded version is frozen at `pip install -e` time, so after a `git pull` ytm reported the old number, every PyPI release looked newer, and the "Update available" toast never went away. An editable install now reads its version from the checkout's `pyproject.toml`.
+
 ## 0.7.0 — 2026-09-13
 
 - `ytm auth --oauth` can sign in through a browser on the same machine. Pass a Google **Desktop app** OAuth client JSON with `--client-file` (or `YTM_OAUTH_CLIENT_FILE`); ytm runs the PKCE flow against a loopback callback, stores a self-refreshing token, and remembers the client in `~/.config/ytm/oauth_desktop_client.json` so a plain `ytm auth --oauth` re-uses it. The TV/device-code flow is unchanged and is still what `--client-id`/`--client-secret` select; using it forgets a previously remembered desktop client so the two cannot fall out of step.

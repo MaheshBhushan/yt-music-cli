@@ -524,7 +524,7 @@ def cmd_update(args):
     if not info["newer"] and not args.force:
         return dict(info, upgraded=False), line + " (use --force to reinstall and refresh yt-dlp)"
     kind = update.install_kind()
-    ok, text = update.upgrade(kind=kind)
+    ok, text = update.upgrade(kind=kind, target=info["latest"] if info["newer"] else None)
     if not ok:
         raise CliError(text)
     return (

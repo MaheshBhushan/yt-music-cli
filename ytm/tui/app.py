@@ -280,7 +280,7 @@ class YTMApp(App):
                 title="Update available", timeout=12,
             )
             return
-        ok, text = update.upgrade()
+        ok, text = update.upgrade(target=latest)
         if ok:
             self.call_from_thread(
                 self.notify, f"Updated ytm to {latest}. Restart to use it.",

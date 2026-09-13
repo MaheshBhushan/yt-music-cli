@@ -22,6 +22,7 @@ import shutil
 import subprocess
 import sys
 import time
+import urllib.parse
 import urllib.request
 from importlib import metadata
 from pathlib import Path
@@ -36,7 +37,36 @@ CHECK_PATH = Path(
 CHECK_INTERVAL = 24 * 60 * 60  # seconds
 
 
+def _editable_source(dist=None):
+    """The checkout an editable install points at, or None for a normal install."""
+    try:
+        dist = dist or metadata.distribution(PACKAGE)
+        direct = json.loads(dist.read_text("direct_url.json") or "null")
+        if not direct.get("dir_info", {}).get("editable"):
+            return None
+        return Path(urllib.request.url2pathname(urllib.parse.urlparse(direct["url"]).path))
+    except Exception:
+        return None
+
+
 def installed_version():
+    """The version that is actually running.
+
+    An editable install's dist-info records the version at `pip install -e`
+    time and never changes, so after a `git pull` it says the old number
+    and every check finds PyPI "newer" than a checkout that is already
+    ahead of it. For an editable install the checkout's pyproject.toml is
+    the truth.
+    """
+    source = _editable_source()
+    if source is not None:
+        try:
+            import tomllib
+
+            with open(source / "pyproject.toml", "rb") as file:
+                return tomllib.load(file)["project"]["version"]
+        except Exception:
+            pass
     try:
         return metadata.version(PACKAGE)
     except metadata.PackageNotFoundError:
@@ -134,36 +164,67 @@ def _has_module(name):
     return importlib.util.find_spec(name) is not None
 
 
-def upgrade_commands(kind, yt_dlp=True, has_pip=None, has_uv=None):
+def upgrade_commands(kind, yt_dlp=True, has_pip=None, has_uv=None, target=None):
     """The shell commands that upgrade ytm (and yt-dlp) for `kind`.
 
     A plain venv normally has pip; one made by `uv venv` does not, so that
     case goes through `uv pip` aimed at this interpreter instead.
+
+    Every installer is told not to trust what it cached: right after a
+    release pip's HTTP cache (and the index CDN behind it) can still say
+    the old version is the newest, and then `pip install -U` exits 0 having
+    installed nothing. With `target` set, pip is asked for that exact
+    version, so a stale index is an error rather than a silent no-op.
     """
+    spec = f"{PACKAGE}=={target}" if target else PACKAGE
     if kind == "pipx":
-        commands = [["pipx", "upgrade", PACKAGE]]
+        commands = [["pipx", "upgrade", "--pip-args=--no-cache-dir", PACKAGE]]
         if yt_dlp:
-            commands.append(["pipx", "runpip", PACKAGE, "install", "-U", "yt-dlp"])
+            commands.append(["pipx", "runpip", PACKAGE, "install", "-U", "--no-cache-dir", "yt-dlp"])
         return commands
     if kind == "uv":
         # `uv tool upgrade` refreshes the tool and its dependencies together
-        return [["uv", "tool", "upgrade", PACKAGE]]
+        return [["uv", "tool", "upgrade", "--refresh", PACKAGE]]
     if kind == "editable":
         return []  # a checkout: `git pull` is the upgrade
-    packages = [PACKAGE, "yt-dlp"] if yt_dlp else [PACKAGE]
+    packages = [spec, "yt-dlp"] if yt_dlp else [spec]
     has_pip = _has_module("pip") if has_pip is None else has_pip
     if has_pip:
-        return [[sys.executable, "-m", "pip", "install", "-U", *packages]]
+        return [[sys.executable, "-m", "pip", "install", "-U", "--no-cache-dir", *packages]]
     has_uv = shutil.which("uv") is not None if has_uv is None else has_uv
     if has_uv:
-        return [["uv", "pip", "install", "-U", "--python", sys.executable, *packages]]
+        return [["uv", "pip", "install", "-U", "--refresh", "--python", sys.executable, *packages]]
     return []
 
 
-def upgrade(kind=None, yt_dlp=True, run=subprocess.run):
-    """Upgrade in place. Returns (ok, text) where text is what to show."""
+def installed_version_now(run=subprocess.run):
+    """What a fresh process of this interpreter would report as ytm's version.
+
+    The running process's metadata is what was on disk when it started; only
+    a new process sees the dist-info an upgrade just wrote.
+    """
+    try:
+        result = run(
+            [sys.executable, "-c", f"from importlib import metadata; print(metadata.version({PACKAGE!r}))"],
+            capture_output=True, text=True, timeout=30,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if result.returncode != 0:
+        return None
+    return result.stdout.strip() or None
+
+
+def upgrade(kind=None, yt_dlp=True, run=subprocess.run, target=None, verify=None):
+    """Upgrade in place. Returns (ok, text) where text is what to show.
+
+    With `target` (the version PyPI reported) the result is checked: the
+    upgrade only counts as done when a fresh interpreter reports that
+    version, so a silent no-op from a stale index is reported as such
+    instead of as "upgraded, restart ytm".
+    """
     kind = kind or install_kind()
-    commands = upgrade_commands(kind, yt_dlp=yt_dlp)
+    commands = upgrade_commands(kind, yt_dlp=yt_dlp, target=target)
     if not commands:
         if kind == "editable":
             return False, "ytm runs from a source checkout; update it with git pull"
@@ -180,4 +241,13 @@ def upgrade(kind=None, yt_dlp=True, run=subprocess.run):
         output.append((result.stdout or "") + (result.stderr or ""))
         if result.returncode != 0:
             return False, f"{' '.join(command)} failed:\n{output[-1].strip()}"
-    return True, "\n".join(part.strip() for part in output if part.strip())
+    text = "\n".join(part.strip() for part in output if part.strip())
+    if target:
+        verify = verify or installed_version_now
+        now = verify()
+        if now is not None and not is_newer(now, target) and now != target:
+            return False, (
+                f"{PACKAGE} {now} is still installed after the upgrade; the package index "
+                f"has not picked up {target} yet. Try again in a few minutes.\n{text}".rstrip()
+            )
+    return True, text
