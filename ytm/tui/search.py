@@ -43,7 +43,7 @@ class SearchPane(Vertical):
     """Search box on top, results table below."""
 
     def compose(self):
-        yield SearchInput(placeholder="Search...", id="search-input")
+        yield SearchInput(placeholder="Search...  (Esc or ↓ for the lists, l for playlists)", id="search-input")
         table = SelectOnClickTable(id="search-results", cursor_type="row")
         for column in COLUMNS:
             table.add_column(column, key=column, width=MIN_COLUMN_WIDTH)

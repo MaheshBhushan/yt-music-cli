@@ -46,7 +46,8 @@ The TUI is `ytm` with no arguments. Results appear as you type; Enter plays the 
 
 | Key | Action |
 |---|---|
-| `/` or `s` | Focus search |
+| `/` or `s` | Focus search. While the search box has focus every letter is text, so the letter keys below wait for `Esc` or `↓` |
+| `Esc` `↓` | Leave the search box for the lists |
 | `h` | Hide the search box and results while listening; `s`, `/` or `h` bring them back |
 | `Enter` | Play the selected result, queue entry or playlist |
 | `q` `u` | Enqueue the selected song at the end / play it next |

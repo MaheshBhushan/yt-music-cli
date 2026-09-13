@@ -1054,6 +1054,8 @@ def test_clicking_the_shortcut_bar_runs_the_action():
         app = YTMApp(client=stub)
         async with app.run_test(size=(120, 40)) as pilot:
             await settle(pilot)
+            await pilot.press("escape")  # drop the "leave search" lead-in shown while typing
+            await settle(pilot)
             # "e exit  / s search  space play/pause": `space` starts at column 20,
             # plus the bar's one cell of padding
             await pilot.click("#shortcut-bar", offset=(22, 0))
@@ -1768,5 +1770,31 @@ def test_a_burst_of_queue_changes_redraws_once():
             await pilot.pause(app.QUEUE_REDRAW_INTERVAL + 0.1)
             assert len(drawn) == 2
             assert len(drawn[-1]["tracks"]) == 20  # and it is the latest state
+
+    asyncio.run(scenario())
+
+
+def test_down_from_the_search_box_reaches_the_lists_and_then_l_plays_a_playlist():
+    """At startup the search box has focus, so `l` is a letter there: Down
+    (or Esc) must lead out, and the bar must say so."""
+    async def scenario():
+        stub = StubClient()
+        app = YTMApp(client=stub)
+        async with app.run_test(size=(120, 40)) as pilot:
+            await settle(pilot)
+            assert app.focused.id == "search-input"
+            assert "Esc" in str(app.query_one("#shortcut-bar").render())
+            await pilot.press("down")
+            await settle(pilot)
+            assert app.focused.id in ("search-results", "queue-table")
+            assert "leave search" not in str(app.query_one("#shortcut-bar").render())
+            assert app.query_one("#search-input").value == ""
+            await pilot.press("l", "enter")
+            await settle(pilot)
+            assert ("playlist_play", {"playlist_id": "remote-1"}) in stub.calls
+            # back in the search box, Down no longer plays anything and the hint returns
+            await pilot.press("slash")
+            await settle(pilot)
+            assert "leave search" in str(app.query_one("#shortcut-bar").render())
 
     asyncio.run(scenario())
