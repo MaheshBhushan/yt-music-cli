@@ -482,13 +482,11 @@ def cmd_quit(args):
 def cmd_auth(args):
     from ytm import auth
 
-    if args.oauth:
+    if args.from_browser is not None:
+        path = auth.from_browser(args.from_browser or None, profile=args.profile, authuser=args.authuser)
+    else:
         path = auth.oauth_setup(client_id=args.client_id, client_secret=args.client_secret,
                                 client_file=args.client_file)
-    elif args.manual:
-        path = auth.setup()
-    else:
-        path = auth.from_browser(args.from_browser or None, profile=args.profile, authuser=args.authuser)
     # regenerate the cookie file yt-dlp reads, so mpv's next resolve is authenticated
     auth.cookies_file()
     return {"saved": str(path)}, f"Saved credentials to {path}"
@@ -599,8 +597,12 @@ def build_parser():
     p.add_argument("-y", "--yes", action="store_true", help="do not ask before running it")
     p.add_argument("--force", action="store_true", help="run it even if mpv is already on PATH")
 
-    p = add("auth", cmd_auth, "sign in (default: cookies from a logged-in browser)")
-    p.add_argument("--from-browser", nargs="?", const="", default=None, metavar="BROWSER")
+    p = add("auth", cmd_auth, "sign in with Google (or --from-browser to import a browser's cookies)")
+    p.add_argument(
+        "--from-browser", nargs="?", const="", default=None, metavar="BROWSER",
+        help="import cookies from a logged-in browser instead: auto-detect, or chrome, chromium, "
+             "edge, brave, vivaldi, opera, helium, firefox",
+    )
     p.add_argument(
         "--profile", default=None, metavar="NAME",
         help='browser profile directory to read, e.g. "Default" or "Profile 1" (default: the one with a login)',
@@ -609,8 +611,8 @@ def build_parser():
         "--authuser", default=None, metavar="N",
         help="Google account index when the browser is signed in to several (default: auth.x-goog-authuser in config.toml, 0)",
     )
-    p.add_argument("--manual", action="store_true", help="paste request headers instead")
-    p.add_argument("--oauth", action="store_true", help="sign in with Google")
+    # OAuth is the default now; the flag stays so older instructions keep working
+    p.add_argument("--oauth", action="store_true", help=argparse.SUPPRESS)
     p.add_argument("--client-file", default=None, help="Google 'Desktop app' OAuth client JSON; sign in via a browser on this machine")
     p.add_argument("--client-id", default=None)
     p.add_argument("--client-secret", default=None)

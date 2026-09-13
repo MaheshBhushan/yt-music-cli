@@ -50,9 +50,9 @@ _USER_AGENT = (
 )
 
 _EXPIRED_HINT = (
-    "YouTube Music authentication is no longer valid (browser headers expire "
+    "YouTube Music authentication is no longer valid (browser cookies expire "
     "when the session is revoked or the cookie ages out). Run 'ytm auth' to "
-    "paste fresh request headers."
+    "sign in with Google, or 'ytm auth --from-browser' to import fresh cookies."
 )
 _MISSING_HINT = "No YouTube Music credentials found at {path}. Run 'ytm auth' to set them up."
 
@@ -68,12 +68,12 @@ _REFRESH_FAILED_HINT = (
 
 _OAUTH_EXPIRED_HINT = (
     "YouTube Music OAuth authentication is no longer valid (the refresh token "
-    "was revoked or rejected). Run 'ytm auth --oauth' to re-authenticate."
+    "was revoked or rejected). Run 'ytm auth' to sign in again."
 )
 
 _OAUTH_CLIENT_MISSING_HINT = (
     "OAuth client credentials are missing (expected alongside {path}). "
-    "Run 'ytm auth --oauth' to set them up again."
+    "Run 'ytm auth' to set them up again."
 )
 
 
@@ -135,9 +135,8 @@ _MACOS_ACCESS_HINT = (
     " On macOS a program may not read another app's data until it has Full "
     "Disk Access: open System Settings > Privacy & Security > Full Disk "
     "Access, switch {app} on (add it with + if it is not listed), quit {app} "
-    "completely and reopen it, then run 'ytm auth' again. Or skip the "
-    "browser: 'ytm auth --manual' pastes the request headers from DevTools "
-    "and 'ytm auth --oauth' signs in with a code -- neither needs any of this."
+    "completely and reopen it, then run 'ytm auth --from-browser' again. Or "
+    "skip the browser: plain 'ytm auth' signs in with Google and needs none of this."
 )
 
 #: TERM_PROGRAM values worth showing by their proper name
@@ -206,29 +205,6 @@ class AuthExpired(AuthError):
     """Stored credentials are present but no longer accepted by YouTube Music."""
 
 
-def setup(path=AUTH_PATH):
-    """Run the interactive browser-header setup and store credentials at path.
-
-    ytmusicapi 1.12.1's OAuth path needs a user-provisioned Google Cloud
-    client id and secret, so browser headers are the only credentials a human
-    can supply interactively. They are also the cookies stream resolution needs.
-    """
-    path.parent.mkdir(parents=True, exist_ok=True)
-    print("Copy the request headers of an authenticated POST request from")
-    print("https://music.youtube.com (devtools > Network > filter '/browse' >")
-    print("right click the browse request > Copy > Copy request headers).")
-    try:
-        headers = ytmusicapi.setup()
-    except YTMusicError as exc:
-        raise AuthError(str(exc)) from exc
-    # os.open with mode 0600 so the file is never briefly world-readable.
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with open(fd, "w", encoding="utf-8") as file:
-        file.write(headers)
-    os.chmod(path, 0o600)
-    return path
-
-
 def _oauth_client_path(path):
     """Where the OAuth app's client_id/client_secret are stored, alongside path.
 
@@ -240,7 +216,7 @@ def _oauth_client_path(path):
 
 
 def _desktop_client_path(path):
-    """Where the Google desktop client used by `ytm auth --oauth --client-file` is remembered."""
+    """Where the Google desktop client used by `ytm auth --client-file` is remembered."""
     return path.parent / "oauth_desktop_client.json"
 
 
@@ -337,7 +313,7 @@ def oauth_setup(
         if time.time() > deadline:
             raise AuthError(
                 "OAuth device code expired before authorisation completed; "
-                "run 'ytm auth --oauth' again."
+                "run 'ytm auth' again."
             )
 
     token = {
@@ -385,7 +361,7 @@ def desktop_oauth_setup(client_file, path=AUTH_PATH):
         )
     except Exception as exc:
         # OAuth exceptions can include the callback URL or token response.
-        raise AuthError("Google sign-in failed or timed out. Run 'ytm auth --oauth' again.") from exc
+        raise AuthError("Google sign-in failed or timed out. Run 'ytm auth' again.") from exc
     raw = flow.oauth2session.token
     if not raw.get("refresh_token") or not raw.get("access_token"):
         raise AuthError("Google did not return a refreshable token; retry and approve YouTube access.")
@@ -610,9 +586,9 @@ def _windows_chromium_hint(reasons):
     return (
         " Chrome, Edge, Brave, Vivaldi and Opera on Windows protect their cookies "
         "with App-Bound Encryption (Chrome 127 and newer), which other programs "
-        "cannot read. Options: log in at https://music.youtube.com in Firefox and "
-        "run 'ytm auth --from-browser firefox'; or 'ytm auth --manual' and paste "
-        "the request headers from the browser's DevTools; or 'ytm auth --oauth'."
+        "cannot read. Options: plain 'ytm auth' signs in with Google without any "
+        "cookies; or log in at https://music.youtube.com in Firefox and run "
+        "'ytm auth --from-browser firefox'."
     )
 
 
