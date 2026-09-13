@@ -83,15 +83,60 @@ def test_install_kind_editable_checkout_is_detected(monkeypatch):
 
 def test_upgrade_commands_per_installer():
     assert update.upgrade_commands("pipx") == [
-        ["pipx", "upgrade", "ytm"], ["pipx", "runpip", "ytm", "install", "-U", "yt-dlp"]]
-    assert update.upgrade_commands("pipx", yt_dlp=False) == [["pipx", "upgrade", "ytm"]]
-    assert update.upgrade_commands("uv") == [["uv", "tool", "upgrade", "ytm"]]
-    assert update.upgrade_commands("pip", has_pip=True) == [[sys.executable, "-m", "pip", "install", "-U", "ytm", "yt-dlp"]]
+        ["pipx", "upgrade", "--pip-args=--no-cache-dir", "ytm"],
+        ["pipx", "runpip", "ytm", "install", "-U", "--no-cache-dir", "yt-dlp"]]
+    assert update.upgrade_commands("pipx", yt_dlp=False) == [["pipx", "upgrade", "--pip-args=--no-cache-dir", "ytm"]]
+    assert update.upgrade_commands("uv") == [["uv", "tool", "upgrade", "--refresh", "ytm"]]
+    assert update.upgrade_commands("pip", has_pip=True) == [
+        [sys.executable, "-m", "pip", "install", "-U", "--no-cache-dir", "ytm", "yt-dlp"]]
+    # the version PyPI reported is pinned, so a stale index fails loudly instead of doing nothing
+    assert update.upgrade_commands("pip", has_pip=True, target="0.9.0") == [
+        [sys.executable, "-m", "pip", "install", "-U", "--no-cache-dir", "ytm==0.9.0", "yt-dlp"]]
     # a `uv venv` has no pip module: go through uv aimed at this interpreter
     assert update.upgrade_commands("pip", has_pip=False, has_uv=True) == [
-        ["uv", "pip", "install", "-U", "--python", sys.executable, "ytm", "yt-dlp"]]
+        ["uv", "pip", "install", "-U", "--refresh", "--python", sys.executable, "ytm", "yt-dlp"]]
     assert update.upgrade_commands("pip", has_pip=False, has_uv=False) == []
     assert update.upgrade_commands("editable") == []
+
+
+def test_upgrade_is_only_done_when_the_new_version_is_really_installed():
+    ok_run = lambda cmd, capture_output, text: subprocess.CompletedProcess(cmd, 0, stdout="Requirement already satisfied\n", stderr="")
+    ok, text = update.upgrade(kind="pipx", run=ok_run, target="0.9.0", verify=lambda: "0.8.0")
+    assert not ok and "0.8.0 is still installed" in text and "0.9.0" in text
+    ok, _ = update.upgrade(kind="pipx", run=ok_run, target="0.9.0", verify=lambda: "0.9.0")
+    assert ok
+    ok, _ = update.upgrade(kind="pipx", run=ok_run, target="0.9.0", verify=lambda: "0.9.1")
+    assert ok  # newer than asked is fine
+    ok, _ = update.upgrade(kind="pipx", run=ok_run, target="0.9.0", verify=lambda: None)
+    assert ok  # could not tell: do not turn a probable success into an error
+    ran = []
+    ok, _ = update.upgrade(kind="pipx", run=ok_run, verify=lambda: ran.append(1))
+    assert ok and not ran  # no target (a --force reinstall): nothing to verify against
+
+
+def test_installed_version_now_asks_a_fresh_interpreter():
+    def run(cmd, capture_output, text, timeout):
+        assert cmd[0] == sys.executable and "metadata.version('ytm')" in cmd[-1]
+        return subprocess.CompletedProcess(cmd, 0, stdout="0.9.0\n", stderr="")
+    assert update.installed_version_now(run=run) == "0.9.0"
+    assert update.installed_version_now(run=lambda *a, **k: (_ for _ in ()).throw(OSError())) is None
+
+
+def test_installed_version_of_an_editable_checkout_reads_pyproject(tmp_path, monkeypatch):
+    (tmp_path / "pyproject.toml").write_text('[project]\nname = "ytm"\nversion = "0.9.5"\n')
+
+    class Dist:
+        def read_text(self, name):
+            return json.dumps({"url": tmp_path.as_uri(), "dir_info": {"editable": True}})
+    monkeypatch.setattr(update.metadata, "distribution", lambda name: Dist())
+    monkeypatch.setattr(update.metadata, "version", lambda name: "0.6.0")  # stale dist-info
+    assert update.installed_version() == "0.9.5"
+
+    class Regular:
+        def read_text(self, name):
+            return None
+    monkeypatch.setattr(update.metadata, "distribution", lambda name: Regular())
+    assert update.installed_version() == "0.6.0"
 
 
 def test_upgrade_without_pip_or_uv_explains_itself(monkeypatch):
@@ -134,7 +179,7 @@ def test_cli_update_upgrades_when_newer(monkeypatch, capsys):
     monkeypatch.setattr(update, "check", lambda force=False, **k: {
         "installed": "0.2.0", "latest": "0.3.0", "newer": True, "checked_at": 0, "cached": False})
     monkeypatch.setattr(update, "install_kind", lambda: "pipx")
-    monkeypatch.setattr(update, "upgrade", lambda kind=None, yt_dlp=True, run=None: (True, "done"))
+    monkeypatch.setattr(update, "upgrade", lambda kind=None, yt_dlp=True, run=None, **k: (True, "done"))
     out = io.StringIO()
     assert cli.main(["update"], out=out) == 0
     assert "upgraded via pipx" in out.getvalue()
@@ -145,7 +190,7 @@ def test_cli_update_up_to_date_does_nothing_unless_forced(monkeypatch, capsys):
         "installed": "0.2.0", "latest": "0.2.0", "newer": False, "checked_at": 0, "cached": False})
     called = []
     monkeypatch.setattr(update, "install_kind", lambda: "pip")
-    monkeypatch.setattr(update, "upgrade", lambda kind=None, yt_dlp=True, run=None: (called.append(1), (True, ""))[1])
+    monkeypatch.setattr(update, "upgrade", lambda kind=None, yt_dlp=True, run=None, **k: (called.append(1), (True, ""))[1])
     out = io.StringIO()
     assert cli.main(["update"], out=out) == 0 and not called
     assert "up to date" in out.getvalue()
@@ -156,7 +201,7 @@ def test_cli_update_failure_is_an_error(monkeypatch, capsys):
     monkeypatch.setattr(update, "check", lambda force=False, **k: {
         "installed": "0.2.0", "latest": "0.3.0", "newer": True, "checked_at": 0, "cached": False})
     monkeypatch.setattr(update, "install_kind", lambda: "pip")
-    monkeypatch.setattr(update, "upgrade", lambda kind=None, yt_dlp=True, run=None: (False, "pip exploded"))
+    monkeypatch.setattr(update, "upgrade", lambda kind=None, yt_dlp=True, run=None, **k: (False, "pip exploded"))
     err = io.StringIO()
     assert cli.main(["update"], err=err) == 1
     assert "pip exploded" in err.getvalue()
