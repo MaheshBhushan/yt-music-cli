@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.7.0 — 2026-09-13
+
+- `ytm auth --oauth` can sign in through a browser on the same machine. Pass a Google **Desktop app** OAuth client JSON with `--client-file` (or `YTM_OAUTH_CLIENT_FILE`); ytm runs the PKCE flow against a loopback callback, stores a self-refreshing token, and remembers the client in `~/.config/ytm/oauth_desktop_client.json` so a plain `ytm auth --oauth` re-uses it. The TV/device-code flow is unchanged and is still what `--client-id`/`--client-secret` select; using it forgets a previously remembered desktop client so the two cannot fall out of step.
+- The stored desktop token is reduced to exactly the fields ytmusicapi's `OAuthToken` defines, with integer expiry times and `token_type` filled in. The raw oauthlib token carries extra keys (`id_token`, a float `expires_at`) that ytmusicapi releases before 1.11 reject at every client start.
+- A failed or incomplete Google sign-in, or a token without the YouTube scope, leaves existing credentials in place.
+- New dependency: `google-auth-oauthlib`.
+
 ## 0.6.1 — 2026-09-13
 
 - `ytm auth` on macOS no longer reports an installed browser as missing. macOS withholds one app's data from another until the asking app has Full Disk Access, and a blocked profile directory looks empty to yt-dlp, which reports the cookie database as missing — so `ytm auth` said "chrome: not installed or no profile found" on a Mac with Chrome open and logged in, and told the user to go and log in. It now tells a directory that is shut apart from one that is absent, says which it is per browser, and explains Full Disk Access (naming the terminal it is talking about) along with `--manual` and `--oauth`, which need none of it.

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ytm"
-version = "0.6.1"
+version = "0.7.0"
 description = "YouTube Music in the terminal: a Textual TUI and CLI on top of mpv"
 readme = "README.md"
 license = { file = "LICENSE" }
@@ -27,6 +27,7 @@ classifiers = [
 dependencies = [
     "ytmusicapi",
     "requests",
+    "google-auth-oauthlib>=1.2.2",
     "yt-dlp",
     "bgutil-ytdlp-pot-provider",
     "textual",
