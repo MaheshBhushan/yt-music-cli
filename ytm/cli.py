@@ -16,9 +16,16 @@ from dataclasses import asdict
 import os
 import re
 import shutil
+import subprocess
 import sys
 
-from ytm.player import Player, PlayerError, watch_url
+from ytm.player import (
+    MPV_SITE,
+    Player,
+    PlayerError,
+    mpv_install_command,
+    watch_url,
+)
 
 _VIDEO_ID = re.compile(r"^[A-Za-z0-9_-]{11}$")
 
@@ -400,6 +407,51 @@ def cmd_like(args):
     return {"liked": fmt_track(track)}, f"liked {track.title} — {track.artist}"
 
 
+def cmd_install_mpv(args):
+    """Install mpv with whatever package manager this machine has.
+
+    mpv is a C program and cannot come from PyPI (the `mpv` and `python-mpv`
+    packages there are bindings to libmpv, not the player), so a fresh
+    `pip install ytm` or `uv tool install ytm` leaves this one step to do.
+    The command is printed before it runs, and it runs attached to this
+    terminal so sudo and Homebrew can ask their own questions.
+    """
+    existing = shutil.which("mpv")
+    if existing and not args.force:
+        return {"installed": True, "path": existing, "ran": None}, f"mpv is already installed at {existing}"
+    command = mpv_install_command()
+    if command is None:
+        raise CliError(
+            f"no package manager ytm knows about was found. Install mpv from {MPV_SITE} "
+            "(Homebrew: 'brew install mpv'; Debian/Ubuntu: 'sudo apt install mpv')."
+        )
+    printed = " ".join(command)
+    if not args.yes:
+        print(f"About to run: {printed}")
+        try:
+            answer = input("Continue? [Y/n] ").strip().lower()
+        except EOFError:
+            answer = "n"
+        if answer not in ("", "y", "yes"):
+            return {"installed": False, "ran": None}, "nothing installed"
+    print(f"$ {printed}")
+    try:
+        # inherits this terminal: sudo prompts for a password, brew reports
+        # its own progress, and neither works through a captured pipe
+        code = subprocess.call(command)
+    except OSError as exc:
+        raise CliError(f"could not run {command[0]}: {exc}") from exc
+    if code != 0:
+        raise CliError(f"{printed} failed (exit {code})")
+    path = shutil.which("mpv")
+    if path is None:
+        raise CliError(
+            f"{printed} reported success but mpv is still not on PATH. "
+            "Open a new shell, or check where the package manager put it."
+        )
+    return {"installed": True, "path": path, "ran": command}, f"mpv installed at {path}"
+
+
 def cmd_quit(args):
     try:
         with player(spawn=False) as p:
@@ -524,6 +576,10 @@ def build_parser():
     add("lyrics", cmd_lyrics, "lyrics for the current track")
     add("like", cmd_like, "like the current track")
     add("quit", cmd_quit, "stop mpv entirely")
+
+    p = add("install-mpv", cmd_install_mpv, "install mpv, which pip cannot")
+    p.add_argument("-y", "--yes", action="store_true", help="do not ask before running it")
+    p.add_argument("--force", action="store_true", help="run it even if mpv is already on PATH")
 
     p = add("auth", cmd_auth, "sign in (default: cookies from a logged-in browser)")
     p.add_argument("--from-browser", nargs="?", const="", default=None, metavar="BROWSER")

@@ -14,7 +14,16 @@ import threading
 import pytest
 
 from ytm import player as player_mod
-from ytm.player import Player, PlayerError, default_ipc_path, mpv_args, video_id_of
+from ytm.player import (
+    Player,
+    PlayerError,
+    default_ipc_path,
+    mpv_args,
+    mpv_install_command,
+    mpv_missing_message,
+    spawn_mpv,
+    video_id_of,
+)
 
 
 class FakeMpv:
@@ -431,3 +440,66 @@ def test_enqueue_next_moves_an_already_queued_track_up(mpv):
     assert p.status()["index"] == 0 and p.playlist()[0]["current"]
     assert p.enqueue_next("https://music.youtube.com/watch?v=" + "B" * 11) is False  # it is playing
     assert not [c for c in mpv.commands if c[0] == "loadfile" and "%" not in str(c[4]) and c[2] == "insert-next"]
+
+
+# -- mpv is not a Python package ----------------------------------------------
+
+
+def _which(*present):
+    found = set(present)
+    return lambda tool: f"/usr/bin/{tool}" if tool in found else None
+
+
+def test_install_command_picks_the_package_manager_that_is_here():
+    assert mpv_install_command(platform="darwin", which=_which("brew")) == ["brew", "install", "mpv"]
+    assert mpv_install_command(platform="linux", which=_which("dnf", "sudo")) == [
+        "sudo", "dnf", "install", "-y", "mpv",
+    ]
+    # the first one on PATH wins, in table order
+    assert mpv_install_command(platform="linux", which=_which("apt-get", "pacman", "sudo"))[1] == "apt-get"
+    assert mpv_install_command(platform="win32", which=_which("scoop")) == ["scoop", "install", "mpv"]
+
+
+def test_homebrew_is_never_run_under_sudo():
+    """brew refuses to run as root and says so at length."""
+    command = mpv_install_command(platform="darwin", which=_which("brew", "sudo"), root=False)
+    assert command == ["brew", "install", "mpv"]
+
+
+def test_root_and_sudoless_systems_skip_the_sudo_prefix():
+    assert mpv_install_command(platform="linux", which=_which("apk", "sudo"), root=True) == [
+        "apk", "add", "mpv",
+    ]
+    assert mpv_install_command(platform="linux", which=_which("apk"), root=False) == ["apk", "add", "mpv"]
+
+
+def test_nothing_known_is_not_a_guess():
+    assert mpv_install_command(platform="linux", which=_which()) is None
+    assert mpv_install_command(platform="haiku", which=_which("brew")) is None
+
+
+def test_the_missing_mpv_message_says_what_to_run():
+    message = mpv_missing_message(platform="darwin", which=_which("brew"))
+    assert "ytm install-mpv" in message and "brew install mpv" in message
+    # and where there is nothing to run, it does not pretend there is
+    bare = mpv_missing_message(platform="linux", which=_which())
+    assert "install-mpv" not in bare and "https://mpv.io" in bare
+
+
+def test_spawning_a_missing_mpv_explains_instead_of_reporting_errno(monkeypatch):
+    """The bare OSError ("[Errno 2] No such file or directory: 'mpv'") is the
+    first thing a fresh `uv tool install ytm` shows, and it does not say that
+    mpv is a separate program, let alone how to get one."""
+    monkeypatch.setattr(player_mod.shutil, "which", lambda tool: None)
+    with pytest.raises(PlayerError) as excinfo:
+        spawn_mpv(["mpv", "--idle=yes"])
+    assert "[Errno 2]" not in str(excinfo.value)
+    assert "separate program" in str(excinfo.value)
+
+
+def test_an_mpv_that_is_present_is_still_spawned(monkeypatch):
+    spawned = []
+    monkeypatch.setattr(player_mod.shutil, "which", lambda tool: "/usr/bin/mpv")
+    monkeypatch.setattr(player_mod.subprocess, "Popen", lambda args, **kw: spawned.append(args))
+    spawn_mpv(["mpv", "--idle=yes"])
+    assert spawned == [["mpv", "--idle=yes"]]
