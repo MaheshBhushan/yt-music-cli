@@ -5,8 +5,13 @@ Owns nothing YouTube Music already owns. Every function takes an optional
 Playlist records the CLI needs and nothing more.
 """
 import functools
+import json
+import os
 import re
+import threading
+import time
 from dataclasses import asdict, dataclass
+from pathlib import Path
 
 from ytmusicapi.exceptions import YTMusicError
 
@@ -20,6 +25,144 @@ from ytm.auth import (
     client,
     is_expiry,
 )
+
+#: One ytmusicapi client is kept per process and reused by every call below.
+#: Building one is not free: it opens a fresh TLS connection to YouTube and,
+#: on its first request, downloads the music.youtube.com home page just to
+#: read a visitor id out of it. A client per call meant every search, every
+#: playlist listing and every per-playlist track count paid both again --
+#: listing a library of ten playlists made a dozen handshakes and a dozen
+#: home-page downloads for twelve API calls.
+_CLIENT_LOCK = threading.RLock()
+_CLIENT = {"key": None, "client": None, "visitor_saved": False}
+
+#: Where the visitor id YouTube handed out is kept, so a one-shot CLI run
+#: does not have to fetch the home page to learn it again.
+VISITOR_PATH = Path(
+    os.environ.get("XDG_STATE_HOME", os.path.expanduser("~/.local/state"))
+) / "ytm" / "visitor.json"
+
+#: how long a stored visitor id is reused before it is fetched again
+VISITOR_TTL = 24 * 60 * 60
+
+_VISITOR_HEADER = "X-Goog-Visitor-Id"
+
+
+def _auth_stamp(path):
+    """(path, mtime, size) of the auth file: the cached client's identity.
+
+    Re-running ``ytm auth`` (in this process or another) rewrites the file,
+    which changes the stamp and retires the client built from the old one.
+    """
+    try:
+        stat = os.stat(path)
+    except OSError:
+        return (str(path), None)
+    return (str(path), stat.st_mtime_ns, stat.st_size)
+
+
+def _read_visitor_id(path=None, now=None):
+    """The stored visitor id if it is still fresh, else None."""
+    path = Path(path or VISITOR_PATH)
+    now = time.time() if now is None else now
+    try:
+        with open(path, encoding="utf-8") as file:
+            stored = json.load(file)
+    except (OSError, ValueError):
+        return None
+    if not isinstance(stored, dict):
+        return None
+    written = stored.get("written_at")
+    if not isinstance(written, (int, float)) or now - written > VISITOR_TTL:
+        return None
+    visitor_id = stored.get("visitor_id")
+    return visitor_id if isinstance(visitor_id, str) and visitor_id else None
+
+
+def _write_visitor_id(visitor_id, path=None, now=None):
+    """Remember `visitor_id`; a failure to write is never worth an error."""
+    path = Path(path or VISITOR_PATH)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_name(path.name + f".tmp{os.getpid()}")
+        with open(tmp, "w", encoding="utf-8") as file:
+            json.dump({"visitor_id": visitor_id, "written_at": time.time() if now is None else now}, file)
+        os.replace(tmp, path)
+    except OSError:
+        pass
+
+
+def _live_visitor_id(yt):
+    """The visitor id the client has already worked out, or None.
+
+    ytmusicapi computes its base headers lazily and caches them on the
+    instance, so reading them out of the instance dict is free -- while
+    `yt.base_headers` would go and fetch the home page if the first request
+    had not happened yet, which is the very request being avoided here.
+    """
+    headers = getattr(yt, "__dict__", {}).get("base_headers")
+    try:
+        return headers.get(_VISITOR_HEADER) if headers is not None else None
+    except AttributeError:
+        return None
+
+
+def _remember_visitor_id():
+    """Persist the visitor id the live client learned, if this run has not.
+
+    Written once per process: the id does not change under a live client.
+    """
+    with _CLIENT_LOCK:
+        if _CLIENT["visitor_saved"] or _CLIENT["client"] is None:
+            return
+        visitor_id = _live_visitor_id(_CLIENT["client"])
+        if not visitor_id:
+            return
+        _CLIENT["visitor_saved"] = True
+    if visitor_id != _read_visitor_id():
+        _write_visitor_id(visitor_id)
+
+
+def reset_client():
+    """Drop the cached client; the next call builds a fresh one."""
+    with _CLIENT_LOCK:
+        _CLIENT.update(key=None, client=None, visitor_saved=False)
+
+
+def shared_client():
+    """The process-wide authenticated client, built on first use.
+
+    Errors are never cached: a missing or expired auth file raises here
+    exactly as a per-call client did, and the next call tries again.
+    """
+    path = auth_mod.AUTH_PATH
+    key = _auth_stamp(path)
+    with _CLIENT_LOCK:
+        if _CLIENT["key"] == key and _CLIENT["client"] is not None:
+            return _CLIENT["client"]
+        headers = _seeded_headers(path)
+        built = client(path) if headers is None else auth_mod.client_from_headers(headers, path)
+        _CLIENT.update(key=key, client=built, visitor_saved=False)
+        return built
+
+
+def _seeded_headers(path):
+    """Stored browser headers with a known-good visitor id added, or None.
+
+    Only browser auth can be seeded this way: ytmusicapi builds an OAuth
+    client's headers itself, so that path keeps fetching the home page once
+    per process.
+    """
+    visitor_id = _read_visitor_id()
+    if not visitor_id:
+        return None
+    try:
+        headers = auth_mod.browser_headers(path)
+    except AuthError:
+        return None
+    if headers is None or _VISITOR_HEADER in headers:
+        return None
+    return {**headers, _VISITOR_HEADER: visitor_id}
 
 
 def _refreshing(fn):
@@ -38,7 +181,7 @@ def _refreshing(fn):
         if yt is not None:
             return fn(*args, yt=yt, **kwargs)
         try:
-            return fn(*args, **kwargs)
+            result = fn(*args, **kwargs)
         except AuthExpired as stale:
             source = auth_mod.browser_source(auth_mod.AUTH_PATH)
             if source is None:
@@ -49,7 +192,10 @@ def _refreshing(fn):
                 raise AuthExpired(
                     str(stale) + _REFRESH_FAILED_HINT.format(browser=source["browser"], reason=exc)
                 ) from exc
-            return fn(*args, **kwargs)
+            reset_client()  # the refreshed cookies need a client of their own
+            result = fn(*args, **kwargs)
+        _remember_visitor_id()
+        return result
 
     return wrapper
 
@@ -177,7 +323,7 @@ def search(query, limit=20, yt=None):
     Uses filter="songs" so results are Art Tracks (better audio than the
     "videos" filter), and never includes personal uploads.
     """
-    yt = yt if yt is not None else client()
+    yt = yt if yt is not None else shared_client()
     try:
         results = yt.search(query, filter="songs", limit=limit)
     except YTMusicError as exc:
@@ -196,7 +342,7 @@ def get_lyrics(video_id, yt=None):
     available. Two calls under the hood: the watch playlist gives the lyrics
     browseId, then that id is used to fetch the actual text.
     """
-    yt = yt if yt is not None else client()
+    yt = yt if yt is not None else shared_client()
     try:
         watch = yt.get_watch_playlist(videoId=video_id)
         browse_id = (watch or {}).get("lyrics")
@@ -229,7 +375,7 @@ def mixes(yt=None):
     they are never cached: read fresh every call, deduped by id and kept in
     feed order. Track count is unknown until the mix itself is fetched.
     """
-    yt = yt if yt is not None else client()
+    yt = yt if yt is not None else shared_client()
     try:
         shelves = yt.get_home(limit=40)
     except YTMusicError as exc:
@@ -267,7 +413,7 @@ def _mixes_from_home(shelves):
 @_refreshing
 def library_playlists(limit=25, yt=None):
     """Return the user's remote playlists as Playlist objects."""
-    yt = yt if yt is not None else client()
+    yt = yt if yt is not None else shared_client()
     try:
         results = yt.get_library_playlists(limit=limit)
     except YTMusicError as exc:
@@ -322,7 +468,7 @@ def get_playlist(playlist_id, limit=100, yt=None):
     'trackCount' or 'title', hence the same defensive normalisation used
     elsewhere in this module.
     """
-    yt = yt if yt is not None else client()
+    yt = yt if yt is not None else shared_client()
     try:
         result = yt.get_playlist(playlist_id, limit=limit)
     except YTMusicError as exc:
@@ -349,7 +495,7 @@ def playlist_count(playlist_id, yt=None):
     Music, Episodes for Later), so this asks for the playlist itself with a
     one-track page and reads ``trackCount``. Returns None when unknown.
     """
-    yt = yt if yt is not None else client()
+    yt = yt if yt is not None else shared_client()
     try:
         result = yt.get_playlist(playlist_id, limit=1) or {}
     except YTMusicError as exc:
@@ -366,7 +512,7 @@ def playlist_count(playlist_id, yt=None):
 @_refreshing
 def create_playlist(title, description="", privacy="PRIVATE", yt=None):
     """Create a remote playlist and return its playlist id."""
-    yt = yt if yt is not None else client()
+    yt = yt if yt is not None else shared_client()
     try:
         result = yt.create_playlist(title, description or "", privacy_status=privacy)
     except YTMusicError as exc:
@@ -381,7 +527,7 @@ def create_playlist(title, description="", privacy="PRIVATE", yt=None):
 @_refreshing
 def add_playlist_items(playlist_id, video_ids, yt=None):
     """Add tracks (by video id) to a remote playlist."""
-    yt = yt if yt is not None else client()
+    yt = yt if yt is not None else shared_client()
     try:
         return yt.add_playlist_items(playlist_id, list(video_ids))
     except YTMusicError as exc:
@@ -396,7 +542,7 @@ def remove_playlist_items(playlist_id, video_ids, yt=None):
     each track's setVideoId), so the current contents are fetched first and
     filtered down to the requested video ids.
     """
-    yt = yt if yt is not None else client()
+    yt = yt if yt is not None else shared_client()
     try:
         current = yt.get_playlist(playlist_id, limit=None)
         items = [
@@ -414,7 +560,7 @@ def remove_playlist_items(playlist_id, video_ids, yt=None):
 @_refreshing
 def edit_playlist(playlist_id, title=None, description=None, privacy=None, yt=None):
     """Edit a remote playlist's metadata."""
-    yt = yt if yt is not None else client()
+    yt = yt if yt is not None else shared_client()
     kwargs = {}
     if title is not None:
         kwargs["title"] = title
@@ -431,7 +577,7 @@ def edit_playlist(playlist_id, title=None, description=None, privacy=None, yt=No
 @_refreshing
 def delete_playlist(playlist_id, yt=None):
     """Delete a remote playlist. Irreversible -- callers must confirm first."""
-    yt = yt if yt is not None else client()
+    yt = yt if yt is not None else shared_client()
     try:
         return yt.delete_playlist(playlist_id)
     except YTMusicError as exc:
@@ -449,7 +595,7 @@ def watch_url(video_id):
 @_refreshing
 def song(video_id, yt=None):
     """Metadata for one track by id, as a Track; None if YouTube has nothing."""
-    yt = yt if yt is not None else client()
+    yt = yt if yt is not None else shared_client()
     try:
         result = yt.get_song(video_id)
     except YTMusicError as exc:
@@ -472,7 +618,7 @@ def song(video_id, yt=None):
 @_refreshing
 def radio(video_id, limit=25, yt=None):
     """Tracks YouTube Music would play after `video_id`, seed excluded."""
-    yt = yt if yt is not None else client()
+    yt = yt if yt is not None else shared_client()
     try:
         watch = yt.get_watch_playlist(videoId=video_id, radio=True, limit=limit)
     except YTMusicError as exc:
@@ -487,7 +633,7 @@ def radio(video_id, limit=25, yt=None):
 @_refreshing
 def like(video_id, yt=None):
     """Mark `video_id` as liked in the user's account."""
-    yt = yt if yt is not None else client()
+    yt = yt if yt is not None else shared_client()
     try:
         return yt.rate_song(video_id, "LIKE")
     except YTMusicError as exc:

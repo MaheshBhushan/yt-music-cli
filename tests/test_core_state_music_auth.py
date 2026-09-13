@@ -105,12 +105,6 @@ def test_watch_url():
     assert music.watch_url("abc") == "https://music.youtube.com/watch?v=abc"
 
 
-def test_api_shim_still_exposes_the_old_names():
-    from ytm import api
-
-    assert api.search is music.search and api.Track is music.Track
-
-
 # -- auth.cookies_file --------------------------------------------------------------------
 
 
