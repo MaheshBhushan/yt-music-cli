@@ -611,8 +611,6 @@ def build_parser():
         "--authuser", default=None, metavar="N",
         help="Google account index when the browser is signed in to several (default: auth.x-goog-authuser in config.toml, 0)",
     )
-    # OAuth is the default now; the flag stays so older instructions keep working
-    p.add_argument("--oauth", action="store_true", help=argparse.SUPPRESS)
     p.add_argument("--client-file", default=None, help="Google 'Desktop app' OAuth client JSON; sign in via a browser on this machine")
     p.add_argument("--client-id", default=None)
     p.add_argument("--client-secret", default=None)
