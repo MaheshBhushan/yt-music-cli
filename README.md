@@ -105,6 +105,9 @@ If the browser is signed in to more than one Google account, pass `ytm auth --au
 > [!WARNING]
 > **Windows:** Chrome, Edge, Brave, Vivaldi and Opera encrypt their cookies with App-Bound Encryption (Chrome 127 and newer), which no other program can read, so `ytm auth` cannot import from them. Either log in with **Firefox** and run `ytm auth --from-browser firefox`, or use `--manual` (works with Chrome) or `--oauth`.
 
+> [!WARNING]
+> **macOS:** a program may not read another app's data until it has Full Disk Access, so `ytm auth` sees nothing in any browser until your terminal has it: **System Settings → Privacy & Security → Full Disk Access**, switch your terminal on (add it with **+** if it is not listed), then quit it completely and reopen it. `ytm auth` says so when this is what stopped it. `--manual` and `--oauth` need none of this.
+
 ### Manual headers
 
 Works with any browser on any OS, including Chrome on Windows.
