@@ -20,6 +20,7 @@ reachable through :meth:`Player.command`, :meth:`Player.get` and
 import json
 import os
 import re
+import shutil
 import socket
 import subprocess
 import sys
@@ -106,6 +107,78 @@ def mpv_args(
     return args
 
 
+#: Package managers that ship mpv, in the order to try them, keyed by
+#: platform: (tool on PATH, command, whether it needs root). mpv is a C
+#: program, not a Python one -- the `mpv` and `python-mpv` packages on PyPI
+#: are bindings to libmpv and carry no binary -- so `pip install ytm` and
+#: `uv tool install ytm` cannot bring it along and this is the next best
+#: thing: know the one command that works on this machine.
+MPV_INSTALLERS = {
+    "darwin": [("brew", ["brew", "install", "mpv"], False)],
+    "linux": [
+        ("apt-get", ["apt-get", "install", "-y", "mpv"], True),
+        ("dnf", ["dnf", "install", "-y", "mpv"], True),
+        ("pacman", ["pacman", "-S", "--noconfirm", "mpv"], True),
+        ("zypper", ["zypper", "install", "-y", "mpv"], True),
+        ("apk", ["apk", "add", "mpv"], True),
+        ("xbps-install", ["xbps-install", "-y", "mpv"], True),
+    ],
+    "freebsd": [("pkg", ["pkg", "install", "-y", "mpv"], True)],
+    # shinchiro's is the mpv in winget; `mpv.net` there is a different program
+    "win32": [
+        ("scoop", ["scoop", "install", "mpv"], False),
+        ("winget", ["winget", "install", "-e", "--id", "shinchiro.mpv"], False),
+        ("choco", ["choco", "install", "-y", "mpv"], False),
+    ],
+}
+
+MPV_SITE = "https://mpv.io"
+
+
+def _platform_key(platform=None):
+    platform = platform or sys.platform
+    for prefix, key in (("win", "win32"), ("linux", "linux"), ("freebsd", "freebsd")):
+        if platform.startswith(prefix):
+            return key
+    return platform
+
+
+def mpv_install_command(platform=None, which=shutil.which, root=None):
+    """The command that installs mpv on this machine, or None if none fits.
+
+    The first package manager actually on PATH wins. `sudo` is prefixed only
+    where the manager needs root, this is not already root, and sudo exists
+    -- never for Homebrew, which refuses to run under it.
+    """
+    if root is None:
+        geteuid = getattr(os, "geteuid", None)
+        root = geteuid() == 0 if geteuid is not None else False
+    for tool, command, needs_root in MPV_INSTALLERS.get(_platform_key(platform), []):
+        if which(tool) is None:
+            continue
+        if needs_root and not root and which("sudo") is not None:
+            return ["sudo", *command]
+        return list(command)
+    return None
+
+
+def mpv_missing_message(mpv_bin="mpv", platform=None, which=shutil.which, root=None):
+    """Why ytm cannot start, and the one thing to do about it.
+
+    The bare OSError ("[Errno 2] No such file or directory: 'mpv'") does not
+    say that mpv is a separate program, let alone how to get it, and it is
+    the first thing a fresh `uv tool install ytm` shows.
+    """
+    lead = (
+        f"{mpv_bin} is not installed. mpv is a separate program -- it is what "
+        f"actually plays the audio -- and pip cannot install it"
+    )
+    command = mpv_install_command(platform=platform, which=which, root=root)
+    if command is None:
+        return f"{lead}. Install it from {MPV_SITE}, then run ytm again."
+    return f"{lead}. Run 'ytm install-mpv' (it runs: {' '.join(command)}), or see {MPV_SITE}."
+
+
 def spawn_mpv(args):
     """Start mpv detached from this process so it outlives the CLI command."""
     kwargs = {
@@ -119,6 +192,8 @@ def spawn_mpv(args):
         )
     else:
         kwargs["start_new_session"] = True
+    if shutil.which(args[0]) is None:
+        raise PlayerError(mpv_missing_message(args[0]))
     try:
         subprocess.Popen(args, **kwargs)
     except OSError as exc:

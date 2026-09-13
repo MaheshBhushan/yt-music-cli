@@ -179,6 +179,54 @@ def test_a_network_failure_is_reported_not_traced(fake, monkeypatch):
     assert "could not reach YouTube Music" in err
     assert "Traceback" not in err
 
+# -- installing mpv -----------------------------------------------------------
+
+
+def test_install_mpv_runs_the_command_for_this_machine(monkeypatch):
+    ran = []
+    # mpv is on PATH only once the package manager has actually run
+    monkeypatch.setattr(cli.shutil, "which", lambda tool: "/opt/homebrew/bin/mpv" if ran else None)
+    monkeypatch.setattr(cli, "mpv_install_command", lambda: ["brew", "install", "mpv"])
+    monkeypatch.setattr(cli.subprocess, "call", lambda command: (ran.append(command), 0)[1])
+    code, out, _ = run("install-mpv", "--yes")
+    assert ran == [["brew", "install", "mpv"]]
+    assert code == 0
+    assert "mpv installed at /opt/homebrew/bin/mpv" in out
+
+
+def test_install_mpv_does_nothing_when_mpv_is_already_there(monkeypatch):
+    monkeypatch.setattr(cli.shutil, "which", lambda tool: "/usr/bin/mpv")
+    monkeypatch.setattr(cli.subprocess, "call", lambda command: pytest.fail("must not install"))
+    code, out, _ = run("install-mpv", "--yes")
+    assert code == 0 and "already installed" in out
+
+
+def test_install_mpv_reports_a_failing_package_manager(monkeypatch):
+    monkeypatch.setattr(cli.shutil, "which", lambda tool: None)
+    monkeypatch.setattr(cli, "mpv_install_command", lambda: ["sudo", "apt-get", "install", "-y", "mpv"])
+    monkeypatch.setattr(cli.subprocess, "call", lambda command: 100)
+    code, _, err = run("install-mpv", "--yes")
+    assert code == 1
+    assert "sudo apt-get install -y mpv failed (exit 100)" in err
+
+
+def test_install_mpv_without_a_package_manager_says_where_to_get_it(monkeypatch):
+    monkeypatch.setattr(cli.shutil, "which", lambda tool: None)
+    monkeypatch.setattr(cli, "mpv_install_command", lambda: None)
+    code, _, err = run("install-mpv", "--yes")
+    assert code == 1
+    assert "https://mpv.io" in err
+
+
+def test_a_package_manager_that_lies_about_success_is_caught(monkeypatch):
+    """`apt install` exiting 0 with nothing on PATH is worse than a failure:
+    the next run would report the same missing mpv with no explanation."""
+    monkeypatch.setattr(cli.shutil, "which", lambda tool: None)
+    monkeypatch.setattr(cli, "mpv_install_command", lambda: ["brew", "install", "mpv"])
+    monkeypatch.setattr(cli.subprocess, "call", lambda command: 0)
+    code, _, err = run("install-mpv", "--yes")
+    assert code == 1 and "still not on PATH" in err
+
 
 # -- search and play ----------------------------------------------------------
 

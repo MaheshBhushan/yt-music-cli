@@ -15,6 +15,8 @@
 - The session file is written through a temp file scoped to the writing process. The CLI, the TUI and the `ytm radio` that mpv's autoplay script spawns all write it, and they shared one temp name, so one could rename another's half-written copy into place.
 - Removed `ytm/api.py`, a compatibility shim for the daemon and the old Textual TUI, both of which are gone. Import from `ytm.music` instead.
 - A video id is read only from the real `v=` parameter of a URL, not from the tail of another parameter that happens to end in `v=`.
+- `ytm install-mpv` installs mpv with whatever package manager the machine has (Homebrew, apt, dnf, pacman, zypper, apk, xbps, pkg, scoop, winget, Chocolatey), printing the command and asking before it runs it. mpv is a C program and cannot come from PyPI — the `mpv` and `python-mpv` packages there are bindings to libmpv, not the player — so `uv tool install ytm` leaves this one step, and a fresh install used to meet `error: could not start mpv (mpv): [Errno 2] No such file or directory: 'mpv'` with no hint that mpv is a separate program or how to get one. That error now says so, and names the exact command for the machine it is on.
+
 
 ## 0.5.15 — 2026-09-07
 
