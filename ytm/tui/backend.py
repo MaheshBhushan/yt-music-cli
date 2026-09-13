@@ -28,6 +28,15 @@ EPISODES_ID = "SE"
 #: propagation takes a few seconds, well under this)
 PENDING_ADD_TTL = 120.0
 
+#: how long a search result set is reused for the same query. Typing, pausing
+#: and typing on runs several searches, and backspacing runs the earlier ones
+#: again; the catalogue does not change between two keystrokes.
+SEARCH_TTL = 300.0
+
+#: how many queries and how many tracklists of lyrics to keep
+SEARCH_CACHE_SIZE = 32
+LYRICS_CACHE_SIZE = 64
+
 
 class BackendError(Exception):
     """A request the core could not carry out; shown as a banner by the TUI."""
@@ -49,6 +58,22 @@ def _from_args(args):
 
 def _label(track):
     return f"{track.title} / {track.artist}" if track.artist else track.title
+
+
+def _resolve(entry, known):
+    """A Track for one mpv playlist entry, from `known` or from mpv alone."""
+    track = known.get(entry["video_id"]) if entry["video_id"] else None
+    if track is not None:
+        return track
+    return Track(entry["video_id"] or "", entry["title"] or entry["url"], "", "", "", 0)
+
+
+def _remember_in(cache, key, value, limit):
+    """Store `value` in `cache`, dropping the oldest entry past `limit`."""
+    cache.pop(key, None)  # re-insert at the end: most recent last
+    cache[key] = value
+    while len(cache) > limit:
+        cache.pop(next(iter(cache)))
 
 
 def _playlist_dict(playlist, kind=None):
@@ -79,6 +104,13 @@ class Backend:
         # An add is acknowledged at once but takes a few seconds to appear,
         # so a fetch straight after it would leave the new song out.
         self._pending_adds = {}
+        # {(query, limit): (monotonic time, [track dicts])}; see SEARCH_TTL
+        self._searches = {}
+        # {video_id: (lyrics, source)}, so replaying a song is free
+        self._lyrics_cache = {}
+        # remote track counts the library listing does not carry, looked up
+        # once per playlist instead of on every refresh of the pane
+        self._playlist_counts = {}
         self._routes = {
             "status": self._status,
             "search": self._search,
@@ -119,17 +151,19 @@ class Backend:
         # connection serialises its own commands.
         try:
             return handler(args or {})
-        except PlayerError as exc:
+        except (PlayerError, AuthError) as exc:
+            # both already read as sentences, and "AuthExpired: run ytm auth"
+            # on the banner only buries the instruction
             raise BackendError(str(exc)) from exc
-        except Exception as exc:  # auth or network failure
+        except Exception as exc:  # network failure, unexpected response
             raise BackendError(f"{type(exc).__name__}: {exc}") from exc
 
     def _current(self):
-        for entry in self._player.playlist():
-            if entry["current"]:
-                known = state.track_for(entry["video_id"]) if entry["video_id"] else None
-                return known or Track(entry["video_id"] or "", entry["title"] or entry["url"], "", "", "", 0)
-        return None
+        entries = self._player.playlist()
+        current = next((entry for entry in entries if entry["current"]), None)
+        if current is None:
+            return None
+        return _resolve(current, state.tracks_for([current["video_id"]]))
 
     def _status(self, args):
         s = self._player.status()
@@ -144,9 +178,18 @@ class Backend:
         }
 
     def _search(self, args):
-        tracks = music.search(args.get("query") or "", limit=int(args.get("limit") or 20))
+        query = args.get("query") or ""
+        limit = int(args.get("limit") or 20)
+        cached = self._searches.get((query, limit))
+        if cached is not None and time.monotonic() - cached[0] < SEARCH_TTL:
+            # still the last search as far as `ytm play 3` is concerned
+            state.remember_search([_from_args(t) for t in cached[1]])
+            return {"tracks": cached[1]}
+        tracks = music.search(query, limit=limit)
         state.remember_search(tracks)
-        return {"tracks": [asdict(t) for t in tracks]}
+        results = [asdict(t) for t in tracks]
+        _remember_in(self._searches, (query, limit), (time.monotonic(), results), SEARCH_CACHE_SIZE)
+        return {"tracks": results}
 
     def _load(self, args, play, up_next=False):
         track = _from_args(args)
@@ -183,15 +226,18 @@ class Backend:
         return {"volume": self._player.volume(None if level is None else float(level))}
 
     def _queue(self):
+        """The queue as the panes want it: mpv's entries, filled in from the
+        metadata ytm remembered when each was queued.
+
+        The remembered metadata is read once for the whole queue. Asking per
+        row re-read (and re-parsed) the state file for every entry, on every
+        queue change -- and loading a playlist changes the queue once per
+        track it holds.
+        """
         entries = self._player.playlist()
-        tracks, index = [], -1
-        for i, entry in enumerate(entries):
-            known = state.track_for(entry["video_id"]) if entry["video_id"] else None
-            tracks.append(asdict(known) if known else asdict(
-                Track(entry["video_id"] or "", entry["title"] or entry["url"], "", "", "", 0)
-            ))
-            if entry["current"]:
-                index = i
+        known = state.tracks_for(entry["video_id"] for entry in entries)
+        tracks = [asdict(_resolve(entry, known)) for entry in entries]
+        index = next((i for i, entry in enumerate(entries) if entry["current"]), -1)
         return {"tracks": tracks, "index": index}
 
     def _queue_clear(self, args):
@@ -219,47 +265,70 @@ class Backend:
         state.remember_tracks([seed] + tracks)
         self._player.stop()
         self._player.play(watch_url(seed.video_id), title=_label(seed))
-        for track in tracks:
-            self._player.enqueue(watch_url(track.video_id), title=_label(track))
+        self._player.enqueue_many(
+            (watch_url(track.video_id), _label(track)) for track in tracks
+        )
         return self._queue()
 
     def _lyrics(self, args):
+        """Lyrics for one track, remembered for the rest of the session.
+
+        Two requests to YouTube every time (the watch playlist for the
+        lyrics id, then the lyrics), and the TUI asks again on every track
+        change -- including when the queue comes back round to a song.
+        """
         video_id = args.get("video_id")
-        lyrics, source = music.get_lyrics(video_id)
+        found = self._lyrics_cache.get(video_id)
+        if found is None:
+            found = music.get_lyrics(video_id)
+            _remember_in(self._lyrics_cache, video_id, found, LYRICS_CACHE_SIZE)
+        lyrics, source = found
         return {"video_id": video_id, "lyrics": lyrics, "source": source}
 
     def _playlist_list(self, args):
         local = playlists_local.list_playlists()
         try:
             return self._playlist_list_remote(local)
-        except AuthError as exc:
-            # signed out: still list the local playlists, and say why the
-            # rest is missing instead of silently showing fewer rows
+        except Exception as exc:
+            # signed out, or YouTube unreachable: still list the local
+            # playlists, and say why the rest is missing instead of
+            # silently showing fewer rows
             return {"playlists": [_playlist_dict(p) for p in local], "error": str(exc)}
 
     def _playlist_list_remote(self, local):
         remote = music.library_playlists()
         for playlist in remote:
-            # the listing has no count for the auto-playlists; ask per playlist
+            # the listing has no count for the auto-playlists; ask per
+            # playlist, once -- the answer is remembered for the session so
+            # a refresh of the pane is one request, not one per playlist
             if not playlist.track_count:
-                try:
-                    count = music.playlist_count(playlist.playlist_id)
-                except Exception:
-                    count = None
-                if count is not None:
-                    playlist.track_count = count
-        if not self._mixes:
+                playlist.track_count = self._count_of(playlist.playlist_id)
+        if self._mixes is None:
+            # [] is an answer (a signed-out home feed has no mixes); asking
+            # again on every listing is not
             self._mixes = music.mixes()
         return {
             "playlists": [_playlist_dict(p) for p in local + remote]
             + [_playlist_dict(m, kind="mix") for m in self._mixes]
         }
 
+    def _count_of(self, playlist_id):
+        """How many tracks a remote playlist holds, asked at most once."""
+        if playlist_id in self._playlist_counts:
+            return self._playlist_counts[playlist_id]
+        try:
+            count = music.playlist_count(playlist_id)
+        except Exception:
+            return None  # not remembered: a failure is worth retrying
+        self._playlist_counts[playlist_id] = count
+        return count
+
     def _mixes_refresh(self, args):
         """Forget the cached mixes and their tracklists; the next listing
         and the next play fetch fresh ones."""
         self._mixes = None
         self._mix_tracks = {}
+        self._playlist_counts = {}
         return self._playlist_list(args)
 
     def _playlist_create(self, args):
@@ -340,8 +409,10 @@ class Backend:
             )
             # the library listing can lag behind an add; hand the UI a fresh
             # count so the row is right without waiting for the next refresh
+            self._playlist_counts.pop(playlist_id, None)
             try:
                 result["track_count"] = music.playlist_count(playlist_id)
+                self._playlist_counts[playlist_id] = result["track_count"]
             except Exception:
                 pass
         return result
@@ -355,8 +426,9 @@ class Backend:
         state.remember_tracks(tracks)
         self._player.stop()
         self._player.play(watch_url(tracks[0].video_id), title=_label(tracks[0]))
-        for track in tracks[1:]:
-            self._player.enqueue(watch_url(track.video_id), title=_label(track))
+        self._player.enqueue_many(
+            (watch_url(track.video_id), _label(track)) for track in tracks[1:]
+        )
         return self._queue()
 
     def _shutdown(self, args):
@@ -388,6 +460,8 @@ class Backend:
         duration = 0
         position = None
         last_emitted = None
+        paused = False
+        volume = None
 
         def emit_position():
             # mpv reports time-pos a dozen times a second; the strip only
@@ -424,8 +498,21 @@ class Backend:
                         position = value
                         emit_position()
                 elif name in ("pause", "volume"):
-                    s = self._player.status()
-                    self._emit("state_changed", {"paused": s["paused"], "volume": s["volume"]})
+                    # the observed value is the answer already; asking mpv
+                    # for a whole status here re-read seven properties and,
+                    # with a system mixer, shelled out to wpctl -- on every
+                    # press of the play/pause key
+                    if name == "pause":
+                        paused = bool(value)
+                    elif self._player.mixer is not None:
+                        # mpv's own volume is pinned to 100 with a mixer, so
+                        # it says nothing about what the desktop is playing at
+                        volume = self._player.volume()
+                    elif value is not None:
+                        volume = value
+                    if volume is None:
+                        volume = self._player.volume()
+                    self._emit("state_changed", {"paused": paused, "volume": volume})
                 elif name in ("playlist-pos", "playlist-count"):
                     queue = self._queue()
                     self._emit("queue_changed", queue)

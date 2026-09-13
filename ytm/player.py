@@ -19,6 +19,7 @@ reachable through :meth:`Player.command`, :meth:`Player.get` and
 
 import json
 import os
+import re
 import shutil
 import socket
 import subprocess
@@ -311,6 +312,49 @@ class Player:
             except (OSError, socket.timeout) as exc:
                 raise PlayerError(f"lost the connection to mpv: {exc}") from exc
 
+    def get_many(self, *names, default=None):
+        """Values for several properties in one round trip.
+
+        mpv answers commands in the order they arrive, so the whole batch is
+        written before the first reply is read; replies are matched by
+        request id exactly as `command` matches its own. A property mpv
+        reports as unavailable yields `default` rather than an error, which
+        is what the individual `get` does too.
+        """
+        with self._io_lock:
+            if self._file is None:
+                raise PlayerError("player connection is closed")
+            wanted = {}
+            try:
+                for name in names:
+                    self._request_id += 1
+                    wanted[self._request_id] = name
+                    request = {
+                        "command": ["get_property", name],
+                        "request_id": self._request_id,
+                    }
+                    self._file.write((json.dumps(request) + "\n").encode("utf-8"))
+                values = {}
+                while wanted:
+                    line = self._file.readline()
+                    if not line:
+                        raise PlayerError("mpv closed the connection")
+                    try:
+                        message = json.loads(line)
+                    except ValueError:
+                        continue
+                    name = wanted.pop(message.get("request_id"), None)
+                    if name is None:
+                        continue
+                    if message.get("error") != "success":
+                        values[name] = default
+                        continue
+                    value = message.get("data")
+                    values[name] = default if value is None else value
+                return values
+            except (OSError, socket.timeout) as exc:
+                raise PlayerError(f"lost the connection to mpv: {exc}") from exc
+
     def observe(self, *names):
         """Yield ``(name, value)`` for every change to the given properties.
 
@@ -389,6 +433,28 @@ class Player:
             return False
         self._loadfile(url, "append", title)
         return True
+
+    def enqueue_many(self, items):
+        """Append several ``(url, title)`` pairs, skipping what is queued.
+
+        The playlist is read once for the whole batch. Appending one by one
+        re-read it per track, so queueing a radio station or a playlist cost
+        a round trip per entry on a list that grew with every one of them.
+        Returns the number of entries actually appended.
+        """
+        items = list(items)
+        if not items:
+            return 0
+        queued = {entry["video_id"] or entry["url"] for entry in self.playlist()}
+        added = 0
+        for url, title in items:
+            wanted = video_id_of(url) or url
+            if wanted in queued:
+                continue
+            queued.add(wanted)
+            self._loadfile(url, "append", title)
+            added += 1
+        return added
 
     def enqueue_next(self, url, title=None):
         """Put `url` right after the current entry without interrupting.
@@ -514,21 +580,42 @@ class Player:
     # -- state ---------------------------------------------------------------
 
     def status(self):
-        """A snapshot of what mpv is doing, shaped for `ytm status`."""
-        index = self.get("playlist-pos", -1)
-        if index is None:
-            index = -1
-        idle = bool(self.get("idle-active", False)) or index < 0
+        """A snapshot of what mpv is doing, shaped for `ytm status`.
+
+        Every property comes back in one batch: the TUI asks for a status
+        after each transport key, and eight separate round trips there were
+        eight chances to wait on a busy mpv.
+        """
+        props = self.get_many(
+            "playlist-pos", "idle-active", "media-title", "playback-time",
+            "duration", "pause", "playlist-count", "volume",
+        )
+        index = props.get("playlist-pos")
+        index = -1 if index is None else index
+        idle = bool(props.get("idle-active")) or index < 0
         return {
             "idle": idle,
-            "title": None if idle else self.get("media-title"),
-            "position": 0.0 if idle else float(self.get("playback-time", 0.0) or 0.0),
-            "duration": 0.0 if idle else float(self.get("duration", 0.0) or 0.0),
-            "paused": bool(self.get("pause", False)),
-            "volume": self.volume(),
+            "title": None if idle else props.get("media-title"),
+            "position": 0.0 if idle else float(props.get("playback-time") or 0.0),
+            "duration": 0.0 if idle else float(props.get("duration") or 0.0),
+            "paused": bool(props.get("pause")),
+            "volume": self._volume_of(props),
             "index": index,
-            "count": int(self.get("playlist-count", 0) or 0),
+            "count": int(props.get("playlist-count") or 0),
         }
+
+    def _volume_of(self, props):
+        """The volume to report for a status whose batch already read mpv's.
+
+        Without a mixer that batched value is the answer; with one the
+        desktop's own volume is, and mpv's is only the fallback for a mixer
+        that does not answer.
+        """
+        mpv_volume = props.get("volume") or 0
+        if self.mixer is None:
+            return mpv_volume
+        current = self.mixer.get()
+        return mpv_volume if current is None else current
 
 
 def option_list(**options):
@@ -549,13 +636,14 @@ def watch_url(video_id):
     return WATCH_URL.format(video_id=video_id)
 
 
+#: the `v=` query parameter, and only that one -- matching a bare "v=" also
+#: matched the tail of "?rv=" or "&sv=" and returned somebody else's id
+_VIDEO_ID_PARAM = re.compile(r"[?&]v=([^&]*)")
+
+
 def video_id_of(url):
     """The YouTube video id in a watch URL, or None for anything else."""
     if not url:
         return None
-    marker = "v="
-    start = url.find(marker)
-    if start < 0:
-        return None
-    end = url.find("&", start)
-    return url[start + len(marker):] if end < 0 else url[start + len(marker):end]
+    match = _VIDEO_ID_PARAM.search(url)
+    return match.group(1) if match else None

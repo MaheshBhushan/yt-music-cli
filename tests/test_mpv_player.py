@@ -363,8 +363,46 @@ def test_quit_tolerates_mpv_closing_first(mpv):
 
 def test_video_id_of():
     assert video_id_of("https://music.youtube.com/watch?v=dQw4w9WgXcQ") == "dQw4w9WgXcQ"
+    assert video_id_of("https://music.youtube.com/watch?list=RD&v=abc&t=3") == "abc"
     assert video_id_of("https://youtu.be/x") is None
     assert video_id_of(None) is None
+    # "v=" also occurs inside another parameter's name; only the real one counts
+    assert video_id_of("https://example.com/watch?rv=notmine") is None
+
+
+def test_get_many_reads_every_property_in_one_round_trip(mpv):
+    with Player(ipc_path=mpv.path, spawner=no_spawn) as p:
+        values = p.get_many("volume", "pause", "nonsuch", default="?")
+    assert values == {"volume": 70.0, "pause": False, "nonsuch": "?"}
+    assert [c for c in mpv.commands if c[0] == "get_property"] == [
+        ["get_property", "volume"], ["get_property", "pause"], ["get_property", "nonsuch"],
+    ]
+
+
+def test_status_asks_mpv_once_for_everything_it_needs(mpv):
+    """Eight separate round trips is eight chances to wait on a busy mpv,
+    and the TUI asks for a status after every transport key."""
+    with Player(ipc_path=mpv.path, spawner=no_spawn) as p:
+        mpv.commands.clear()
+        p.status()
+    batches = [c for c in mpv.commands if c[0] != "get_property"]
+    assert batches == []  # nothing but property reads
+    assert len(mpv.commands) == 8  # one read each, all in flight together
+
+
+def test_enqueue_many_appends_without_re_reading_the_playlist(mpv):
+    with Player(ipc_path=mpv.path, spawner=no_spawn) as p:
+        p.play("https://music.youtube.com/watch?v=a", title="A")
+        mpv.commands.clear()
+        added = p.enqueue_many([
+            ("https://music.youtube.com/watch?v=a", "A"),  # already playing
+            ("https://music.youtube.com/watch?v=b", "B"),
+            ("https://music.youtube.com/watch?v=c", "C"),
+        ])
+        assert added == 2
+        reads = [c for c in mpv.commands if c == ["get_property", "playlist"]]
+        assert len(reads) == 1  # not one per track appended
+        assert [e["video_id"] for e in p.playlist()] == ["a", "b", "c"]
 
 
 def test_observe_delivers_every_initial_value(mpv):

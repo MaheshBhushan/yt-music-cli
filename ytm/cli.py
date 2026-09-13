@@ -146,6 +146,11 @@ def current_track(p):
     return None
 
 
+def _enqueue_all(p, tracks):
+    """Append `tracks` to mpv's playlist in one batch."""
+    return p.enqueue_many((watch_url(t.video_id), _label(t)) for t in tracks)
+
+
 def _label(track):
     return f"{track.title} / {track.artist}" if track.artist else track.title
 
@@ -271,8 +276,7 @@ def cmd_radio(args):
         state.remember_tracks([seed] + tracks)
         if args.what:
             p.play(watch_url(seed.video_id), title=_label(seed))
-        for track in tracks:
-            p.enqueue(watch_url(track.video_id), title=_label(track))
+        _enqueue_all(p, tracks)
     return (
         {"seed": fmt_track(seed), "tracks": [fmt_track(t) for t in tracks]},
         f"Radio from {seed.title} — {seed.artist}: {len(tracks)} tracks queued",
@@ -303,8 +307,7 @@ def cmd_mix(args):
     with player() as p:
         p.stop()
         p.play(watch_url(tracks[0].video_id), title=_label(tracks[0]))
-        for track in tracks[1:]:
-            p.enqueue(watch_url(track.video_id), title=_label(track))
+        _enqueue_all(p, tracks[1:])
     return (
         {"playlist": asdict(playlist), "tracks": [fmt_track(t) for t in tracks]},
         f"Playing {playlist.title}: {len(tracks)} tracks queued",
@@ -361,8 +364,7 @@ def cmd_queue(args):
 
     with player(spawn=False) as p:
         entries = p.playlist()
-    known = {e["video_id"]: state.track_for(e["video_id"]) for e in entries if e["video_id"]}
-    known = {k: v for k, v in known.items() if v}
+    known = state.tracks_for(e["video_id"] for e in entries)
     data = [
         dict(entry, track=fmt_track(known[entry["video_id"]]) if entry["video_id"] in known else None)
         for entry in entries
@@ -615,17 +617,28 @@ def main(argv=None, out=sys.stdout, err=sys.stderr):
     parser = build_parser()
     args = parser.parse_args(argv)
     if args.command is None:
-        return cmd_tui(args) or 0
+        # cmd_tui answers (data, text) like every other command, and a
+        # two-None tuple is truthy: `return cmd_tui(args) or 0` handed that
+        # tuple to sys.exit, so plain `ytm` printed "(None, None)" and left
+        # a failure exit code behind every TUI session
+        cmd_tui(args)
+        return 0
     try:
         data, text = args.func(args)
     except (CliError, PlayerError) as exc:
         print(exc, file=err)
         return 1
     except Exception as exc:  # auth and network failures included
+        import requests
+
         from ytm import auth
 
         if isinstance(exc, auth.AuthError):
             print(exc, file=err)
+            return 1
+        if isinstance(exc, requests.exceptions.RequestException):
+            # no route to YouTube is a fact to report, not a stack trace
+            print(f"could not reach YouTube Music: {exc}", file=err)
             return 1
         raise
     if data is None:
