@@ -96,6 +96,7 @@ class YTMApp(App):
         Binding("minus", "volume_down", "Vol -", priority=True),
         ("tab", "cycle_pane", "Cycle panes"),
         Binding("escape", "focus_results", "Results", show=False),
+        Binding("down", "leave_search", "Results", show=False),
         ("e", "quit_only", "Exit"),
         ("x", "quit_and_shutdown", "Exit + stop player"),
     ]
@@ -168,24 +169,33 @@ class YTMApp(App):
             Binding("equals_sign", "volume_up", "Vol +", show=False, priority=True),
             ("tab", "cycle_pane", "Cycle panes"),
             Binding("escape", "focus_results", "Results", show=False),
+            # Down from the search box goes to the lists, like Escape; the
+            # tables handle their own Down first, so this only fires there
+            Binding("down", "leave_search", "Results", show=False),
             # no priority on any letter key: while the search box has focus
             # every letter is text, so "queen" or "eels" can be searched
             (keys["quit"], "quit_only", "Exit"),
             ("x", "quit_and_shutdown", "Exit + stop player"),
         ]
 
+    #: what the shortcut bar leads with while the search box has focus:
+    #: every letter is text there, so the letter shortcuts are inert until
+    #: Esc or Down hands focus to a list
+    TYPING_HINT = "[@click=app.focus_results][b]Esc[/b]/[b]↓[/b] leave search, then:[/]  "
+
     @staticmethod
-    def _shortcut_text(keys):
+    def _shortcut_text(keys, typing=False):
         """One line naming every shortcut, in the order people reach for them.
 
         Each entry is also a mouse target: clicking it runs the same action
-        the key would.
+        the key would. With `typing` (the search box has focus) it opens
+        with how to get out, because until then `l`, `q`, `a`... are letters.
         """
         def link(key, label, action):
             return f"[@click=app.{action}][b]{key}[/b] {label}[/]"
 
         search_key = f"{keys['search']} {'s' if keys['search'] != 's' else ''}".strip()
-        return "  ".join([
+        return (YTMApp.TYPING_HINT if typing else "") + "  ".join([
             link(keys["quit"], "exit", "quit_only"),
             link(search_key, "search", "focus_search"),
             link(keys["toggle"], "play/pause", "toggle"),
@@ -228,7 +238,7 @@ class YTMApp(App):
         yield Static("", id="error-banner")
         # the shortcut bar: every key, always, whatever has focus (Textual's
         # Footer hides letter keys while the search box is focused)
-        yield Static(self._shortcut_text(self._config["keys"]), id="shortcut-bar")
+        yield Static(self._shortcut_text(self._config["keys"], typing=True), id="shortcut-bar")
 
     def on_resize(self, event):
         """Small terminals lose the results table, playlists and lyrics."""
@@ -614,6 +624,15 @@ class YTMApp(App):
         widget_id = getattr(message.widget, "id", None)
         if widget_id in ("search-results", "queue-table"):
             self._pick_pane = widget_id
+        self.query_one("#shortcut-bar", Static).update(
+            self._shortcut_text(self._config["keys"], typing=widget_id == "search-input")
+        )
+
+    def action_leave_search(self):
+        """Down in the search box: hand focus to the lists, as Escape does.
+        Anywhere else Down already moved a table cursor and never gets here."""
+        if getattr(self.focused, "id", None) == "search-input":
+            self.action_focus_results()
 
     def _create_playlist(self, title):
         pane = self.query_one(PlaylistsPane)

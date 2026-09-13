@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Picking a playlist right after opening ytm no longer needs a trick. The search box has focus at startup and takes every letter as text, so `l` typed the letter and Enter searched for it; the only way to the playlists was Escape, which nothing mentioned. `↓` now leaves the search box like Escape does, the shortcut bar opens with "Esc/↓ leave search, then:" while you are in it, and the placeholder says so too.
 - `ytm update` no longer claims to have upgraded when nothing changed. Right after a release, pip's HTTP cache and the index CDN can still call the old version the newest, so `pip install -U` (and `pipx upgrade`) exited 0 having installed nothing, and ytm said "upgraded, restart ytm" until a second run some minutes later actually did it. Installers are now told to skip their caches, pip is asked for the exact version PyPI reported, and a fresh interpreter is asked what is installed afterwards; if it is still the old version the command fails and says the index has not caught up yet.
 - The TUI no longer offers an update to a source checkout that is already ahead of PyPI. An editable install's recorded version is frozen at `pip install -e` time, so after a `git pull` ytm reported the old number, every PyPI release looked newer, and the "Update available" toast never went away. An editable install now reads its version from the checkout's `pyproject.toml`.
 
