@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.8.1 — 2026-09-14
 
 - The TUI keeps a trace of its last run in `~/.local/state/ytm/tui.log`: keys received, focus moves, backend requests with their timing, errors and resizes. It starts over on every launch, so it is always the run you just had; `YTM_TUI_LOG=<file>` moves it. The 0.8.0 variable-only version needed the exact command line to be typed, which in practice it was not.
 - `ytm version` prints the running version, and mentions a newer release when the daily PyPI check has already seen one. It never touches the network; `ytm update --check` does.
