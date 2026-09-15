@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.9.0 — 2026-09-15
+
+- The TUI lyrics pane follows the song. When YouTube Music has timestamps for a track the pane shows `LYRICS · SYNCED`, highlights the line being sung and keeps it in view, through pauses, seeks in either direction and terminal resizes. Tracks without timing data show plain lyrics as before, and `ytm lyrics` still prints plain text.
+- Timed lyrics are validated once before they reach the pane: a record with a missing or non-numeric timestamp, a reversed or zero-length interval, or non-text content is dropped instead of taking the interface down mid-playback. A timed answer with nothing usable in it falls back to the plain lyrics exactly once, and reports that response's own source.
+- Lyrics are fetched one track at a time. Skipping through a queue fetches the song that ended up playing, not every song passed on the way; two requests for the same song share one fetch. A result that belongs to an earlier request for the same song can no longer overwrite a newer one, and no background result touches the screen once the app has started to close.
+- The now-playing clock is rewritten only when its text changes; positions still arrive several times a second for the lyrics.
+- `ytmusicapi>=1.9.0` is now required, the first release with timestamped lyrics.
+
 ## 0.8.1 — 2026-09-14
 
 - The TUI keeps a trace of its last run in `~/.local/state/ytm/tui.log`: keys received, focus moves, backend requests with their timing, errors and resizes. It starts over on every launch, so it is always the run you just had; `YTM_TUI_LOG=<file>` moves it. The 0.8.0 variable-only version needed the exact command line to be typed, which in practice it was not.
