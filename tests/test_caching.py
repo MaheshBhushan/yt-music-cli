@@ -383,7 +383,7 @@ def test_an_empty_mix_list_is_not_asked_for_again(backend, monkeypatch, tmp_path
 def test_lyrics_are_fetched_once_per_track(backend, monkeypatch):
     calls = []
     monkeypatch.setattr(music, "get_lyrics",
-                        lambda vid, yt=None: (calls.append(vid), ("words", "src"))[1])
+                        lambda vid, yt=None, **kwargs: (calls.append(vid), ("words", "src"))[1])
     assert backend.request("lyrics", {"video_id": "v1"})["lyrics"] == "words"
     backend.request("lyrics", {"video_id": "v2"})
     assert backend.request("lyrics", {"video_id": "v1"})["lyrics"] == "words"

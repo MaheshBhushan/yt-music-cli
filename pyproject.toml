@@ -25,7 +25,7 @@ classifiers = [
     "Topic :: Multimedia :: Sound/Audio :: Players",
 ]
 dependencies = [
-    "ytmusicapi",
+    "ytmusicapi>=1.9.0",
     "requests",
     "google-auth-oauthlib>=1.2.2",
     "yt-dlp",

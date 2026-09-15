@@ -80,6 +80,18 @@ def _remember_in(cache, key, value, limit):
         cache.pop(next(iter(cache)))
 
 
+class _InFlight:
+    """One lyrics fetch in progress: whoever else asks for the same song
+    waits on `done` and reads `result` or `error`."""
+
+    __slots__ = ("done", "error", "result")
+
+    def __init__(self):
+        self.done = threading.Event()
+        self.result = None
+        self.error = None
+
+
 def _playlist_dict(playlist, kind=None):
     return {
         "playlist_id": playlist.playlist_id,
@@ -112,6 +124,11 @@ class Backend:
         self._searches = {}
         # {video_id: (lyrics, source)}, so replaying a song is free
         self._lyrics_cache = {}
+        # {video_id: _InFlight} for lyrics being fetched right now: a second
+        # request for the same song waits for the first instead of asking
+        # YouTube twice. The lock guards the two dicts only, never the fetch.
+        self._lyrics_inflight = {}
+        self._lyrics_lock = threading.Lock()
         # remote track counts the library listing does not carry, looked up
         # once per playlist instead of on every refresh of the pane
         self._playlist_counts = {}
@@ -282,10 +299,33 @@ class Backend:
         change -- including when the queue comes back round to a song.
         """
         video_id = args.get("video_id")
-        found = self._lyrics_cache.get(video_id)
-        if found is None:
-            found = music.get_lyrics(video_id)
-            _remember_in(self._lyrics_cache, video_id, found, LYRICS_CACHE_SIZE)
+        with self._lyrics_lock:
+            found = self._lyrics_cache.get(video_id)
+            waiter = None if found is not None else self._lyrics_inflight.get(video_id)
+            owner = found is None and waiter is None
+            if owner:
+                waiter = self._lyrics_inflight[video_id] = _InFlight()
+        if owner:
+            try:
+                # the client's session has a 30 s timeout, so a stalled fetch
+                # ends and the entry below is always cleared
+                found = music.get_lyrics(video_id, timestamps=True)
+            except BaseException as exc:
+                waiter.error = exc
+                raise
+            else:
+                waiter.result = found
+            finally:
+                with self._lyrics_lock:
+                    self._lyrics_inflight.pop(video_id, None)
+                    if waiter.error is None:
+                        _remember_in(self._lyrics_cache, video_id, found, LYRICS_CACHE_SIZE)
+                waiter.done.set()
+        elif found is None:
+            waiter.done.wait()
+            if waiter.error is not None:
+                raise BackendError(f"{type(waiter.error).__name__}: {waiter.error}") from waiter.error
+            found = waiter.result
         lyrics, source = found
         return {"video_id": video_id, "lyrics": lyrics, "source": source}
 
@@ -474,10 +514,10 @@ class Backend:
         volume = None
 
         def emit_position():
-            # mpv reports time-pos a dozen times a second; the strip only
-            # shows whole seconds, so skip changes that would render the same
+            # Preserve sub-second positions for timed lyrics; deduplicate only
+            # identical observations. Seeking must also take effect immediately.
             nonlocal last_emitted
-            key = (int(position or 0), duration, current_id)
+            key = (position or 0, duration, current_id)
             if key == last_emitted:
                 return
             last_emitted = key
@@ -530,8 +570,8 @@ class Backend:
                     new_id = track["video_id"] if track else None
                     if new_id != current_id:
                         current_id = new_id
+                        self._emit("track_changed", track)
                         if track:
-                            self._emit("track_changed", track)
                             # mpv only reports time-pos/duration once yt-dlp
                             # has resolved the stream, seconds later; snap
                             # the bar to 0:00 of the known length right away

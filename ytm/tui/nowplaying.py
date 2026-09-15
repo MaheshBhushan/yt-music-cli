@@ -5,8 +5,6 @@ import io
 import urllib.request
 from dataclasses import dataclass
 
-from ytm import config as config_mod
-
 from textual.containers import Container, Horizontal, Vertical
 from textual.markup import escape
 from textual.message import Message
@@ -17,8 +15,16 @@ from textual.widgets import ProgressBar, Static
 # Textual takes the terminal over. Importing it inside compose() stalled the
 # whole app for seconds. Only the TUI imports this module, never the CLI.
 from textual_image.widget import (
-    HalfcellImage, Image as AutoImage, SixelImage, TGPImage, UnicodeImage,
+    HalfcellImage,
+    SixelImage,
+    TGPImage,
+    UnicodeImage,
 )
+from textual_image.widget import (
+    Image as AutoImage,
+)
+
+from ytm import config as config_mod
 
 #: `[ui] art` values mapped onto textual-image widgets; None means no art.
 #: "blocks" is the default: the pixel protocols are opt-in because Sixel in
@@ -204,6 +210,7 @@ class NowPlaying(Vertical):
         self._queue_column_width = queue_column_width
         self._duration_seconds = 0
         self._position = 0
+        self._clock_text = None  # last "m:ss / m:ss" written; see on_position
         self._video_id = None
         self._title = "nothing playing"
         self._paused = False
@@ -273,9 +280,13 @@ class NowPlaying(Vertical):
         self._duration_seconds = duration
         bar = self.query_one("#now-playing-progress", ProgressBar)
         bar.update(total=duration or None, progress=position)
-        self.query_one("#now-playing-time", Static).update(
-            f"{_format_time(position)} / {_format_time(duration)}"
-        )
+        # positions now arrive several times a second (timed lyrics need
+        # them); the clock only reads in whole seconds, so it is rewritten
+        # only when its text would differ
+        clock = f"{_format_time(position)} / {_format_time(duration)}"
+        if clock != self._clock_text:
+            self._clock_text = clock
+            self.query_one("#now-playing-time", Static).update(clock)
 
     def set_volume(self, level):
         self.query_one("#now-playing-volume", Static).update(f"vol {int(level)}")
