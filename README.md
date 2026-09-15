@@ -11,6 +11,9 @@
 
 ![ytm's TUI: search results on top, queue, playlists with your daily mixes and lyrics in the middle, the current track with its cover, what just played and what is up next at the bottom](docs/screenshot.png)
 
+The TUI lyrics pane highlights and automatically scrolls to the current line when YouTube Music provides timestamps. It follows playback, pauses and seeks; tracks without timing data show plain lyrics. `ytm lyrics` still prints plain text.
+
+
 ## Overview
 
 YouTube Music has no desktop client that is not a browser. `ytm` is a small Python CLI and a Textual TUI over three tools that already do the hard parts: [ytmusicapi](https://github.com/sigma67/ytmusicapi) for the catalogue, [yt-dlp](https://github.com/yt-dlp/yt-dlp) for stream resolution and [mpv](https://mpv.io) for audio.

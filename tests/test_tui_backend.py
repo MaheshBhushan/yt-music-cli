@@ -23,7 +23,7 @@ def backend(monkeypatch, tmp_path):
 def catalogue(monkeypatch):
     monkeypatch.setattr(music, "search", lambda q, limit=20, yt=None: [track("s1", "Song", "Band", "LP", 200)])
     monkeypatch.setattr(music, "radio", lambda vid, limit=25, yt=None: [track("r1", "R1", "X"), track("r2", "R2", "Y")])
-    monkeypatch.setattr(music, "get_lyrics", lambda vid, yt=None: ("words", "src"))
+    monkeypatch.setattr(music, "get_lyrics", lambda vid, yt=None, **kwargs: ("words", "src"))
     monkeypatch.setattr(music, "library_playlists", lambda limit=25, yt=None: [music.Playlist("PL1", "Liked", 3)])
     monkeypatch.setattr(music, "mixes", lambda yt=None: [])
 
@@ -100,8 +100,7 @@ def test_listen_translates_property_changes_into_events(backend, monkeypatch):
 
     class Observer:
         def observe(self, *names):
-            for change in changes:
-                yield change
+            yield from changes
             raise_after()
 
         def close(self):
@@ -389,7 +388,7 @@ def test_listen_snaps_the_bar_to_zero_when_the_track_changes(backend):
     assert positions.count(("b", 0, 180)) == 1
 
 
-def test_listen_skips_position_changes_within_the_same_second(backend):
+def test_listen_preserves_subsecond_positions_for_lyrics(backend):
     backend.request("play", {"video_id": "a", "title": "A"})
     changes = [("duration", 200.0), ("time-pos", 3.1), ("time-pos", 3.5), ("time-pos", 3.9), ("time-pos", 4.0)]
 
@@ -408,7 +407,7 @@ def test_listen_skips_position_changes_within_the_same_second(backend):
     backend.on_event(lambda e, d: events.append((e, d)))
     backend._closed = False
     backend.listen()
-    assert [d["position"] for e, d in events if e == "position"] == [3.1, 4.0]
+    assert [d["position"] for e, d in events if e == "position"] == [3.1, 3.5, 3.9, 4.0]
 
 
 def test_a_slow_network_request_does_not_block_player_requests(backend, catalogue, monkeypatch):
@@ -520,3 +519,79 @@ def test_local_playlist_adds_are_not_pended(backend, monkeypatch, tmp_path):
     pid = playlists_local.create("mine")
     backend.request("playlist_add", {"playlist_id": pid, "video_ids": ["n"], "tracks": [{"video_id": "n", "title": "New"}]})
     assert backend._pending_adds == {}
+
+
+def test_concurrent_lyrics_requests_for_one_track_share_a_single_fetch(backend, monkeypatch):
+    import threading
+
+    release = threading.Event()
+    fetches = []
+
+    def slow_lyrics(vid, yt=None, **kwargs):
+        fetches.append(vid)
+        release.wait(timeout=5)
+        return ("words", "src")
+
+    monkeypatch.setattr(music, "get_lyrics", slow_lyrics)
+    results = []
+    threads = [threading.Thread(target=lambda: results.append(backend.request("lyrics", {"video_id": "v"})))
+               for _ in range(3)]
+    try:
+        for t in threads:
+            t.start()
+        deadline = time.monotonic() + 2
+        while len(fetches) < 1 and time.monotonic() < deadline:
+            time.sleep(0.01)
+        time.sleep(0.05)  # give the other two a chance to (wrongly) start a fetch
+        # a pause/seek must not queue behind the held fetch
+        assert backend.request("volume", {"level": 40})["volume"] == 40
+    finally:
+        release.set()
+    for t in threads:
+        t.join(timeout=5)
+    assert fetches == ["v"]
+    assert [r["lyrics"] for r in results] == ["words"] * 3
+    assert backend._lyrics_inflight == {}
+
+
+def test_a_failed_lyrics_fetch_does_not_block_the_next_attempt(backend, monkeypatch):
+    attempts = []
+
+    def flaky(vid, yt=None, **kwargs):
+        attempts.append(vid)
+        if len(attempts) == 1:
+            raise RuntimeError("network down")
+        return ("words", "src")
+
+    monkeypatch.setattr(music, "get_lyrics", flaky)
+    with pytest.raises(BackendError, match="network down"):
+        backend.request("lyrics", {"video_id": "v"})
+    assert backend._lyrics_inflight == {}
+    assert backend.request("lyrics", {"video_id": "v"})["lyrics"] == "words"
+    assert attempts == ["v", "v"]
+
+
+def test_listen_announces_no_track_when_the_queue_loses_its_current_entry(backend):
+    backend.request("play", {"video_id": "a", "title": "A"})
+
+    class Observer:
+        def observe(self, *names):
+            yield ("playlist-pos", 0)
+            for entry in backend.fake.entries:
+                entry["current"] = False  # mpv reached the end of the playlist
+            yield ("playlist-pos", -1)
+            backend.close()
+            from ytm.player import PlayerError
+            raise PlayerError("closed")
+
+        def close(self):
+            pass
+
+    backend._make_player = lambda spawn=True, timeout=None: Observer()
+    events = []
+    backend.on_event(lambda e, d: events.append((e, d)))
+    backend._closed = False
+    backend.listen()
+    tracks = [d for e, d in events if e == "track_changed"]
+    assert tracks[0]["video_id"] == "a"
+    assert tracks[1] is None

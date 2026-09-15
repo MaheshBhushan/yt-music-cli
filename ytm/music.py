@@ -25,6 +25,7 @@ from ytm.auth import (
     client,
     is_expiry,
 )
+from ytm.timed_lyrics import normalize_timed_lines
 
 #: One ytmusicapi client is kept per process and reused by every call below.
 #: Building one is not free: it opens a fresh TLS connection to YouTube and,
@@ -377,28 +378,64 @@ def search(query, limit=20, yt=None):
     return to_tracks(results)[:limit]
 
 
+def _timed_lines(line):
+    """A provider LyricLine (or an already-plain mapping) as a dict."""
+    return line if hasattr(line, "get") else asdict(line)
+
+
+def _usable_lyrics(result):
+    """(lyrics, source) from one lyrics response, or (None, None) when it
+    carries nothing a pane could show: a null envelope, an empty or
+    all-invalid timed list, or blank plain text."""
+    if not result:
+        return None, None
+    lyrics = result.get("lyrics")
+    if result.get("hasTimestamps"):
+        lines = normalize_timed_lines([_timed_lines(line) for line in (lyrics or [])])
+        return (lines or None), result.get("source")
+    if isinstance(lyrics, str) and lyrics.strip():
+        return lyrics, result.get("source")
+    return None, None
+
+
 @_refreshing
-def get_lyrics(video_id, yt=None):
+def get_lyrics(video_id, yt=None, *, timestamps=False):
     """Fetch lyrics for a track, or None if it has none.
 
-    Returns (lyrics_text, source) -- both None when the track has no lyrics
+    Returns (lyrics_text, source), or (list of timed line dicts, source)
+    with timestamps=True. Both are None when the track has no lyrics
     available. Two calls under the hood: the watch playlist gives the lyrics
     browseId, then that id is used to fetch the actual text.
+
+    With timestamps the timed lines are validated (see `ytm.timed_lyrics`);
+    when the timed response has no usable content -- None, an empty list,
+    nothing but malformed records -- the plain endpoint is asked exactly
+    once, and its own source is reported. A plain response to the timed
+    request (the track has no timing) is kept as is, without a second call.
+
+    Exception policy: an expired session raises AuthExpired so `_refreshing`
+    can retry after a refresh; any other provider error propagates. A timed
+    request that fails is not papered over with a plain retry, because that
+    would also hide programmer errors and a broken account.
     """
-    yt = yt if yt is not None else shared_client()
+    # Timed requests temporarily switch the client to mobile. Keep that
+    # mutation isolated from concurrent searches on the shared client.
+    yt = yt if yt is not None else (client() if timestamps else shared_client())
     try:
         watch = yt.get_watch_playlist(videoId=video_id)
         browse_id = (watch or {}).get("lyrics")
         if not browse_id:
             return None, None
-        result = yt.get_lyrics(browse_id)
+        if not timestamps:
+            return _usable_lyrics(yt.get_lyrics(browse_id))
+        lyrics, source = _usable_lyrics(yt.get_lyrics(browse_id, timestamps=True))
+        if lyrics is None:
+            lyrics, source = _usable_lyrics(yt.get_lyrics(browse_id))
     except YTMusicError as exc:
         if is_expiry(exc):
             raise AuthExpired(_EXPIRED_HINT) from exc
         raise
-    if not result:
-        return None, None
-    return result.get("lyrics"), result.get("source")
+    return lyrics, source
 
 
 #: personal daily mixes (My Supermix, Discover Mix, ...) all share this prefix

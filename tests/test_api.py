@@ -222,3 +222,128 @@ def test_cookies_exposed_for_stream_resolution(tmp_path):
     path = tmp_path / "auth.json"
     path.write_text(json.dumps({"Cookie": "SID=abc; HSID=def", "authorization": "SAPISIDHASH x"}))
     assert auth.load_cookies(path) == "SID=abc; HSID=def"
+
+
+def test_timed_lyrics_are_serializable_and_fall_back_to_plain():
+    from ytmusicapi.models.lyrics import LyricLine
+
+    from ytm import music
+
+    class TimedClient:
+        def get_watch_playlist(self, **kwargs):
+            return {"lyrics": "browse"}
+
+        def get_lyrics(self, browse_id, timestamps=False):
+            return {"hasTimestamps": True, "lyrics": [LyricLine("line", 1200, 2400, 1)], "source": "src"}
+
+    lines, source = music.get_lyrics("v", yt=TimedClient(), timestamps=True)
+    assert lines == [{"text": "line", "start_time": 1200, "end_time": 2400, "id": 1}]
+    assert source == "src"
+
+    class PlainClient(TimedClient):
+        def get_lyrics(self, browse_id, timestamps=False):
+            return None if timestamps else {"lyrics": "plain", "source": "src"}
+
+    assert music.get_lyrics("v", yt=PlainClient(), timestamps=True) == ("plain", "src")
+
+
+class ScriptedLyricsClient:
+    """A provider whose timed and plain lyrics endpoints answer separately;
+    `calls` records the `timestamps` flag of every lyrics request."""
+
+    def __init__(self, timed, plain, browse_id="browse"):
+        self._timed = timed
+        self._plain = plain
+        self._browse_id = browse_id
+        self.calls = []
+
+    def get_watch_playlist(self, **kwargs):
+        return {"lyrics": self._browse_id}
+
+    def get_lyrics(self, browse_id, timestamps=False):
+        self.calls.append(bool(timestamps))
+        if isinstance(self._timed, Exception) and timestamps:
+            raise self._timed
+        return self._timed if timestamps else self._plain
+
+
+PLAIN = {"lyrics": "plain works", "source": "plain source", "hasTimestamps": False}
+
+
+def _timed(lines, source="timed source"):
+    return {"hasTimestamps": True, "lyrics": lines, "source": source}
+
+
+@pytest.mark.parametrize("timed", [
+    None,
+    _timed([]),
+    _timed(None),
+    _timed([{"text": "missing end", "start_time": 1000}]),
+])
+def test_unusable_timed_lyrics_fall_back_to_plain_exactly_once(timed):
+    from ytm import music
+
+    yt = ScriptedLyricsClient(timed=timed, plain=PLAIN)
+    assert music.get_lyrics("v", yt=yt, timestamps=True) == ("plain works", "plain source")
+    assert yt.calls == [True, False]
+
+
+def test_plain_answer_to_the_timed_request_is_kept_without_a_second_call():
+    from ytm import music
+
+    yt = ScriptedLyricsClient(timed=PLAIN, plain={"lyrics": "never asked", "source": "x"})
+    assert music.get_lyrics("v", yt=yt, timestamps=True) == ("plain works", "plain source")
+    assert yt.calls == [True]
+
+
+def test_valid_timed_lines_take_one_lyrics_call_and_are_normalized():
+    from ytmusicapi.models.lyrics import LyricLine
+
+    from ytm import music
+
+    yt = ScriptedLyricsClient(
+        timed=_timed([LyricLine("late", 3000, 4000, 2), LyricLine("early", 1000.0, 2000, 1),
+                      LyricLine("bad", 5000, 4000, 3)]),
+        plain=PLAIN,
+    )
+    lines, source = music.get_lyrics("v", yt=yt, timestamps=True)
+    assert [(l["text"], l["start_time"], l["end_time"]) for l in lines] == [("early", 1000, 2000), ("late", 3000, 4000)]
+    assert source == "timed source"
+    assert yt.calls == [True]
+
+
+def test_no_lyrics_on_either_endpoint_is_none_with_no_source():
+    from ytm import music
+
+    yt = ScriptedLyricsClient(timed=_timed([]), plain={"lyrics": "  ", "source": "blank"})
+    assert music.get_lyrics("v", yt=yt, timestamps=True) == (None, None)
+    assert yt.calls == [True, False]
+    yt = ScriptedLyricsClient(timed=None, plain=None)
+    assert music.get_lyrics("v", yt=yt, timestamps=True) == (None, None)
+
+
+def test_expired_auth_on_the_timed_endpoint_is_still_an_auth_error():
+    from ytm import music
+
+    expired = YTMusicServerError("Server returned HTTP 401: Unauthorized.\nRequest had invalid authentication credentials.")
+    yt = ScriptedLyricsClient(timed=expired, plain=PLAIN)
+    with pytest.raises(auth.AuthExpired):
+        music.get_lyrics("v", yt=yt, timestamps=True)
+    assert yt.calls == [True]  # no plain retry papers over a broken session
+
+
+def test_other_timed_endpoint_errors_propagate_unchanged():
+    from ytm import music
+
+    yt = ScriptedLyricsClient(timed=YTMusicServerError("Server returned HTTP 500: boom"), plain=PLAIN)
+    with pytest.raises(YTMusicServerError):
+        music.get_lyrics("v", yt=yt, timestamps=True)
+
+
+def test_plain_cli_lyrics_contract_is_text_not_records():
+    """`ytm lyrics` asks without timestamps and must keep getting a string."""
+    from ytm import music
+
+    yt = ScriptedLyricsClient(timed=_timed([{"text": "x", "start_time": 0, "end_time": 1}]), plain=PLAIN)
+    assert music.get_lyrics("v", yt=yt) == ("plain works", "plain source")
+    assert yt.calls == [False]

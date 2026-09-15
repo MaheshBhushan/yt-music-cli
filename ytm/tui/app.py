@@ -7,10 +7,11 @@ import sys
 import threading
 import time
 from pathlib import Path
+from typing import ClassVar
 
 from textual.app import App, ComposeResult
 from textual.binding import Binding, BindingsMap
-from textual.containers import Horizontal, Vertical
+from textual.containers import Horizontal
 from textual.message import Message
 from textual.widgets import DataTable, Input, Static
 
@@ -84,10 +85,17 @@ class RequestDone(Message):
 
 class LyricsFetched(Message):
     """The result of a background `lyrics` request, handed back to the
-    Textual message loop the same way `DaemonEvent` is."""
+    Textual message loop the same way `DaemonEvent` is.
 
-    def __init__(self, video_id, data, error):
+    `generation` says which `_fetch_lyrics` call this answers: the video id
+    alone cannot tell a stale request for a song from a newer one for the
+    same song (A -> B -> A), and a late error from the first must not
+    overwrite the lyrics the second already showed.
+    """
+
+    def __init__(self, generation, video_id, data, error):
         super().__init__()
+        self.generation = generation
         self.video_id = video_id
         self.data = data
         self.error = error
@@ -104,7 +112,7 @@ class YTMApp(App):
     COMPACT_WIDTH = 100
     COMPACT_HEIGHT = 24
 
-    BINDINGS = [
+    BINDINGS: ClassVar = [
         ("/", "focus_search", "Search"),
         ("s", "focus_search", "Search"),
         ("h", "toggle_search", "Hide search"),
@@ -146,7 +154,17 @@ class YTMApp(App):
             self.client = None
             self._client_error = str(exc)
         self._listener_thread = None
+        # results from background work are applied only while this is set;
+        # `_begin_shutdown` clears it before the widgets go away
+        self._accepting_results = True
         self._lyrics_video_id = None
+        self._lyrics_generation = 0   # rises per `_fetch_lyrics`; see LyricsFetched
+        # one lyrics fetch at a time, and at most one waiting behind it:
+        # skipping through ten songs must not open ten connections, and only
+        # the song now playing is worth asking about
+        self._lyrics_lock = threading.Lock()
+        self._lyrics_pending = None   # (generation, video_id) not yet started
+        self._lyrics_thread = None
         self._queue_timer = None      # pending coalesced queue redraw
         self._pending_queue = None    # the payload it will render
         self._last_queue_render = 0.0
@@ -230,8 +248,8 @@ class YTMApp(App):
             link(keys["prev"], "prev", "prev"),
             link("q", "enqueue", "enqueue_selected"),
             link("u", "play next", "play_next_selected"),
-            f"[@click=app.seek_back][b]←[/b][/]/[@click=app.seek_forward][b]→[/b][/] seek",
-            f"[@click=app.volume_up][b]+[/b][/]/[@click=app.volume_down][b]-[/b][/] volume",
+            "[@click=app.seek_back][b]←[/b][/]/[@click=app.seek_forward][b]→[/b][/] seek",
+            "[@click=app.volume_up][b]+[/b][/]/[@click=app.volume_down][b]-[/b][/] volume",
             link("l", "playlists", "focus_playlists"),
             link("a", "add to playlist", "add_to_playlist"),
             link("r", "refresh mixes", "refresh_mixes"),
@@ -243,9 +261,7 @@ class YTMApp(App):
     def check_action(self, action, parameters):
         # the seek arrows are priority bindings; while the search box has
         # focus they must move the text cursor instead
-        if action in ("seek_back", "seek_forward") and isinstance(self.focused, Input):
-            return False
-        return True
+        return not (action in ("seek_back", "seek_forward") and isinstance(self.focused, Input))
 
     # -- layout --------------------------------------------------------
 
@@ -381,33 +397,97 @@ class YTMApp(App):
         self.post_message(DaemonEvent(event, data))
 
     def on_daemon_event(self, message: DaemonEvent):
+        if not self._accepts_results():
+            return
         self._apply_event(message.event, message.data)
 
-    def _fetch_lyrics(self, video_id):
-        """Kick off a background `lyrics` request for `video_id`.
+    # -- lifecycle -------------------------------------------------------
 
-        Mirrors `_listen`'s thread + `post_message` hand-off: the request
-        blocks on a background thread so a slow/unresponsive daemon never
-        freezes the UI, and the result is marshalled back onto Textual's
-        own loop via `LyricsFetched`.
+    def _accepts_results(self):
+        """Whether a background completion may still touch the widgets.
+
+        Textual's shutdown clears `is_running` first, then removes the
+        screens, and only then drains the messages still queued -- so a
+        `RequestDone` or `LyricsFetched` that arrives during teardown would
+        find no `#error-banner` or lyrics pane to update. Every handler for
+        background work checks here before it queries a widget.
         """
-        if video_id is None or self.client is None:
-            return
-        self._lyrics_video_id = video_id
+        return self._accepting_results and self.is_running and not self._exit
 
-        def worker():
+    def _begin_shutdown(self):
+        """Stop accepting results and release what the app owns. Idempotent,
+        and reached from both quit keys and from the framework's own unmount,
+        so a test's `run_test()` exit takes the same path as `e`/`x`.
+
+        Cancelling a worker does not interrupt a blocking HTTP call; the
+        client's 30 s request timeout ends those, and by then the result is
+        simply refused here.
+        """
+        if not self._accepting_results:
+            return
+        self._accepting_results = False
+        self._lyrics_generation += 1
+        with self._lyrics_lock:
+            self._lyrics_pending = None
+        self.workers.cancel_group(self, "requests")
+        self.workers.cancel_group(self, "update")
+        if self.client is not None:
+            self.client.close()
+
+    def on_unmount(self):
+        self._begin_shutdown()
+
+    # -- lyrics ----------------------------------------------------------
+
+    def _fetch_lyrics(self, video_id):
+        """Show `video_id`'s lyrics: reset the pane now, fetch in the background.
+
+        The request blocks on a background thread so a slow/unresponsive
+        daemon never freezes the UI, and the result is marshalled back onto
+        Textual's own loop via `LyricsFetched`. One thread serves all lyrics
+        requests, taking the newest one waiting: a burst of track changes
+        fetches the first and the last, never the ones skipped in between.
+        """
+        self._lyrics_generation += 1
+        generation = self._lyrics_generation
+        self._lyrics_video_id = video_id
+        self.query_one(LyricsPane).reset(video_id)
+        if video_id is None or self.client is None or not self._accepts_results():
+            return
+        with self._lyrics_lock:
+            self._lyrics_pending = (generation, video_id)
+            if self._lyrics_thread is None:
+                self._lyrics_thread = threading.Thread(
+                    target=self._lyrics_worker, daemon=True, name="ytm-lyrics"
+                )
+                self._lyrics_thread.start()
+
+    def _lyrics_worker(self):
+        while True:
+            with self._lyrics_lock:
+                job = self._lyrics_pending
+                self._lyrics_pending = None
+                if job is None:
+                    self._lyrics_thread = None
+                    return
+            generation, video_id = job
+            _trace(f"request lyrics {video_id!r}")
+            started = time.monotonic()
             try:
                 data = self.client.request("lyrics", {"video_id": video_id})
             except BackendError as exc:
-                self.post_message(LyricsFetched(video_id, None, str(exc)))
+                _trace(f"request lyrics failed after {time.monotonic() - started:.1f}s: {exc}")
+                self.post_message(LyricsFetched(generation, video_id, None, str(exc)))
             else:
-                self.post_message(LyricsFetched(video_id, data, None))
-
-        threading.Thread(target=worker, daemon=True).start()
+                _trace(f"request lyrics done in {time.monotonic() - started:.1f}s")
+                self.post_message(LyricsFetched(generation, video_id, data, None))
 
     def on_lyrics_fetched(self, message: LyricsFetched):
-        # a later track_changed may have superseded this in-flight request
-        if message.video_id != self._lyrics_video_id:
+        # only the newest request owns the pane: a later track change (or a
+        # return to the same track) supersedes anything still in flight
+        if not self._accepts_results():
+            return
+        if message.generation != self._lyrics_generation or message.video_id != self._lyrics_video_id:
             return
         pane = self.query_one(LyricsPane)
         if message.error is not None:
@@ -422,6 +502,8 @@ class YTMApp(App):
             self._fetch_lyrics((data or {}).get("video_id"))
         elif event == "position":
             now_playing.on_position(data)
+            if (data or {}).get("video_id") == self._lyrics_video_id:
+                self.query_one(LyricsPane).set_position((data or {}).get("position") or 0)
         elif event == "state_changed":
             now_playing.on_state_changed(data)
             volume = (data or {}).get("volume")
@@ -465,9 +547,10 @@ class YTMApp(App):
 
     def _request_async(self, cmd, args=None, then=None):
         """Run a request on a worker thread; `then(data)` runs back on the
-        message loop once it completes. Keeps search, lyrics and playlist
-        calls -- the ones that hit YouTube -- off the UI thread."""
-        if self.client is None:
+        message loop once it completes. Keeps search and playlist calls --
+        the ones that hit YouTube -- off the UI thread (lyrics have their
+        own thread, see `_fetch_lyrics`)."""
+        if self.client is None or not self._accepts_results():
             return
 
         _trace(f"request {cmd} {args!r}")
@@ -486,6 +569,8 @@ class YTMApp(App):
         self.run_worker(work, thread=True, name=cmd, group="requests")
 
     def on_request_done(self, message: RequestDone):
+        if not self._accepts_results():
+            return
         if message.error is not None:
             self._show_error(message.error)
             return
@@ -844,14 +929,13 @@ class YTMApp(App):
         self.focus_next()
 
     def action_quit_only(self):
-        if self.client is not None:
-            self.client.close()
+        self._begin_shutdown()
         self.exit()
 
     def action_quit_and_shutdown(self):
         if self.client is not None:
             self._request("shutdown")
-            self.client.close()
+        self._begin_shutdown()
         self.exit()
 
 

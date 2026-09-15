@@ -6,17 +6,23 @@ rather than depending on the pytest-asyncio plugin.
 """
 
 import asyncio
+import threading
 
 from textual.widgets import DataTable, Static
 
+from ytm.tui.app import LyricsFetched, YTMApp
 from ytm.tui.backend import BackendError as ClientError
-from ytm.tui.app import YTMApp
-from ytm.tui.lyrics import LyricsPane, NO_LYRICS_TEXT
+from ytm.tui.lyrics import (
+    ACTIVE_MARKER,
+    ACTIVE_STYLE,
+    INACTIVE_STYLE,
+    NO_LYRICS_TEXT,
+    LyricsPane,
+)
 from ytm.tui.nowplaying import NowPlaying, queue_summary_layout, split_queue
 from ytm.tui.playlists import PlaylistsPane
 from ytm.tui.queue import QueuePane
 from ytm.tui.search import SearchPane
-
 
 TRACK = {
     "video_id": "abc123",
@@ -375,6 +381,7 @@ def test_client_error_on_construction_renders_and_does_not_crash():
 
 def test_playlists_pane_renders_local_and_remote_markers():
     from textual.widgets import DataTable as _DT
+
     from ytm.tui.playlists import PlaylistsPane
 
     async def scenario():
@@ -545,9 +552,6 @@ def test_slow_lyrics_fetch_does_not_block_ui():
     processing input (e.g. volume keys) while a slow request is in
     flight."""
 
-    import threading
-    import time
-
     release = threading.Event()
 
     def slow_lyrics(_args):
@@ -631,14 +635,16 @@ def test_dark_and_light_theme_resolve_to_different_styles():
     async def scenario():
         stub = StubClient()
         dark_app = YTMApp(client=stub, config=_config_with_keys())
-        async with dark_app.run_test():
+        async with dark_app.run_test() as pilot:
+            await settle(pilot)
             dark_primary = dark_app.get_theme(dark_app.theme).primary
 
         light_config = _config_with_keys()
         light_config["ui"]["theme"] = "light"
         light_stub = StubClient()
         light_app = YTMApp(client=light_stub, config=light_config)
-        async with light_app.run_test():
+        async with light_app.run_test() as pilot:
+            await settle(pilot)
             light_primary = light_app.get_theme(light_app.theme).primary
 
         assert dark_app.theme == "textual-dark"
@@ -877,6 +883,7 @@ def test_s_and_e_are_plain_letters_inside_the_search_box():
 
 def _png_bytes():
     import io
+
     from PIL import Image
 
     buf = io.BytesIO()
@@ -933,8 +940,8 @@ def test_failed_cover_fetch_is_dropped_quietly():
 
 
 def test_art_off_hides_the_pane_and_fetches_nothing():
-    from ytm.tui.nowplaying import AlbumArt
     from ytm import config as config_mod
+    from ytm.tui.nowplaying import AlbumArt
 
     async def scenario():
         stub = StubClient()
@@ -1129,7 +1136,6 @@ def test_listener_drop_shows_a_banner_and_reconnects():
             self.listens += 1
             if self.listens == 1:
                 raise ClientError("lost the connection to mpv")
-            return  # second attempt "runs" and returns
 
         def close(self):
             self._closed = True
@@ -1589,7 +1595,8 @@ def test_tui_toasts_when_a_newer_version_exists(monkeypatch):
 
 
 def test_tui_auto_update_runs_the_upgrade(monkeypatch):
-    from ytm import config as config_mod, update as update_mod
+    from ytm import config as config_mod
+    from ytm import update as update_mod
 
     monkeypatch.setattr(update_mod, "check", lambda **k: {
         "installed": "0.2.0", "latest": "0.3.0", "newer": True, "checked_at": 0, "cached": False})
@@ -1826,3 +1833,510 @@ def test_ytm_tui_log_records_keys_focus_requests_and_errors(tmp_path, monkeypatc
     # a second run starts the file over: it is always the last run
     asyncio.run(scenario())
     assert log.read_text().count("started, size") == 1
+
+
+def test_synced_lyrics_follow_position_seeks_gaps_and_track_clear():
+    async def scenario():
+        stub = LyricsStubClient(lyrics_response={"lyrics": [
+            {"text": "[literal] first", "start_time": 1000, "end_time": 2500},
+            {"text": "second", "start_time": 3000, "end_time": 5000},
+        ]})
+        app = YTMApp(client=stub)
+        async with app.run_test(size=(120, 40)) as pilot:
+            stub.push("track_changed", TRACK)
+            await settle(pilot)
+            pane = app.query_one(LyricsPane)
+            assert pane._active is None
+            for position, expected in [(1.2, 0), (3.1, 1), (1.4, 0), (2.7, None)]:
+                stub.push("position", {"video_id": "abc123", "position": position})
+                await settle(pilot)
+                assert pane._active == expected
+            assert "[literal]" in str(app.query_one("#lyrics-content").render())
+            stub.push("track_changed", None)
+            await settle(pilot)
+            assert not pane._lines
+            assert NO_LYRICS_TEXT in str(app.query_one("#lyrics-content").render())
+    asyncio.run(scenario())
+
+
+def test_lyrics_arriving_after_position_use_latest_time():
+    async def scenario():
+        app = YTMApp(client=StubClient())
+        async with app.run_test(size=(120, 40)):
+            pane = app.query_one(LyricsPane)
+            pane.set_position(4)
+            pane.set_lyrics([{"text": "late", "start_time": 3000, "end_time": 5000}])
+            assert pane._active == 0
+            pane.set_lyrics("plain [words]")
+            assert pane._active is None
+            assert not pane._lines
+    asyncio.run(scenario())
+
+
+# -- lifecycle: completions that outlive the UI (LYR-01) ----------------------
+
+
+class HoldingClient(LyricsStubClient):
+    """A stub that blocks the named commands on an Event until released,
+    then answers (or raises, for those in `fail`)."""
+
+    def __init__(self, hold, fail=(), **kwargs):
+        super().__init__(**kwargs)
+        self.release = threading.Event()
+        self._hold = set(hold)
+        self._fail = set(fail)
+        self.started = threading.Event()
+
+    def request(self, cmd, args=None):
+        if cmd in self._hold:
+            self.calls.append((cmd, args))
+            self.started.set()
+            self.release.wait(timeout=5)
+            if cmd in self._fail:
+                raise ClientError(f"{cmd} failed late")
+            if cmd == "lyrics":
+                return self._lyrics_response
+        return super().request(cmd, args)
+
+
+def _spy_widget_access(app):
+    """Count the banner/lyrics updates the app performs after the spy is set."""
+    counts = {"error": 0, "clear": 0}
+    real_show, real_clear = app._show_error, app._clear_error
+
+    def show(message):
+        counts["error"] += 1
+        real_show(message)
+
+    def clear():
+        counts["clear"] += 1
+        real_clear()
+
+    app._show_error, app._clear_error = show, clear
+    return counts
+
+
+STARTUP_REQUESTS = {"queue_get", "playlist_list", "status"}
+
+
+def _exit_with_pending_startup_request(fail):
+    async def scenario():
+        # every startup request is held, so nothing can legitimately clear
+        # the banner between installing the spy and leaving the context
+        stub = HoldingClient(hold=STARTUP_REQUESTS, fail=STARTUP_REQUESTS if fail else ())
+        app = YTMApp(client=stub)
+        counts = None
+        try:
+            async with app.run_test():
+                deadline = asyncio.get_running_loop().time() + 5
+                while len([c for c in stub.calls if c[0] in STARTUP_REQUESTS]) < 3:
+                    assert asyncio.get_running_loop().time() < deadline, stub.calls
+                    await asyncio.sleep(0.01)
+                counts = _spy_widget_access(app)
+                # leave with the request still held: the framework begins
+                # teardown, then the request completes into a dead screen
+            stub.release.set()
+            await asyncio.sleep(0.2)
+        finally:
+            stub.release.set()
+        assert counts == {"error": 0, "clear": 0}
+        assert not app._accepts_results()
+        assert stub.closed
+
+    asyncio.run(scenario())
+
+
+def test_exit_with_a_pending_request_that_succeeds_touches_no_widget():
+    _exit_with_pending_startup_request(fail=False)
+
+
+def test_exit_with_a_pending_request_that_fails_touches_no_widget():
+    _exit_with_pending_startup_request(fail=True)
+
+
+def test_quit_key_with_a_pending_lyrics_fetch_drops_the_late_result():
+    async def scenario():
+        stub = HoldingClient(hold={"lyrics"}, lyrics_response={"lyrics": "late words", "source": None})
+        app = YTMApp(client=stub)
+        try:
+            async with app.run_test() as pilot:
+                await settle(pilot)
+                app.query_one("#queue-table", DataTable).focus()
+                stub.push("track_changed", TRACK)
+                await asyncio.get_running_loop().run_in_executor(None, stub.started.wait, 5)
+                counts = _spy_widget_access(app)
+                await pilot.press("e")
+                assert not app._accepts_results()
+                stub.release.set()
+                await pilot.pause(0.2)
+            await asyncio.sleep(0.1)
+        finally:
+            stub.release.set()
+        assert counts == {"error": 0, "clear": 0}
+        assert stub.closed
+        assert app._lyrics_pending is None
+
+    asyncio.run(scenario())
+
+
+def test_errors_are_still_shown_while_the_app_runs():
+    async def scenario():
+        stub = RaisingClient()
+        app = YTMApp(client=stub)
+        async with app.run_test() as pilot:
+            await _search(pilot)
+            banner = app.query_one("#error-banner", Static)
+            assert banner.display
+            assert "auth expired" in str(banner.render())
+            assert app._accepts_results()
+
+    asyncio.run(scenario())
+
+
+# -- request generations (LYR-03) ---------------------------------------------
+
+
+def test_returning_to_a_track_drops_the_first_requests_late_error():
+    """A (slow, then fails) -> B -> A: the second A request owns the pane."""
+    first_a = threading.Event()
+    seen = []
+
+    class Client(LyricsStubClient):
+        def request(self, cmd, args=None):
+            if cmd != "lyrics":
+                return super().request(cmd, args)
+            self.calls.append((cmd, args))
+            seen.append(args["video_id"])
+            if seen.count("abc123") == 1 and args["video_id"] == "abc123":
+                first_a.wait(timeout=5)
+                raise ClientError("old failure")
+            return {"lyrics": f"words of {args['video_id']}", "source": None}
+
+    async def scenario():
+        stub = Client()
+        app = YTMApp(client=stub)
+        try:
+            async with app.run_test() as pilot:
+                await settle(pilot)
+                stub.push("track_changed", TRACK)
+                await pilot.pause(0.05)
+                stub.push("track_changed", {"video_id": "bbb", "title": "B"})
+                await pilot.pause(0.05)
+                stub.push("track_changed", TRACK)
+                await pilot.pause(0.05)
+                first_a.set()
+                await pilot.pause(0.3)
+                content = str(app.query_one("#lyrics-content").render())
+                assert "old failure" not in content
+                assert "words of abc123" in content
+                # the skipped B was never asked for: one worker, newest pending wins
+                assert seen == ["abc123", "abc123"]
+        finally:
+            first_a.set()
+
+    asyncio.run(scenario())
+
+
+def test_obsolete_lyrics_results_cannot_change_the_pane():
+    async def scenario():
+        stub = LyricsStubClient(lyrics_response={"lyrics": [
+            {"text": "one", "start_time": 1000, "end_time": 2000},
+        ], "source": None})
+        app = YTMApp(client=stub)
+        async with app.run_test(size=(120, 40)) as pilot:
+            await settle(pilot)
+            stub.push("track_changed", TRACK)
+            await settle(pilot)
+            stub.push("position", {"video_id": "abc123", "position": 1.5})
+            await settle(pilot)
+            pane = app.query_one(LyricsPane)
+            assert pane._active == 0
+            current = app._lyrics_generation
+
+            def snapshot():
+                return (str(app.query_one("#lyrics-title").render()), pane.lyrics_text().plain, pane._active)
+
+            before = snapshot()
+            # an old error for the same song, and an old success after a newer error
+            app.post_message(LyricsFetched(current - 1, "abc123", None, "old failure"))
+            await settle(pilot)
+            assert snapshot() == before
+            stub._lyrics_error = "fresh failure"
+            stub.push("track_changed", TRACK)
+            await settle(pilot)
+            assert "fresh failure" in str(app.query_one("#lyrics-content").render())
+            app.post_message(LyricsFetched(current, "abc123", {"lyrics": "stale success"}, None))
+            await settle(pilot)
+            assert "fresh failure" in str(app.query_one("#lyrics-content").render())
+            # A -> B: A's result arrives for the wrong song
+            stub.push("track_changed", {"video_id": "bbb", "title": "B"})
+            await settle(pilot)
+            app.post_message(LyricsFetched(app._lyrics_generation, "abc123", {"lyrics": "for A"}, None))
+            await settle(pilot)
+            assert "for A" not in str(app.query_one("#lyrics-content").render())
+            # A -> nothing playing
+            stub.push("track_changed", None)
+            await settle(pilot)
+            app.post_message(LyricsFetched(app._lyrics_generation - 1, "bbb", {"lyrics": "for B"}, None))
+            await settle(pilot)
+            assert NO_LYRICS_TEXT in str(app.query_one("#lyrics-content").render())
+
+    asyncio.run(scenario())
+
+
+# -- visible sync behaviour: spans, boundaries, viewport (LYR-04/05/07) -------
+
+
+def _timed(lines):
+    return {"lyrics": [{"text": text, "start_time": start, "end_time": end} for text, start, end in lines],
+            "source": None}
+
+
+def _active_visible(pane):
+    """Whether the highlighted line's rows lie inside the scroll viewport."""
+    scroll = pane.query_one("#lyrics-scroll")
+    first, last = pane.active_row_span()
+    top = scroll.scroll_offset.y
+    return top <= first and last < top + scroll.content_size.height
+
+
+def test_rendered_spans_mark_only_the_active_line():
+    async def scenario():
+        stub = LyricsStubClient(lyrics_response=_timed([("first", 1000, 2500), ("second", 3000, 5000)]))
+        app = YTMApp(client=stub)
+        async with app.run_test(size=(120, 40)) as pilot:
+            await settle(pilot)
+            stub.push("track_changed", TRACK)
+            await settle(pilot)
+            pane = app.query_one(LyricsPane)
+            stub.push("position", {"video_id": "abc123", "position": 3.2})
+            await settle(pilot)
+            text = pane.lyrics_text()
+            styles = [str(span.style) for span in text.spans if span.end - span.start > 1]
+            assert styles == [INACTIVE_STYLE, ACTIVE_STYLE]
+            assert text.plain.splitlines() == ["  first", ACTIVE_MARKER + "second"]
+            # what the Static actually shows is that same Text
+            shown = app.query_one("#lyrics-content").render()
+            assert shown.plain == text.plain
+            # Textual's Style keeps the attributes (its str() drops `reverse`)
+            assert [(bool(span.style.dim), bool(span.style.bold), bool(span.style.reverse)) for span in shown.spans] == [
+                (True, False, False), (False, True, True)]
+
+    asyncio.run(scenario())
+
+
+def test_half_open_interval_boundaries():
+    async def scenario():
+        stub = LyricsStubClient(lyrics_response=_timed([("first", 1000, 2500)]))
+        app = YTMApp(client=stub)
+        async with app.run_test(size=(120, 40)) as pilot:
+            await settle(pilot)
+            stub.push("track_changed", TRACK)
+            await settle(pilot)
+            pane = app.query_one(LyricsPane)
+            for position, expected in [(0.999, None), (1.0, 0), (2.499, 0), (2.5, None)]:
+                stub.push("position", {"video_id": "abc123", "position": position})
+                await settle(pilot)
+                assert pane._active == expected, position
+
+    asyncio.run(scenario())
+
+
+def test_positions_of_another_video_and_pauses_leave_the_highlight_alone():
+    async def scenario():
+        stub = LyricsStubClient(lyrics_response=_timed([("first", 1000, 2500), ("second", 3000, 5000)]))
+        app = YTMApp(client=stub)
+        async with app.run_test(size=(120, 40)) as pilot:
+            await settle(pilot)
+            stub.push("track_changed", TRACK)
+            await settle(pilot)
+            pane = app.query_one(LyricsPane)
+            stub.push("position", {"video_id": "abc123", "position": 1.5})
+            await settle(pilot)
+            stub.push("position", {"video_id": "other", "position": 3.5})
+            await settle(pilot)
+            assert pane._active == 0 and pane._position == 1.5
+            stub.push("state_changed", {"paused": True, "volume": 50})
+            await pilot.pause(0.2)
+            assert pane._active == 0
+
+    asyncio.run(scenario())
+
+
+def test_lyrics_arriving_while_a_fetch_is_held_highlight_the_current_position():
+    stub = HoldingClient(hold={"lyrics"}, lyrics_response=_timed([("first", 1000, 2500), ("second", 3000, 5000)]))
+
+    async def scenario():
+        app = YTMApp(client=stub)
+        try:
+            async with app.run_test(size=(120, 40)) as pilot:
+                await settle(pilot)
+                stub.push("track_changed", TRACK)
+                await asyncio.get_running_loop().run_in_executor(None, stub.started.wait, 5)
+                stub.push("position", {"video_id": "abc123", "position": 3.5})
+                await pilot.pause(0.05)
+                pane = app.query_one(LyricsPane)
+                assert pane._active is None
+                stub.release.set()
+                await pilot.pause(0.3)
+                assert pane._active == 1
+                assert [str(span.style) for span in pane.lyrics_text().spans] == [INACTIVE_STYLE, ACTIVE_STYLE]
+        finally:
+            stub.release.set()
+
+    asyncio.run(scenario())
+
+
+LONG_LINES = [(f"long line {i} " + "la " * 12, i * 1000, i * 1000 + 900) for i in range(40)]
+WIDE_LINES = [(f"{i} " + "ラララ " * 8, i * 1000, i * 1000 + 900) for i in range(40)]
+
+
+def _run_resize_scenario(lines, sizes):
+    async def scenario():
+        stub = LyricsStubClient(lyrics_response=_timed(lines))
+        app = YTMApp(client=stub)
+        async with app.run_test(size=sizes[0]) as pilot:
+            await settle(pilot)
+            stub.push("track_changed", TRACK)
+            await settle(pilot)
+            pane = app.query_one(LyricsPane)
+            scroll = pane.query_one("#lyrics-scroll")
+            # a forward seek to a late line, then back: both must be in view
+            for position in (30.1, 12.2):
+                stub.push("position", {"video_id": "abc123", "position": position})
+                await settle(pilot)
+                assert scroll.scroll_offset.y > 0
+                assert _active_visible(pane), position
+            # paused: no further position events; only the terminal changes
+            for size in sizes[1:]:
+                await pilot.resize_terminal(*size)
+                await settle(pilot, 0.1)
+                if pane.display:
+                    assert scroll.content_size.height > 0
+                    assert _active_visible(pane), size
+                assert pane._active == 12
+
+    asyncio.run(scenario())
+
+
+def test_resizing_narrower_and_wider_keeps_the_active_line_visible():
+    _run_resize_scenario(LONG_LINES, [(160, 30), (110, 30), (200, 26), (120, 40)])
+
+
+def test_resizing_with_wide_glyphs_keeps_the_active_line_visible():
+    _run_resize_scenario(WIDE_LINES, [(160, 30), (110, 30), (200, 30)])
+
+
+def test_leaving_compact_mode_recenters_with_the_real_width():
+    _run_resize_scenario(LONG_LINES, [(160, 30), (90, 30), (160, 30), (110, 30)])
+
+
+def test_malformed_timing_records_cannot_crash_playback_handlers():
+    async def scenario():
+        stub = LyricsStubClient(lyrics_response={"lyrics": [
+            {"text": "missing end", "start_time": 1000},
+            {"text": "fine", "start_time": 2000, "end_time": 3000},
+            {"text": None, "start_time": 3000, "end_time": 4000},
+        ], "source": None})
+        app = YTMApp(client=stub)
+        async with app.run_test(size=(120, 40)) as pilot:
+            await settle(pilot)
+            stub.push("track_changed", TRACK)
+            await settle(pilot)
+            pane = app.query_one(LyricsPane)
+            for position, expected in [(0, None), (1.5, None), (2.0, 0), (3.5, None)]:
+                stub.push("position", {"video_id": "abc123", "position": position})
+                await settle(pilot)
+                assert pane._active == expected
+            assert not app._exit
+            # nothing valid at all reads as no lyrics, and the title is plain
+            stub._lyrics_response = {"lyrics": [{"text": "x", "start_time": 5, "end_time": 5}], "source": None}
+            stub.push("track_changed", {"video_id": "bbb", "title": "B"})
+            await settle(pilot)
+            assert NO_LYRICS_TEXT in str(app.query_one("#lyrics-content").render())
+            assert str(app.query_one("#lyrics-title").render()) == "LYRICS"
+
+    asyncio.run(scenario())
+
+
+# -- bounded background work (LYR-06) -----------------------------------------
+
+
+def test_rapid_track_changes_use_one_fetch_at_a_time_and_skip_stale_tracks():
+    release = threading.Event()
+    lock = threading.Lock()
+    active = {"now": 0, "max": 0}
+
+    class Client(LyricsStubClient):
+        def request(self, cmd, args=None):
+            if cmd != "lyrics":
+                return super().request(cmd, args)
+            self.calls.append((cmd, args))
+            with lock:
+                active["now"] += 1
+                active["max"] = max(active["max"], active["now"])
+            try:
+                release.wait(timeout=5)
+            finally:
+                with lock:
+                    active["now"] -= 1
+            return {"lyrics": f"words of {args['video_id']}", "source": None}
+
+    async def scenario():
+        stub = Client()
+        app = YTMApp(client=stub)
+        try:
+            async with app.run_test() as pilot:
+                await settle(pilot)
+                app.query_one("#queue-table", DataTable).focus()
+                for i in range(6):
+                    stub.push("track_changed", {"video_id": f"v{i}", "title": f"T{i}"})
+                    await pilot.pause(0.02)
+                # transport keys stay responsive while the fetch is held
+                start_volume = app._volume
+                await pilot.press("plus")
+                await settle(pilot)
+                assert app._volume == start_volume + 5
+                release.set()
+                await pilot.pause(0.4)
+                asked = [c[1]["video_id"] for c in stub.calls if c[0] == "lyrics"]
+                assert asked == ["v0", "v5"]
+                assert active["max"] == 1
+                assert "words of v5" in str(app.query_one("#lyrics-content").render())
+                assert app._lyrics_thread is None or not app._lyrics_thread.is_alive() or app._lyrics_pending is None
+        finally:
+            release.set()
+
+    asyncio.run(scenario())
+
+
+# -- clock updates (LYR-09) ---------------------------------------------------
+
+
+def test_subsecond_positions_reach_lyrics_but_rewrite_the_clock_once_per_second():
+    async def scenario():
+        stub = LyricsStubClient(lyrics_response=_timed([("first", 3000, 3600), ("second", 3600, 5000)]))
+        app = YTMApp(client=stub)
+        async with app.run_test(size=(120, 40)) as pilot:
+            await settle(pilot)
+            stub.push("track_changed", TRACK)
+            await settle(pilot)
+            clock = app.query_one("#now-playing-time", Static)
+            writes = []
+            real_update = clock.update
+            clock.update = lambda text: (writes.append(str(text)), real_update(text))
+            pane = app.query_one(LyricsPane)
+            seen = []
+            for position in (3.1, 3.5, 3.9, 4.0):
+                stub.push("position", {"video_id": "abc123", "position": position, "duration_seconds": 312})
+                await settle(pilot)
+                seen.append(pane._active)
+            assert seen == [0, 0, 1, 1]
+            assert writes == ["0:03 / 5:12", "0:04 / 5:12"]
+            # a backward seek and a duration-only change both redraw
+            stub.push("position", {"video_id": "abc123", "position": 1.0, "duration_seconds": 312})
+            stub.push("position", {"video_id": "abc123", "position": 1.0, "duration_seconds": 400})
+            await settle(pilot)
+            assert writes[-2:] == ["0:01 / 5:12", "0:01 / 6:40"]
+
+    asyncio.run(scenario())
