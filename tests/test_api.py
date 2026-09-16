@@ -262,9 +262,10 @@ class ScriptedLyricsClient:
 
     def get_lyrics(self, browse_id, timestamps=False):
         self.calls.append(bool(timestamps))
-        if isinstance(self._timed, Exception) and timestamps:
-            raise self._timed
-        return self._timed if timestamps else self._plain
+        result = self._timed if timestamps else self._plain
+        if isinstance(result, Exception):
+            raise result
+        return result
 
 
 PLAIN = {"lyrics": "plain works", "source": "plain source", "hasTimestamps": False}
@@ -338,6 +339,32 @@ def test_other_timed_endpoint_errors_propagate_unchanged():
     yt = ScriptedLyricsClient(timed=YTMusicServerError("Server returned HTTP 500: boom"), plain=PLAIN)
     with pytest.raises(YTMusicServerError):
         music.get_lyrics("v", yt=yt, timestamps=True)
+
+
+def test_timed_bad_request_falls_back_to_plain_exactly_once():
+    from ytm import music
+
+    error = YTMusicServerError(
+        "Server returned HTTP 400: Bad Request.\nRequest contains an invalid argument."
+    )
+    yt = ScriptedLyricsClient(timed=error, plain=PLAIN)
+    assert music.get_lyrics("v", yt=yt, timestamps=True) == ("plain works", "plain source")
+    assert yt.calls == [True, False]
+
+
+@pytest.mark.parametrize("status", [400, 401, 403, 500])
+def test_timed_bad_request_does_not_hide_plain_fallback_errors(status):
+    from ytm import music
+
+    error = YTMusicServerError(f"Server returned HTTP {status}: failed")
+    yt = ScriptedLyricsClient(
+        timed=YTMusicServerError("Server returned HTTP 400: Bad Request."),
+        plain=error,
+    )
+    expected = auth.AuthExpired if status in (401, 403) else YTMusicServerError
+    with pytest.raises(expected):
+        music.get_lyrics("v", yt=yt, timestamps=True)
+    assert yt.calls == [True, False]
 
 
 def test_plain_cli_lyrics_contract_is_text_not_records():
