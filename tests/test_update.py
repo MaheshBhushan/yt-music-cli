@@ -167,6 +167,30 @@ def test_upgrade_runs_each_command_and_stops_on_failure():
     assert not ok and "git pull" in text
 
 
+@pytest.mark.parametrize("kind", ["pip", "pipx", "uv"])
+def test_windows_upgrade_never_runs_an_installer_over_the_live_launcher(monkeypatch, kind):
+    monkeypatch.setattr(update.sys, "platform", "win32")
+    monkeypatch.setattr(update.sys, "executable", r"C:\Program Files\Python314\python.exe")
+    monkeypatch.setattr(update, "_has_module", lambda name: True)
+    ran = []
+    def run(command, **kwargs):
+        ran.append(command)
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+    ok, text = update.upgrade(kind=kind, target="0.9.0", run=run)
+    assert not ok
+    assert not ran
+    assert "Close all ytm" in text
+    assert "PowerShell" in text
+    if kind == "pip":
+        assert "& 'C:\\Program Files\\Python314\\python.exe' '-m' 'pip'" in text
+        assert "'ytm==0.9.0'" in text
+    elif kind == "pipx":
+        assert "'upgrade'" in text and "'runpip'" in text
+    else:
+        assert "'tool' 'upgrade'" in text
+
+
 def test_cli_update_check_reports(monkeypatch, capsys):
     monkeypatch.setattr(update, "check", lambda force=False, **k: {
         "installed": "0.2.0", "latest": "0.3.0", "newer": True, "checked_at": 0, "cached": False})

@@ -168,6 +168,30 @@ def test_windows_chromium_decrypt_failure_gets_the_app_bound_hint(tmp_path, monk
     assert "--from-browser firefox" in message and "'ytm auth' signs in with Google" in message
 
 
+@pytest.mark.parametrize("reason", ["Failed to decrypt with DPAPI", "FAILED TO DECRYPT WITH DPAPI"])
+def test_windows_dpapi_failure_gets_browser_alternatives(tmp_path, monkeypatch, reason):
+    path = tmp_path / "auth.json"
+    monkeypatch.setattr(auth.sys, "platform", "win32")
+
+    def fake_extract(name, profile=None, logger=None):
+        raise RuntimeError(reason)
+
+    monkeypatch.setattr(auth, "extract_cookies_from_browser", fake_extract)
+    with pytest.raises(auth.AuthError) as excinfo:
+        auth.from_browser("chrome", path=path, client_factory=_fake_client_ok, config=_config())
+    message = str(excinfo.value)
+    assert reason in message
+    assert "--from-browser firefox" in message
+    assert "'ytm auth'" in message
+    assert not path.exists()
+
+
+def test_cookie_copy_failure_is_not_classified_as_app_bound(monkeypatch):
+    monkeypatch.setattr(auth.sys, "platform", "win32")
+    assert auth._windows_chromium_hint({"edge": "Could not copy Chrome cookie database"}) == ""
+    assert auth._windows_chromium_hint({"firefox": "Failed to decrypt with DPAPI"}) == ""
+
+
 def test_no_windows_hint_on_linux_or_without_decrypt_failures(tmp_path, monkeypatch):
     path = tmp_path / "auth.json"
     monkeypatch.setattr(auth, "extract_cookies_from_browser", lambda name, profile=None, logger=None: _jar())
