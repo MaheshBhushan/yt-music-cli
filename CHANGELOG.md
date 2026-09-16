@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.9.2 — 2026-09-16
 
 - `ytm auth` now uses the bundled Desktop OAuth client and opens Google sign-in without asking for client credentials. Explicit and previously saved client configurations remain supported.
 
