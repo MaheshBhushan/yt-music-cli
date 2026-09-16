@@ -13,7 +13,7 @@ import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
-from ytmusicapi.exceptions import YTMusicError
+from ytmusicapi.exceptions import YTMusicError, YTMusicServerError
 
 from ytm import auth as auth_mod
 from ytm.auth import (
@@ -414,9 +414,9 @@ def get_lyrics(video_id, yt=None, *, timestamps=False):
     request (the track has no timing) is kept as is, without a second call.
 
     Exception policy: an expired session raises AuthExpired so `_refreshing`
-    can retry after a refresh; any other provider error propagates. A timed
-    request that fails is not papered over with a plain retry, because that
-    would also hide programmer errors and a broken account.
+    can retry after a refresh. HTTP 400 from the timed endpoint falls back
+    to plain lyrics, since the mobile request may be rejected even when
+    plain lyrics work. All other provider errors propagate.
     """
     # Timed requests temporarily switch the client to mobile. Keep that
     # mutation isolated from concurrent searches on the shared client.
@@ -428,7 +428,13 @@ def get_lyrics(video_id, yt=None, *, timestamps=False):
             return None, None
         if not timestamps:
             return _usable_lyrics(yt.get_lyrics(browse_id))
-        lyrics, source = _usable_lyrics(yt.get_lyrics(browse_id, timestamps=True))
+        try:
+            result = yt.get_lyrics(browse_id, timestamps=True)
+        except YTMusicServerError as exc:
+            if "HTTP 400:" not in str(exc):
+                raise
+            result = None
+        lyrics, source = _usable_lyrics(result)
         if lyrics is None:
             lyrics, source = _usable_lyrics(yt.get_lyrics(browse_id))
     except YTMusicError as exc:
