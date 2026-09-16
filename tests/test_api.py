@@ -289,6 +289,46 @@ def test_unusable_timed_lyrics_fall_back_to_plain_exactly_once(timed):
     assert yt.calls == [True, False]
 
 
+def test_timed_request_goes_out_without_the_session_cookie():
+    """Some accounts get HTTP 400 for the mobile lyrics request only while
+    the browser cookies are attached (#46). The timed request drops them;
+    the watch lookup and the plain fallback keep them."""
+    from requests.structures import CaseInsensitiveDict
+
+    from ytm import music
+
+    class CookieAwareClient(ScriptedLyricsClient):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.base_headers = CaseInsensitiveDict({"Cookie": "SID=1", "origin": "o"})
+            self.cookie_seen = []
+
+        def get_watch_playlist(self, **kwargs):
+            self.cookie_seen.append(("watch", "cookie" in self.base_headers))
+            return super().get_watch_playlist(**kwargs)
+
+        def get_lyrics(self, browse_id, timestamps=False):
+            self.cookie_seen.append(("lyrics", bool(timestamps), "cookie" in self.base_headers))
+            return super().get_lyrics(browse_id, timestamps)
+
+    lines = [{"text": "a", "start_time": 0, "end_time": 1000}]
+    yt = CookieAwareClient(timed=_timed(lines), plain=PLAIN)
+    got, _ = music.get_lyrics("v", yt=yt, timestamps=True)
+    assert [line["text"] for line in got] == ["a"]
+    assert yt.cookie_seen == [("watch", True), ("lyrics", True, False)]
+    assert yt.base_headers["Cookie"] == "SID=1"
+
+    yt = CookieAwareClient(timed=None, plain=PLAIN)
+    assert music.get_lyrics("v", yt=yt, timestamps=True) == ("plain works", "plain source")
+    assert yt.cookie_seen == [("watch", True), ("lyrics", True, False), ("lyrics", False, True)]
+
+    # a 400 mid-request must still restore the cookie for the plain retry
+    from ytmusicapi.exceptions import YTMusicServerError
+    yt = CookieAwareClient(timed=YTMusicServerError("Server returned HTTP 400: Bad Request."), plain=PLAIN)
+    assert music.get_lyrics("v", yt=yt, timestamps=True) == ("plain works", "plain source")
+    assert yt.cookie_seen[-1] == ("lyrics", False, True)
+
+
 def test_plain_answer_to_the_timed_request_is_kept_without_a_second_call():
     from ytm import music
 

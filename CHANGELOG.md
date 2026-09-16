@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Synced lyrics now load for accounts whose session cookies made YouTube reject the timed request with HTTP 400 (#46). The timed lookup is sent without the browser cookies; lyrics are not account-specific, and every other request keeps the full credentials.
+
 ## 0.9.2 — 2026-09-16
 
 - `ytm auth` now uses the bundled Desktop OAuth client and opens Google sign-in without asking for client credentials. Explicit and previously saved client configurations remain supported.
