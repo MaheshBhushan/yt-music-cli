@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.9.3 — 2026-09-16
 
 - Synced lyrics now load for accounts whose session cookies made YouTube reject the timed request with HTTP 400 (#46). The timed lookup is sent without the browser cookies; lyrics are not account-specific, and every other request keeps the full credentials.
 
