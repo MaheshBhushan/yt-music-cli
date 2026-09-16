@@ -4,6 +4,7 @@ Owns nothing YouTube Music already owns. Every function takes an optional
 `yt` client so tests inject a fake; results come back as the small Track and
 Playlist records the CLI needs and nothing more.
 """
+import contextlib
 import functools
 import json
 import os
@@ -398,6 +399,26 @@ def _usable_lyrics(result):
     return None, None
 
 
+@contextlib.contextmanager
+def _without_cookies(yt):
+    """Send the requests inside the block without the browser cookie header.
+
+    ytmusicapi keeps the stored browser headers in `base_headers` and adds
+    the SAPISID authorization on every request, so dropping the cookie
+    leaves the request signed but not tied to the session. Clients without
+    that attribute (OAuth, test doubles) are left alone.
+    """
+    headers = getattr(yt, "base_headers", None)
+    if headers is None or "cookie" not in headers:
+        yield
+        return
+    cookie = headers.pop("cookie")
+    try:
+        yield
+    finally:
+        headers["cookie"] = cookie
+
+
 @_refreshing
 def get_lyrics(video_id, yt=None, *, timestamps=False):
     """Fetch lyrics for a track, or None if it has none.
@@ -412,6 +433,13 @@ def get_lyrics(video_id, yt=None, *, timestamps=False):
     nothing but malformed records -- the plain endpoint is asked exactly
     once, and its own source is reported. A plain response to the timed
     request (the track has no timing) is kept as is, without a second call.
+
+    The timed request goes out without the browser's cookies (#46): for
+    some accounts YouTube answers the mobile-client request with HTTP 400
+    when the session cookies are attached, while the same request without
+    them, or signed out entirely, returns the timed lines. Lyrics do not
+    depend on the account, so nothing is lost. The watch lookup before it
+    and any plain fallback after it keep the full credentials.
 
     Exception policy: an expired session raises AuthExpired so `_refreshing`
     can retry after a refresh. HTTP 400 from the timed endpoint falls back
@@ -429,7 +457,8 @@ def get_lyrics(video_id, yt=None, *, timestamps=False):
         if not timestamps:
             return _usable_lyrics(yt.get_lyrics(browse_id))
         try:
-            result = yt.get_lyrics(browse_id, timestamps=True)
+            with _without_cookies(yt):
+                result = yt.get_lyrics(browse_id, timestamps=True)
         except YTMusicServerError as exc:
             if "HTTP 400:" not in str(exc):
                 raise
