@@ -28,6 +28,7 @@ def no_real_auth(monkeypatch, tmp_path):
     """Tests never read the developer's own ~/.config/ytm/auth.json: a stale
     one there would make the catalogue layer try a real browser refresh."""
     monkeypatch.setattr(auth, "AUTH_PATH", tmp_path / "auth" / "auth.json")
+    monkeypatch.setattr(auth, "DEFAULT_DESKTOP_CLIENT", tmp_path / "no-default-client.json")
     monkeypatch.setattr(auth, "COOKIES_PATH", tmp_path / "auth" / "cookies.txt")
 
 

@@ -19,6 +19,7 @@ from ytmusicapi.auth.oauth.token import OAuthToken
 from ytmusicapi.exceptions import YTMusicError
 
 AUTH_PATH = Path.home() / ".config" / "ytm" / "auth.json"
+DEFAULT_DESKTOP_CLIENT = Path(__file__).with_name("oauth_default_client.json")
 
 # Order in which --from-browser auto-detection tries local browser profiles.
 # On Windows, Firefox goes first: Chromium browsers there (Chrome 127+, and
@@ -279,6 +280,8 @@ def oauth_setup(
                            or os.environ.get("YTM_OAUTH_CLIENT_SECRET"))
     if not desktop_file and stored_desktop.exists() and not tv_client_given:
         desktop_file = stored_desktop
+    if not desktop_file and not tv_client_given and DEFAULT_DESKTOP_CLIENT.is_file():
+        desktop_file = DEFAULT_DESKTOP_CLIENT
     if desktop_file:
         return desktop_oauth_setup(desktop_file, path=path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -354,7 +357,7 @@ def desktop_oauth_setup(client_file, path=AUTH_PATH):
     print("Sign in on this computer and approve YouTube access for ytm.", flush=True)
     try:
         flow.run_local_server(
-            host="127.0.0.1", port=0, open_browser=False, timeout_seconds=900,
+            host="127.0.0.1", port=0, open_browser=True, timeout_seconds=900,
             authorization_prompt_message="Authorize ytm: {url}",
             success_message="Authorization received. You can return to ytm.",
             prompt="consent", access_type="offline",

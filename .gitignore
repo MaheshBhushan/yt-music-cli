@@ -9,3 +9,4 @@ __pycache__/
 .pytest_cache/
 cookies.txt
 oauth_desktop_client.json
+ytm/oauth_default_client.json

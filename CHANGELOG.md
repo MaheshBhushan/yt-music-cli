@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- `ytm auth` now uses the bundled Desktop OAuth client and opens Google sign-in without asking for client credentials. Explicit and previously saved client configurations remain supported.
+
 ## 0.9.1 — 2026-09-16
 
 - Timed lyrics rejected with HTTP 400 now fall back to plain lyrics once, preserving other error handling.
