@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.9.1 — 2026-09-16
+
+- Timed lyrics rejected with HTTP 400 now fall back to plain lyrics once, preserving other error handling.
+- Windows updates no longer invoke an installer over the running launcher, which could partially uninstall ytm. CLI and automatic TUI updates show a PowerShell command to run after closing all ytm instances.
+- Chromium cookie-import errors reporting a DPAPI decryption failure now include the Windows Firefox/OAuth guidance.
+
 ## 0.9.0 — 2026-09-15
 
 - The TUI lyrics pane follows the song. When YouTube Music has timestamps for a track the pane shows `LYRICS · SYNCED`, highlights the line being sung and keeps it in view, through pauses, seeks in either direction and terminal resizes. Tracks without timing data show plain lyrics as before, and `ytm lyrics` still prints plain text.
