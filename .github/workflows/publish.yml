@@ -30,6 +30,25 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install build
+      - name: Include the public Desktop OAuth client in release packages
+        env:
+          YTM_DESKTOP_OAUTH_CLIENT_JSON: ${{ secrets.YTM_DESKTOP_OAUTH_CLIENT_JSON }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          data = json.loads(os.environ["YTM_DESKTOP_OAUTH_CLIENT_JSON"])
+          client = data["installed"]
+          assert client["client_id"] and client["client_secret"], "Desktop OAuth client missing"
+          Path("ytm/oauth_default_client.json").write_text(json.dumps({"installed": {
+              "client_id": client["client_id"],
+              "client_secret": client["client_secret"],
+              "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+              "token_uri": "https://oauth2.googleapis.com/token",
+          }}), encoding="utf-8")
+          PY
       - run: python -m build
       - name: tag must match pyproject version
         run: |

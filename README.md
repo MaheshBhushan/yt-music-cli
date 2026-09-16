@@ -114,7 +114,9 @@ If the browser is signed in to more than one Google account, pass `ytm auth --fr
 
 ### OAuth
 
-Plain `ytm auth` stores a token that refreshes itself, so there are no cookies to go stale. YouTube removed ytmusicapi's shared OAuth client in November 2024, so you need your own from Google Cloud once:
+Plain `ytm auth` opens Google sign-in using ytm's bundled Desktop app client. Approve access in the browser on the same computer; no client ID, client secret, or Google Cloud project is needed. The token refreshes itself. If the browser does not open, use the printed link. Google may restrict access while the app is in Testing; the project owner must add your account as a test user in that case.
+
+Release packages include the default client at build time; source checkouts need their own client configuration. Existing saved Desktop clients and explicit flags/environment variables still take precedence. To use your own client, or set up the device-code flow for SSH/headless use:
 
 1. Go to <https://console.cloud.google.com/> and create or pick a project.
 2. **APIs & Services → Library**: enable **YouTube Data API v3**.
