@@ -579,7 +579,7 @@ def _windows_chromium_hint(reasons):
     if sys.platform != "win32":
         return ""
     if not any(
-        name in _CHROMIUM_BROWSERS and "decrypted" in (reason or "")
+        name in _CHROMIUM_BROWSERS and "decrypt" in (reason or "").lower()
         for name, reason in reasons.items()
     ):
         return ""

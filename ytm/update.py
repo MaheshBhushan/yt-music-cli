@@ -222,6 +222,9 @@ def upgrade(kind=None, yt_dlp=True, run=subprocess.run, target=None, verify=None
     upgrade only counts as done when a fresh interpreter reports that
     version, so a silent no-op from a stale index is reported as such
     instead of as "upgraded, restart ytm".
+
+    Windows launchers stay locked while running. Return an external update
+    command there instead of letting an installer partially uninstall ytm.
     """
     kind = kind or install_kind()
     commands = upgrade_commands(kind, yt_dlp=yt_dlp, target=target)
@@ -231,6 +234,17 @@ def upgrade(kind=None, yt_dlp=True, run=subprocess.run, target=None, verify=None
         return False, (
             f"this environment has neither pip nor uv; run: "
             f"uv pip install -U --python {sys.executable} {PACKAGE} yt-dlp"
+        )
+    if sys.platform == "win32":
+        # PowerShell needs the call operator for quoted executable paths.
+        # Single-quoted arguments also keep spaces and metacharacters literal.
+        external = "; ".join(
+            "& " + " ".join("'" + arg.replace("'", "''") + "'" for arg in command)
+            for command in commands
+        )
+        return False, (
+            "Close all ytm instances, then run this in PowerShell to update "
+            f"without locking ytm.exe: {external}"
         )
     output = []
     for command in commands:
