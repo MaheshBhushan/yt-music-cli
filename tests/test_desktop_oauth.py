@@ -39,10 +39,32 @@ def test_desktop_stores_refreshable_token_and_reuses_client(desktop, tmp_path):
     assert captured["options"]["autogenerate_code_verifier"] is True
     assert captured["config"]["installed"]["token_uri"] == "https://oauth2.googleapis.com/token"
     assert captured["run"]["host"] == "127.0.0.1"
+    assert captured["run"]["open_browser"] is True
     for name in ("auth.json", "oauth_client.json", "oauth_desktop_client.json"):
         assert (path.parent / name).stat().st_mode & 0o777 == 0o600
     source.unlink()
     auth.oauth_setup(path=path)
+
+
+def test_default_client_signs_in_without_credential_prompts(desktop, tmp_path, monkeypatch):
+    source, _, captured = desktop
+    monkeypatch.setattr(auth, "DEFAULT_DESKTOP_CLIENT", source)
+    for name in ("YTM_OAUTH_CLIENT_FILE", "YTM_OAUTH_CLIENT_ID", "YTM_OAUTH_CLIENT_SECRET"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setattr("builtins.input", lambda *a: pytest.fail("unexpected client prompt"))
+    path = tmp_path / "fresh" / "auth.json"
+    auth.oauth_setup(path=path)
+    assert path.exists()
+    assert captured["config"]["installed"]["client_id"] == "test-id"
+
+
+def test_explicit_desktop_client_overrides_default(desktop, tmp_path, monkeypatch):
+    source, _, captured = desktop
+    default = tmp_path / "default.json"
+    default.write_text(json.dumps({"installed": {"client_id": "default", "client_secret": "default"}}))
+    monkeypatch.setattr(auth, "DEFAULT_DESKTOP_CLIENT", default)
+    auth.oauth_setup(client_file=source, path=tmp_path / "fresh" / "auth.json")
+    assert captured["config"]["installed"]["client_id"] == "test-id"
 
 
 @pytest.mark.parametrize("missing", ["refresh_token", "access_token", "scope"])
@@ -83,6 +105,7 @@ def test_stored_token_is_exactly_what_ytmusicapi_accepts(desktop, tmp_path):
 
 def test_tv_flow_forgets_remembered_desktop_client(desktop, tmp_path, monkeypatch):
     source, _token, _ = desktop
+    monkeypatch.setattr(auth, "DEFAULT_DESKTOP_CLIENT", source)
     path = tmp_path / "auth.json"
     auth.oauth_setup(client_file=source, path=path)
     remembered = tmp_path / "oauth_desktop_client.json"
