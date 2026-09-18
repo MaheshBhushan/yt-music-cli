@@ -101,6 +101,22 @@ def test_like_rates_the_song():
     assert yt.calls == [("rate", "abc", "LIKE")]
 
 
+def test_unlike_clears_the_song_rating():
+    yt = FakeYT()
+    music.unlike("abc", yt=yt)
+    assert yt.calls == [("rate", "abc", "INDIFFERENT")]
+
+
+def test_track_normalises_liked_status():
+    t = music.to_track({
+        "videoId": "abc",
+        "title": "Song",
+        "artists": [{"name": "Band"}],
+        "likeStatus": "LIKE",
+    })
+    assert t.liked is True
+
+
 def test_watch_url():
     assert music.watch_url("abc") == "https://music.youtube.com/watch?v=abc"
 

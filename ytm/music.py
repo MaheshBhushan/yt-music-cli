@@ -260,6 +260,7 @@ class Track:
     duration_seconds: int
     #: URL of a small cover image, or "" when the result carried none
     thumbnail: str = ""
+    liked: bool = False
 
 
 #: cover art this wide is plenty for a terminal and keeps the fetch small
@@ -313,6 +314,20 @@ def _duration(result):
     return display, seconds
 
 
+def _liked(result):
+    """Whether a ytmusicapi result says the song is currently liked."""
+    if isinstance(result.get("liked"), bool):
+        return result["liked"]
+    if result.get("likeStatus") == "LIKE":
+        return True
+    feedback = result.get("feedbackTokens")
+    return (
+        isinstance(feedback, dict)
+        and bool(feedback.get("remove"))
+        and not feedback.get("add")
+    )
+
+
 def is_upload(result):
     """Whether a search result came from the user's personal uploads."""
     return (
@@ -334,6 +349,7 @@ def to_track(result):
         duration_seconds=seconds,
         # search results say "thumbnails", watch-playlist (radio) items "thumbnail"
         thumbnail=pick_thumbnail(result.get("thumbnails") or result.get("thumbnail")),
+        liked=_liked(result),
     )
 
 
@@ -592,6 +608,9 @@ def get_playlist(playlist_id, limit=100, yt=None):
         raise _signed_out_or_unexpected(exc, playlist_id, yt) from exc
     result = result or {}
     tracks = to_tracks(result.get("tracks") or [])
+    if playlist_id == "LM":
+        for track in tracks:
+            track.liked = True
     playlist = to_playlist(
         {
             "playlistId": result.get("id") or playlist_id,
@@ -727,6 +746,7 @@ def song(video_id, yt=None):
         duration=f"{seconds // 60}:{seconds % 60:02d}" if seconds else "0:00",
         duration_seconds=seconds,
         thumbnail=pick_thumbnail((details.get("thumbnail") or {}).get("thumbnails")),
+        liked=_liked(details),
     )
 
 
@@ -755,6 +775,16 @@ def like(video_id, yt=None):
         raise _wrap_ytmusic_error(exc) from exc
 
 
+@_refreshing
+def unlike(video_id, yt=None):
+    """Remove `video_id`'s liked rating in the user's account."""
+    yt = yt if yt is not None else shared_client()
+    try:
+        return yt.rate_song(video_id, "INDIFFERENT")
+    except YTMusicError as exc:
+        raise _wrap_ytmusic_error(exc) from exc
+
+
 def track_to_dict(track):
     return asdict(track)
 
@@ -771,4 +801,5 @@ def track_from_dict(data):
         duration=data.get("duration") or "",
         duration_seconds=int(data.get("duration_seconds") or 0),
         thumbnail=data.get("thumbnail") or "",
+        liked=bool(data.get("liked")),
     )
