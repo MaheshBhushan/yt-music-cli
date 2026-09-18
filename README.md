@@ -56,6 +56,7 @@ The TUI is `ytm` with no arguments. Results appear as you type; Enter plays the 
 | `q` `u` | Enqueue the selected song at the end / play it next |
 | `space` | Play / pause |
 | `n` `p` | Next / previous |
+| `!` | Like / unlike the current song |
 | `←` `→` | Seek 5 s |
 | `+` `-` | Volume (`=` also raises it). This is the system output volume, so it matches the tray and the media keys; see `[audio] control` |
 | `a` | Add the selected song to a playlist: `a`, pick the list with `↑` `↓`, `a` or `Enter` |
@@ -178,6 +179,7 @@ base_url = "http://127.0.0.1:4416"
 toggle = "space"
 next = "n"
 prev = "p"
+like = "!"
 search = "/"
 quit = "e"
 

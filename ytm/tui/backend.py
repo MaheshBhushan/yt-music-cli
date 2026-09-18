@@ -57,6 +57,7 @@ def _from_args(args):
         duration=args.get("duration") or "",
         duration_seconds=int(args.get("duration_seconds") or 0),
         thumbnail=args.get("thumbnail") or "",
+        liked=bool(args.get("liked")),
     )
 
 
@@ -158,6 +159,7 @@ class Backend:
             "playlist_add": self._playlist_add,
             "playlist_play": self._playlist_play,
             "playlist_create": self._playlist_create,
+            "like_set": self._like_set,
             "shutdown": self._shutdown,
         }
 
@@ -480,6 +482,25 @@ class Backend:
             (cache.playback_url(track.video_id), _label(track)) for track in tracks[1:]
         )
         return self._queue()
+
+    def _like_set(self, args):
+        video_id = args.get("video_id")
+        current = None
+        if not video_id:
+            current = self._current()
+            video_id = current.video_id if current else ""
+        if not video_id:
+            raise BackendError("nothing is playing")
+        liked = bool(args.get("liked"))
+        if liked:
+            music.like(video_id)
+        else:
+            music.unlike(video_id)
+        track = state.track_for(video_id) or current
+        if track is not None:
+            track.liked = liked
+            state.remember_tracks([track])
+        return {"video_id": video_id, "liked": liked}
 
     def _shutdown(self, args):
         self._player.quit()
