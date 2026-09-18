@@ -247,6 +247,7 @@ class NowPlaying(Vertical):
         self._entry_identity = None
         self._title = "nothing playing"
         self._paused = False
+        self._liked = False
         self._queue_tracks = []
         self._queue_index = None
 
@@ -274,7 +275,18 @@ class NowPlaying(Vertical):
 
     def _render_track_line(self):
         icon = "||" if self._paused else ">"
-        self.query_one("#now-playing-track", Static).update(f"{icon} {escape(self._title)}")
+        liked = " (liked)" if self._liked else ""
+        self.query_one("#now-playing-track", Static).update(
+            f"{icon} {escape(self._title)}{liked}"
+        )
+
+    @property
+    def current_video_id(self):
+        return self._video_id
+
+    @property
+    def current_liked(self):
+        return self._liked
 
     def on_click(self, event):
         bar = self.query_one("#now-playing-progress", ProgressBar)
@@ -297,6 +309,7 @@ class NowPlaying(Vertical):
         self._title = data.get("title") or "Unknown Title"
         self._video_id = data.get("video_id")
         self._entry_id = data.get("entry_id")
+        self._liked = bool(data.get("liked"))
         self._render_track_line()
         artist = data.get("artist") or ""
         album = data.get("album") or ""
@@ -369,6 +382,12 @@ class NowPlaying(Vertical):
 
     def set_volume(self, level):
         self.query_one("#now-playing-volume", Static).update(f"vol {int(level)}")
+
+    def set_liked(self, liked, video_id=None):
+        if video_id is not None and video_id != self._video_id:
+            return
+        self._liked = bool(liked)
+        self._render_track_line()
 
     def on_resize(self):
         self.call_after_refresh(self._refresh_queue_summary)

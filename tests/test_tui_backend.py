@@ -41,6 +41,11 @@ def test_play_then_status_reports_the_track(backend):
     assert s["index"] == 0 and s["count"] == 1
 
 
+def test_play_preserves_liked_status(backend):
+    backend.request("play", {"video_id": "abc", "title": "T", "liked": True})
+    assert backend.request("status")["current"]["liked"] is True
+
+
 def test_play_requires_a_video_id(backend):
     with pytest.raises(BackendError, match="video_id"):
         backend.request("play", {"title": "no id"})
@@ -289,6 +294,23 @@ def test_playlist_add_to_liked_music_likes_instead_of_inserting(backend, monkeyp
     # once the session has a count, an idempotent like is a zero net change
     out = backend.request("playlist_add", {"playlist_id": "LM", "video_ids": ["v1"]})
     assert out == {"playlist_id": "LM", "track_count": 10, "added": 0}
+
+
+def test_like_set_rates_song_and_remembers_status(backend, monkeypatch):
+    calls = []
+    monkeypatch.setattr(music, "like", lambda vid, yt=None: calls.append(("like", vid)))
+    monkeypatch.setattr(music, "unlike", lambda vid, yt=None: calls.append(("unlike", vid)))
+
+    backend.request("play", {"video_id": "v1", "title": "Song"})
+    assert backend.request("like_set", {"video_id": "v1", "liked": True}) == {
+        "video_id": "v1",
+        "liked": True,
+    }
+    assert backend.request("status")["current"]["liked"] is True
+
+    backend.request("like_set", {"video_id": "v1", "liked": False})
+    assert calls == [("like", "v1"), ("unlike", "v1")]
+    assert backend.request("status")["current"]["liked"] is False
 
 
 def test_playlist_add_to_episodes_for_later_is_refused(backend, monkeypatch):

@@ -80,6 +80,8 @@ class StubClient:
             return {"playlist_id": args["playlist_id"], "added": len(args["video_ids"]), "track_count": 413}
         if cmd == "playlist_create":
             return {"playlist_id": "PLnew", "title": args["title"], "local": False}
+        if cmd == "like_set":
+            return {"video_id": args["video_id"], "liked": args["liked"]}
         return {"paused": False, "volume": 60}
 
     def listen(self):
@@ -598,7 +600,7 @@ def test_slow_lyrics_fetch_does_not_block_ui():
 
 
 def _config_with_keys(**overrides):
-    keys = {"toggle": "space", "next": "n", "prev": "p", "search": "/", "quit": "q"}
+    keys = {"toggle": "space", "next": "n", "prev": "p", "like": "!", "search": "/", "quit": "q"}
     keys.update(overrides)
     return {
         "audio": {"control": "system", "volume": 70, "device": "auto"},
@@ -627,6 +629,47 @@ def test_custom_toggle_key_is_the_key_actually_bound():
             await settle(pilot)
             toggle_calls_after = [c for c in stub.calls if c[0] == "toggle"]
             assert len(toggle_calls_after) == 1
+
+    asyncio.run(scenario())
+
+
+def test_custom_like_key_toggles_current_song_in_background():
+    async def scenario():
+        stub = StubClient()
+        app = YTMApp(client=stub, config=_config_with_keys(like="b"))
+        async with app.run_test() as pilot:
+            await settle(pilot)
+            stub.push("track_changed", TRACK)
+            app.query_one("#queue-table", DataTable).focus()
+            await settle(pilot)
+
+            await pilot.press("b")
+            await settle(pilot)
+
+            assert ("like_set", {"video_id": "abc123", "liked": True}) in stub.calls
+            assert "(liked)" in str(app.query_one("#now-playing-track", Static).render())
+
+    asyncio.run(scenario())
+
+
+def test_now_playing_liked_marker_follows_track_and_toggle():
+    async def scenario():
+        stub = StubClient()
+        app = YTMApp(client=stub)
+        async with app.run_test() as pilot:
+            await settle(pilot)
+            stub.push("track_changed", dict(TRACK, liked=True))
+            await settle(pilot)
+            label = app.query_one("#now-playing-track", Static)
+            assert "(liked)" in str(label.render())
+
+            app.query_one("#queue-table", DataTable).focus()
+            await settle(pilot)
+            await pilot.press("!")
+            await settle(pilot)
+
+            assert ("like_set", {"video_id": "abc123", "liked": False}) in stub.calls
+            assert "(liked)" not in str(label.render())
 
     asyncio.run(scenario())
 
