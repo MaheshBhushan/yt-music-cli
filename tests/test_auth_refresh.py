@@ -142,16 +142,21 @@ def test_a_caller_supplied_client_is_never_refreshed(monkeypatch, tmp_path):
         music.library_playlists(yt=Stale(lambda: False))
 
 
-def test_expired_headers_on_search_are_refreshed_too(monkeypatch, tmp_path):
+def test_search_errors_are_not_treated_as_expired_credentials(monkeypatch, tmp_path):
     from ytmusicapi.exceptions import YTMusicError
 
     state = _browser_auth(monkeypatch, tmp_path)
+    calls = []
+    error = YTMusicError("Server returned HTTP 401: Unauthorized")
 
     class Client:
         def search(self, query, filter=None, limit=20):
-            if not state["refreshed"]:
-                raise YTMusicError("Server returned HTTP 401: Unauthorized")
-            return [{"videoId": "v1", "title": "T", "artists": [{"name": "A"}], "duration": "1:00"}]
+            calls.append(query)
+            raise error
 
-    monkeypatch.setattr(music, "client", lambda path=None, credentials_factory=None: Client())
-    assert [t.video_id for t in music.search("q")] == ["v1"]
+    monkeypatch.setattr(music.ytmusicapi, "YTMusic", Client)
+    with pytest.raises(YTMusicError) as excinfo:
+        music.search("q")
+    assert excinfo.value is error
+    assert calls == ["q"]
+    assert not state["refreshed"]

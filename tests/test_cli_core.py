@@ -153,6 +153,39 @@ def run(*argv):
 # -- the bare command ---------------------------------------------------------
 
 
+@pytest.mark.parametrize("stored_auth", [None, "invalid credentials"])
+def test_search_and_play_queries_use_anonymous_catalogue(fake, monkeypatch, stored_auth):
+    from ytm import auth, music
+
+    if stored_auth is not None:
+        auth.AUTH_PATH.parent.mkdir(parents=True, exist_ok=True)
+        auth.AUTH_PATH.write_text(stored_auth)
+    built = []
+    searches = []
+
+    class Anonymous:
+        def __init__(self):
+            built.append(self)
+
+        def search(self, query, filter=None, limit=20):
+            searches.append((query, filter, limit))
+            return [{"videoId": "v1", "title": "Song", "artists": [{"name": "Artist"}]}]
+
+    def no_auth(*args, **kwargs):
+        pytest.fail("search must not access or refresh account authentication")
+
+    monkeypatch.setattr(music.ytmusicapi, "YTMusic", Anonymous)
+    monkeypatch.setattr(music, "shared_client", no_auth)
+    monkeypatch.setattr(auth, "refresh_from_browser", no_auth)
+    for command in ("search", "play"):
+        code, out, err = run(command, "song")
+        assert code == 0, err
+        assert "Song" in out
+    assert len(built) == 1
+    assert searches == [("song", "songs", 10), ("song", "songs", 5)]
+    assert fake.calls == [("play", "https://music.youtube.com/watch?v=v1", "Song / Artist")]
+
+
 def test_bare_ytm_opens_the_tui_and_exits_cleanly(monkeypatch):
     """`cmd_tui` answers (data, text) like every other command, and a
     two-None tuple is truthy: `main` used to hand that tuple to sys.exit, so

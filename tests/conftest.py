@@ -38,6 +38,7 @@ def fresh_catalogue_client(monkeypatch, tmp_path):
     id file, so one test's fake client can never serve the next one and the
     developer's real ~/.local/state/ytm/visitor.json is never touched."""
     monkeypatch.setattr(music, "VISITOR_PATH", tmp_path / "visitor.json")
+    monkeypatch.setattr(music, "_CATALOGUE_CLIENT", None)
     music.reset_client()
     yield
     music.reset_client()
