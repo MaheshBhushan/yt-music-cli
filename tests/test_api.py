@@ -128,14 +128,14 @@ def test_search_uses_songs_filter():
     assert yt.calls[0]["filter"] == "songs"
 
 
-def test_expired_auth_raises_typed_autherror_not_raw_traceback():
+def test_search_preserves_errors_from_a_supplied_client():
     expired = YTMusicServerError(
         "Server returned HTTP 401: Unauthorized.\nRequest had invalid authentication credentials."
     )
     yt = FakeYTMusic(error=expired)
-    with pytest.raises(auth.AuthExpired) as excinfo:
+    with pytest.raises(YTMusicServerError) as excinfo:
         api.search("anything", yt=yt)
-    assert "ytm auth" in str(excinfo.value)
+    assert excinfo.value is expired
 
 
 def test_non_auth_server_error_is_not_swallowed():

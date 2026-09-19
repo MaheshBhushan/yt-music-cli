@@ -140,8 +140,9 @@ class FakeYTMusic:
 
     built = 0
 
-    def __init__(self, headers):
+    def __init__(self, headers=None):
         FakeYTMusic.built += 1
+        headers = headers or {}
         self.headers_given = dict(headers)
         # ytmusicapi computes base_headers lazily and caches them here
         self.__dict__["base_headers"] = dict(headers)
@@ -163,11 +164,13 @@ def browser_auth(monkeypatch, tmp_path):
     return path
 
 
-def test_one_client_serves_every_call(browser_auth):
+def test_search_reuses_a_separate_anonymous_client(browser_auth):
     first = music.shared_client()
     assert music.shared_client() is first
     assert music.search("a", yt=None) == [] and music.search("b", yt=None) == []
-    assert FakeYTMusic.built == 1
+    assert music.catalogue_client() is not first
+    assert music.catalogue_client().headers_given == {}
+    assert FakeYTMusic.built == 2
 
 
 def test_re_authenticating_retires_the_cached_client(browser_auth):
@@ -283,7 +286,7 @@ def test_the_visitor_id_youtube_hands_out_is_remembered(browser_auth, monkeypatc
     monkeypatch.setattr(music, "VISITOR_PATH", tmp_path / "visitor.json")
     client = music.shared_client()
     client.__dict__["base_headers"]["X-Goog-Visitor-Id"] = "LEARNED"
-    music.search("anything")
+    music._remember_visitor_id()
     assert music._read_visitor_id() == "LEARNED"
 
 
