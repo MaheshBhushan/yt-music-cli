@@ -538,6 +538,21 @@ def cmd_update(args):
     if not info["newer"] and not args.force:
         return dict(info, upgraded=False), line + " (use --force to reinstall and refresh yt-dlp)"
     kind = update.install_kind()
+    if sys.platform == "win32" and kind != "editable" and not args.json and sys.stdin.isatty():
+        try:
+            answer = input(
+                f"{line}\nytm must exit before Windows can replace its launcher.\n"
+                "Close other ytm instances. Exit now and update in a new PowerShell window? [Y/n] "
+            ).strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            answer = "n"
+        if answer not in ("", "y", "yes"):
+            _, manual = update.upgrade(kind=kind, target=info["latest"] if info["newer"] else None)
+            return dict(info, upgraded=False, pending=False), f"Update cancelled.\n{manual}"
+        ok, text = update.start_windows_upgrade(kind=kind, target=info["latest"] if info["newer"] else None)
+        if not ok:
+            raise CliError(text)
+        return dict(info, upgraded=False, pending=True, kind=kind), text
     ok, text = update.upgrade(kind=kind, target=info["latest"] if info["newer"] else None)
     if not ok:
         raise CliError(text)
