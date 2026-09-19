@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.9.5 — 2026-09-19
+
+- Interactive Windows `ytm update` can now hand off to a separate PowerShell window after confirmation (#54). The helper waits for the original process and launcher locks, runs the installer, verifies the installed version, and preserves the manual command on failure. It never terminates other processes.
+- TUI automatic updates and noninteractive Windows calls retain the manual update instructions. Live Windows validation is pending; automated Python and PowerShell tests passed on Linux.
+
 ## 0.9.4 — 2026-09-19
 
 - Search and query-based playback now use a reusable anonymous YouTube Music client, avoiding OAuth-related search failures and working without running `ytm auth` (#56). Playlists, likes, and personal library operations retain account authentication.
