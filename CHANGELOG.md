@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.9.4 — 2026-09-19
+
+- Search and query-based playback now use a reusable anonymous YouTube Music client, avoiding OAuth-related search failures and working without running `ytm auth` (#56). Playlists, likes, and personal library operations retain account authentication.
+
 ## 0.9.3 — 2026-09-16
 
 - Synced lyrics now load for accounts whose session cookies made YouTube reject the timed request with HTTP 400 (#46). The timed lookup is sent without the browser cookies; lyrics are not account-specific, and every other request keeps the full credentials.
