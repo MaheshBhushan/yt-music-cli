@@ -49,4 +49,4 @@ Issues = "https://github.com/MaheshBhushan/yt-music-cli/issues"
 include = ["ytm*"]
 
 [tool.setuptools.package-data]
-ytm = ["mpv/*.lua", "tui/*.tcss", "oauth_default_client.json"]
+ytm = ["mpv/*.lua", "tui/*.tcss", "oauth_default_client.json", "windows_update.ps1"]

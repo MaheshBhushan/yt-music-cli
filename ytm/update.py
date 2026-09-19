@@ -21,6 +21,8 @@ import re
 import shutil
 import subprocess
 import sys
+import sysconfig
+import tempfile
 import time
 import urllib.parse
 import urllib.request
@@ -215,6 +217,71 @@ def installed_version_now(run=subprocess.run):
     return result.stdout.strip() or None
 
 
+def _powershell_commands(commands):
+    """Literal PowerShell commands, also usable as the manual fallback."""
+    return "; ".join(
+        "& " + " ".join("'" + arg.replace("'", "''") + "'" for arg in command)
+        for command in commands
+    )
+
+
+def start_windows_upgrade(kind=None, target=None):
+    """Hand a confirmed CLI update to a separate PowerShell console.
+
+    The helper is copied outside the installation before starting, so uv
+    and pipx can replace the environment it updates. Success here means
+    scheduled, not installed; the helper checks the actual installed version.
+    """
+    kind = kind or install_kind()
+    commands = upgrade_commands(kind, target=target)
+    if not commands:
+        return upgrade(kind=kind, target=target)
+    fallback = _powershell_commands(commands)
+    folder = None
+    try:
+        shell = shutil.which("powershell.exe")
+        if shell is None:
+            raise OSError("Windows PowerShell was not found")
+        resolved = []
+        for command in commands:
+            executable = command[0] if command[0] == sys.executable else shutil.which(command[0])
+            if executable is None:
+                raise OSError(f"{command[0]} was not found")
+            resolved.append({"executable": executable, "arguments": command[1:]})
+        # argv[0] covers user installs whose Scripts directory differs from
+        # sysconfig's default. Probe yt-dlp too, since it is upgraded with ytm.
+        scripts = {Path(sysconfig.get_path("scripts"))}
+        invoked = Path(sys.argv[0]).absolute()
+        if invoked.name.lower() == "ytm.exe":
+            scripts.add(invoked.parent)
+        launchers = [str(path / name) for path in sorted(scripts)
+                     for name in ("ytm.exe", "yt-dlp.exe")]
+        plan = {
+            "parent_id": os.getpid(), "commands": resolved,
+            "python": sys.executable, "target": target,
+            "launchers": launchers, "fallback": fallback,
+        }
+        folder = Path(tempfile.mkdtemp(prefix="ytm-update-"))
+        script = folder / "update.ps1"
+        shutil.copyfile(Path(__file__).with_name("windows_update.ps1"), script)
+        plan_path = folder / "plan.json"
+        plan_path.write_text(json.dumps(plan), encoding="utf-8")
+        subprocess.Popen(
+            [shell, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(script), str(plan_path)],
+            creationflags=subprocess.CREATE_NEW_CONSOLE,
+            close_fds=True, cwd=str(folder.parent),
+        )
+    except OSError as exc:
+        if folder is not None:
+            shutil.rmtree(folder, ignore_errors=True)
+        return False, f"Could not open the update window: {exc}\nClose all ytm instances, then run in PowerShell:\n{fallback}"
+    return True, (
+        "Update window opened; exiting ytm. Close other ytm instances and do not "
+        "start ytm until the update finishes. The new window will report the result.\n"
+        f"If it cannot update, close all ytm instances and run in PowerShell:\n{fallback}"
+    )
+
+
 def upgrade(kind=None, yt_dlp=True, run=subprocess.run, target=None, verify=None):
     """Upgrade in place. Returns (ok, text) where text is what to show.
 
@@ -238,10 +305,7 @@ def upgrade(kind=None, yt_dlp=True, run=subprocess.run, target=None, verify=None
     if sys.platform == "win32":
         # PowerShell needs the call operator for quoted executable paths.
         # Single-quoted arguments also keep spaces and metacharacters literal.
-        external = "; ".join(
-            "& " + " ".join("'" + arg.replace("'", "''") + "'" for arg in command)
-            for command in commands
-        )
+        external = _powershell_commands(commands)
         return False, (
             "Close all ytm instances, then run this in PowerShell to update "
             f"without locking ytm.exe: {external}"
