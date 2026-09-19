@@ -14,6 +14,7 @@ import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
+import ytmusicapi
 from ytmusicapi.exceptions import YTMusicError, YTMusicServerError
 
 from ytm import auth as auth_mod
@@ -28,7 +29,21 @@ from ytm.auth import (
 )
 from ytm.timed_lyrics import normalize_timed_lines
 
-#: One ytmusicapi client is kept per process and reused by every call below.
+#: Search has its own anonymous client, independent of account credentials.
+_CATALOGUE_LOCK = threading.Lock()
+_CATALOGUE_CLIENT = None
+
+
+def catalogue_client():
+    """The process-wide anonymous search client, built on first use."""
+    global _CATALOGUE_CLIENT
+    with _CATALOGUE_LOCK:
+        if _CATALOGUE_CLIENT is None:
+            _CATALOGUE_CLIENT = ytmusicapi.YTMusic()
+        return _CATALOGUE_CLIENT
+
+
+#: One authenticated ytmusicapi client is kept per process for account calls.
 #: Building one is not free: it opens a fresh TLS connection to YouTube and,
 #: on its first request, downloads the music.youtube.com home page just to
 #: read a visitor id out of it. A client per call meant every search, every
@@ -361,20 +376,15 @@ def to_playlist(result, local=False):
     )
 
 
-@_refreshing
 def search(query, limit=20, yt=None):
     """Search the YouTube Music catalogue for songs and return Tracks.
 
     Uses filter="songs" so results are Art Tracks (better audio than the
-    "videos" filter), and never includes personal uploads.
+    "videos" filter), and never includes personal uploads. The default
+    client is anonymous and needs no stored authentication.
     """
-    yt = yt if yt is not None else shared_client()
-    try:
-        results = yt.search(query, filter="songs", limit=limit)
-    except YTMusicError as exc:
-        if is_expiry(exc):
-            raise AuthExpired(_EXPIRED_HINT) from exc
-        raise
+    yt = yt if yt is not None else catalogue_client()
+    results = yt.search(query, filter="songs", limit=limit)
     # ytmusicapi treats `limit` as a page-size hint and returns whole pages
     return to_tracks(results)[:limit]
 
