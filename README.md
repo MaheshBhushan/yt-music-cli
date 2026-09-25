@@ -18,7 +18,7 @@ The TUI lyrics pane highlights and automatically scrolls to the current line whe
 
 YouTube Music has no desktop client that is not a browser. `ytm` is a small Python CLI and a Textual TUI over three tools that already do the hard parts: [ytmusicapi](https://github.com/sigma67/ytmusicapi) for the catalogue, [yt-dlp](https://github.com/yt-dlp/yt-dlp) for stream resolution and [mpv](https://mpv.io) for audio.
 
-mpv is the only long-running process. `ytm` starts it once, idle, with a JSON IPC socket, and every command after that is a stateless message to it. Close the terminal and the music keeps playing. A Lua script inside mpv keeps the queue fed with the station for whatever is playing, so it never runs dry.
+mpv is the only long-running process. `ytm` starts it once, idle, with a JSON IPC socket, and every command after that is a stateless message to it. Each interactive TUI session owns its player: exiting the TUI or closing its terminal stops that session’s playback and helper processes. One-shot CLI playback still runs independently in the background. A Lua script inside mpv keeps the queue fed with the station for whatever is playing, so it never runs dry.
 
 ## Quickstart
 
@@ -62,10 +62,10 @@ The TUI is `ytm` with no arguments. Results appear as you type; Enter plays the 
 | `l` | Focus playlists |
 | `r` | Refresh your mixes (a mix keeps the same tracklist until you do) |
 | `Tab` | Cycle panes |
-| `e` | Exit, music keeps playing |
-| `x` | Exit and stop mpv |
+| `e` | Exit and stop this session’s player |
+| `x` | Exit and stop this session’s player (same as `e`) |
 
-One-shot commands talk to the same mpv. Add `--json` to any of them for machine-readable output.
+One-shot commands share a background mpv, separate from the player owned by each TUI session. Add `--json` to any of them for machine-readable output.
 
 ```bash
 ytm search "song name" -n 10   # results are numbered
@@ -201,6 +201,31 @@ The proof-of-origin token provider is a yt-dlp plugin installed with `ytm`. It a
 - **Windows** works over a named pipe to mpv. Cookie import needs Firefox there, see Authentication.
 - **Logs.** mpv writes to `~/.local/state/ytm/mpv.log`. The TUI writes a trace of its last run to `~/.local/state/ytm/tui.log`: every key it received, each focus move, each backend request with its timing, each error and resize. It starts over on every launch; `YTM_TUI_LOG=<file>` puts it elsewhere. This is the file to attach for a key or focus problem in a particular terminal.
 
+## Benchmarks
+
+Measured on 2026-09-25 with the harness in [`benchmarks/`](benchmarks/): the real `ytm` TUI in a 120x40 PTY with real audio output, inside a dedicated cgroup v2 scope, so the totals cover the YTM Python process, its mpv, and every owned helper (yt-dlp, Node, the radio helper, mixer tools) even when they detach. Signed in with browser credentials and the default configuration: lyrics, artwork, system volume, radio autoplay and update checks all enabled.
+
+Host: CachyOS, kernel 7.1.1, Intel i5-1135G7 (8 threads), 23 GiB RAM, PipeWire 1.6.7, default sink. ytm 0.9.3 from the working tree (24 uncommitted files at run time), mpv 0.41.0, yt-dlp 2026.08.19, Node 26.4.0, Python 3.11.15.
+
+| Scenario | Total RSS (MiB) | CPU (% of one core) | Latency (ms) |
+| --- | ---: | ---: | ---: |
+| Startup (to usable UI) | 128.3 | 10.5 | 1246 |
+| Idle | 138.8 | 2.7 | — |
+| Search (live) | 145.2 | 6.4 | 470 / 916 |
+| Starting playback | 198.1 | 14.7 | 1911 / 3450 |
+| Steady playback | 187.5 | 5.5 | — |
+| Track skip (`n`) | 242.6 | 32.5 | 1739 / 3934 |
+| 30-minute session | 183.7 | 7.0 | — |
+| Peak observed | 292.7 | 248.8 | — |
+
+Latency columns are median / P95. Memory and CPU maxima can occur at different times: the peak RSS sample (292.7 MiB) happened while yt-dlp and Node were resolving the next track during the 30-minute session, and the peak one-second CPU window (249% of one core) is stream resolution across multiple cores.
+
+> Memory includes YTM, mpv, and all owned helper processes. RSS sums may double-count shared pages; PSS is provided in the report (idle 103.2 MiB, steady playback 149.6 MiB). Peaks are observed samples at 100 ms cadence. CPU uses 100% per logical core. Playback latency is the IPC proxy — a new file is loaded, playback is unpaused and the position clock advances — not time-to-audible-sound.
+
+Search separates backend cache hits (29 trials, median 370 ms) from network searches (38 trials, median 747 ms); the end-to-end number includes the 350 ms debounce. Startup ends at an accepted input round-trip, not a painted cell. One of 80 switch attempts (a `next` during the long session) timed out and was retried; medians and P95 cover completed trials. Network byte accounting and audio-onset detection were not measured.
+
+This run's generated report and machine-readable summary are in [`benchmarks/results-published/20260925T222443Z-967c5d/`](benchmarks/results-published/20260925T222443Z-967c5d/). Per-sample raw artifacts stay local; the report regenerates from them deterministically. Reproduce with `python benchmarks/benchmark.py run --profile full` (requirements and method notes in [`benchmarks/README.md`](benchmarks/README.md)).
+
 ## Repository structure
 
 ```
@@ -215,6 +240,7 @@ ytm/
   mpv/autoplay.lua  radio autoplay inside mpv
   tui/              Textual app, panes, backend over Player
 tests/              pytest; no network and no mpv needed
+benchmarks/         cgroup/PTY benchmark harness, tests, published reports
 .github/workflows/  tests on 3.11-3.13; publish to PyPI on a v* tag
 ```
 

@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "description": "Deterministic search workload. 'cache' is the expectation, not an assumption: the measured duration classifies each trial.",
+  "queries": [
+    {"id": "q01", "text": "Daft Punk", "kind": "artist", "cache": "miss"},
+    {"id": "q02", "text": "Bohemian Rhapsody", "kind": "title", "cache": "miss"},
+    {"id": "q03", "text": "lofi hip hop beats", "kind": "broad", "cache": "miss"},
+    {"id": "q04", "text": "周杰伦 稻香", "kind": "non-ascii-cjk", "cache": "miss"},
+    {"id": "q05", "text": "acoustic guitar instrumental", "kind": "broad", "cache": "miss"},
+    {"id": "q06", "text": "this is a deliberately overlong query string used to exercise the search input", "kind": "long", "cache": "miss"},
+    {"id": "q07", "text": "zzzz qqqq xxxx no such song", "kind": "no-result", "cache": "miss"},
+    {"id": "q08", "text": "Nina Simone Feeling Good", "kind": "title-artist", "cache": "miss"},
+    {"id": "q09", "text": "Miles Davis", "kind": "artist", "cache": "miss"},
+    {"id": "q10", "text": "ボカロ 千本桜", "kind": "non-ascii-jp", "cache": "miss"},
+    {"id": "q11", "text": "Tycho Awake", "kind": "title-artist", "cache": "miss"},
+    {"id": "q12", "text": "Ça plane pour moi", "kind": "non-ascii-latin", "cache": "miss"},
+    {"id": "q13", "text": "Daft Punk", "kind": "artist", "cache": "hit"},
+    {"id": "q14", "text": "Miles Davis", "kind": "artist", "cache": "hit"},
+    {"id": "q15", "text": "Bohemian Rhapsody", "kind": "title", "cache": "hit"},
+    {"id": "q16", "text": "lofi hip hop beats", "kind": "broad", "cache": "hit"},
+    {"id": "q17", "text": "Tycho Awake", "kind": "title-artist", "cache": "hit"},
+    {"id": "q18", "text": "周杰伦 稻香", "kind": "non-ascii-cjk", "cache": "hit"}
+  ]
+}

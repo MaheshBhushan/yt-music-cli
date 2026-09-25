@@ -10,3 +10,4 @@ __pycache__/
 cookies.txt
 oauth_desktop_client.json
 ytm/oauth_default_client.json
+benchmarks/results/
