@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.10.0 — 2026-09-26
 
 - `ytm login` opens the supported OS default browser's normal profile, waits for terminal confirmation, imports that profile's YouTube session, and verifies the account before saving. Chrome, Chromium, Edge, Firefox, Brave, Vivaldi, Opera and Helium are selectable. `--method playwright` provides optional isolated browser observation with Chromium, Chrome/Edge, Firefox or WebKit. Normal Chrome profiles are never attached to remote debugging.
 - Authentication review fixes: anonymous clients bypass credential storage; stale request/account capture is rejected; OAuth acquisition is staged and verified before activation; logout and credential cleanup share a transaction; locks use OS advisory locking; late login results cannot supersede logout; malformed account responses and network errors are not reported as valid/expired sessions; TUI account responses are discarded after credential changes.
