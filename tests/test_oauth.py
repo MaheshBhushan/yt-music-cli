@@ -193,7 +193,7 @@ def test_client_surfaces_auth_expired_for_revoked_oauth_refresh_token(tmp_path, 
 
     monkeypatch.setattr(auth.ytmusicapi, "YTMusic", _RealishYTMusic)
 
-    with pytest.raises(AuthExpired, match="ytm auth"):
+    with pytest.raises(AuthExpired, match="ytm login"):
         auth.client(path=path, credentials_factory=_FailingRefreshCredentials)
 
 

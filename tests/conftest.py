@@ -28,6 +28,7 @@ def no_real_auth(monkeypatch, tmp_path):
     """Tests never read the developer's own ~/.config/ytm/auth.json: a stale
     one there would make the catalogue layer try a real browser refresh."""
     monkeypatch.setattr(auth, "AUTH_PATH", tmp_path / "auth" / "auth.json")
+    monkeypatch.setattr(auth, "SESSION_PATH", tmp_path / "auth" / "session.json")
     monkeypatch.setattr(auth, "DEFAULT_DESKTOP_CLIENT", tmp_path / "no-default-client.json")
     monkeypatch.setattr(auth, "COOKIES_PATH", tmp_path / "auth" / "cookies.txt")
 
@@ -39,6 +40,7 @@ def fresh_catalogue_client(monkeypatch, tmp_path):
     developer's real ~/.local/state/ytm/visitor.json is never touched."""
     monkeypatch.setattr(music, "VISITOR_PATH", tmp_path / "visitor.json")
     monkeypatch.setattr(music, "_CATALOGUE_CLIENT", None)
+    monkeypatch.setattr(music, "_LYRICS_CLIENT", None)
     music.reset_client()
     yield
     music.reset_client()

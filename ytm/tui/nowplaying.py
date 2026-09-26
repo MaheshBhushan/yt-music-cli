@@ -172,7 +172,9 @@ class AlbumArt(Container):
                 image = None
             self.app.call_from_thread(self._arrived, url, image)
 
-        self.app.run_worker(work, thread=True, name=f"art:{url}", group="art")
+        from ytm.lifecycle import daemon_call
+
+        self.app.run_worker(daemon_call(work), name=f"art:{url}", group="art")
 
     def _arrived(self, url, image):
         if image is not None:

@@ -10,17 +10,22 @@ change is translated into the same `track_changed` / `position` /
 `state_changed` / `queue_changed` events the TUI already understands.
 """
 
+import os
+import tempfile
 import threading
 import time
+import uuid
 from dataclasses import asdict
 
 import requests
 from ytmusicapi.exceptions import YTMusicError
 
+from ytm import auth as auth_mod
 from ytm import cache, music, playlists_local, state
 from ytm.auth import AuthError
+from ytm.lifecycle import ProcessOwner
 from ytm.music import Track
-from ytm.player import PlayerError
+from ytm.player import REPLY_TIMEOUT, PlayerError
 
 #: YouTube's auto-playlists: ids are fixed and they cannot take plain inserts
 LIKED_MUSIC_ID = "LM"
@@ -103,14 +108,33 @@ def _playlist_dict(playlist, kind=None):
 
 
 class Backend:
-    def __init__(self, player_factory=None):
-        self._make_player = player_factory or _default_player
-        try:
-            self._player = self._make_player(spawn=True)
-        except PlayerError as exc:
-            raise BackendError(str(exc)) from exc
-        self._subscribers = []
+    def __init__(self, player_factory=None, stop_event=None):
+        self._owner = None
+        self._runtime = None
         self._closed = False
+        self._lifecycle_lock = threading.RLock()
+        self._observer = None
+        self._mixer_stop = threading.Event()
+        self._mixer_thread = None
+        try:
+            if player_factory is None:
+                self._owner = ProcessOwner(stop_event=stop_event)
+                self._runtime = tempfile.TemporaryDirectory(prefix="ytm-session-")
+                endpoint = (rf"\\.\pipe\ytm-{uuid.uuid4().hex}" if os.name == "nt"
+                            else os.path.join(self._runtime.name, "mpv.sock"))
+                def player_factory(**kwargs):
+                    return _default_player(ipc_path=endpoint, owner=self._owner, **kwargs)
+            self._make_player = player_factory
+            self._player = self._make_player(spawn=True)
+        except BaseException as exc:
+            if self._owner is not None:
+                self._owner.close()
+            if self._runtime is not None:
+                self._runtime.cleanup()
+            if isinstance(exc, PlayerError):
+                raise BackendError(str(exc)) from exc
+            raise
+        self._subscribers = []
         # mixes are re-rolled by YouTube on every fetch, so a session keeps
         # the list and each tracklist until `mixes_refresh` asks for new ones
         self._mixes = None
@@ -132,6 +156,11 @@ class Backend:
         # remote track counts the library listing does not carry, looked up
         # once per playlist instead of on every refresh of the pane
         self._playlist_counts = {}
+        # the credential revision the account-scoped caches above belong to;
+        # a login/logout in another terminal must not keep feeding the panes
+        # the old account's data
+        self._account_revision = None
+        self._account_lock = threading.RLock()
         self._routes = {
             "status": self._status,
             "search": self._search,
@@ -171,13 +200,57 @@ class Backend:
         # volume or pause request must not queue behind them. The player
         # connection serialises its own commands.
         try:
-            return handler(args or {})
-        except (PlayerError, AuthError) as exc:
-            # both already read as sentences, and "AuthExpired: run ytm auth"
+            values = args or {}
+            account_route = cmd in ("playlist_list", "mixes_refresh") or (
+                cmd.startswith("playlist_") and not values.get("local")
+                and not playlists_local.is_local_id(values.get("playlist_id", ""))
+            )
+            if account_route:
+                with self._account_lock:
+                    self._account_changed()
+                    revision = self._account_revision
+                    try:
+                        result = handler(values)
+                    finally:
+                        self._account_changed()
+                    if self._account_revision != revision:
+                        raise BackendError("The YouTube Music account changed during this request; try again.")
+                    return result
+            return handler(values)
+        except (PlayerError, AuthError, BackendError) as exc:
+            # both already read as sentences, and "AuthExpired: run ytm login"
             # on the banner only buries the instruction
             raise BackendError(str(exc)) from exc
-        except Exception as exc:  # network failure, unexpected response
-            raise BackendError(f"{type(exc).__name__}: {exc}") from exc
+        except YTMusicError as exc:
+            # the raw message can carry a whole response body
+            raise BackendError(music.provider_message(exc)) from exc
+        except requests.RequestException as exc:
+            raise BackendError("Could not reach YouTube Music; check connectivity.") from exc
+        except music.ProviderError as exc:
+            raise BackendError(str(exc)) from exc
+        except Exception as exc:  # provider responses can contain private account data
+            raise BackendError("The request failed unexpectedly; try again or update ytmusicapi.") from exc
+
+    def _account_changed(self):
+        """Drop account-scoped caches when the stored credential changed.
+
+        Local playlists, public search results and lyrics are not account
+        data and stay. Only the account panes are reset, so a login/logout
+        (here or in another process) cannot leave the previous identity's
+        mixes, counts or pending adds on screen.
+        """
+        try:
+            revision = auth_mod.credential_stamp()
+        except AuthError:
+            revision = ("invalid",)
+        if revision == self._account_revision:
+            return False
+        self._account_revision = revision
+        self._mixes = None
+        self._mix_tracks = {}
+        self._playlist_counts = {}
+        self._pending_adds = {}
+        return True
 
     def _current(self):
         entries = self._player.playlist()
@@ -330,6 +403,7 @@ class Backend:
         return {"video_id": video_id, "lyrics": lyrics, "source": source}
 
     def _playlist_list(self, args):
+        self._account_changed()
         local = playlists_local.list_playlists()
         try:
             return self._playlist_list_remote(local)
@@ -359,11 +433,15 @@ class Backend:
         }
 
     def _count_of(self, playlist_id):
-        """How many tracks a remote playlist holds, asked at most once."""
+        """How many tracks a remote playlist holds, asked at most once.
+
+        Only library playlists get here, so the read is account-scoped even
+        when the playlist itself is public (see `music.account_playlist`).
+        """
         if playlist_id in self._playlist_counts:
             return self._playlist_counts[playlist_id]
         try:
-            count = music.playlist_count(playlist_id)
+            count = music.playlist_count(playlist_id, require_auth=True)
         except REMOTE_ERRORS:
             return None  # not remembered: a failure is worth retrying
         if count is not None:
@@ -390,6 +468,7 @@ class Backend:
         return {"playlist_id": playlist_id, "title": title, "local": bool(args.get("local"))}
 
     def _playlist_get(self, args):
+        self._account_changed()
         playlist_id = args["playlist_id"]
         if playlists_local.is_local_id(playlist_id):
             playlist, tracks = playlists_local.get_playlist(playlist_id)
@@ -400,7 +479,9 @@ class Backend:
                 self._mix_tracks[playlist_id] = music.get_playlist(playlist_id)
             playlist, tracks = self._mix_tracks[playlist_id]
         else:
-            playlist, tracks = music.get_playlist(playlist_id)
+            # every remote id the pane offers came from the library listing,
+            # so it carries account intent even if the playlist is public
+            playlist, tracks = music.get_playlist(playlist_id, require_auth=True)
             tracks = self._with_pending_adds(playlist_id, tracks)
             if playlist.track_count is not None:
                 playlist.track_count = max(playlist.track_count, len(tracks))
@@ -430,6 +511,7 @@ class Backend:
         return missing[::-1] + tracks if playlist_id == LIKED_MUSIC_ID else tracks + missing
 
     def _playlist_add(self, args):
+        self._account_changed()
         playlist_id = args["playlist_id"]
         video_ids = list(args.get("video_ids") or [])
         if playlists_local.is_local_id(playlist_id):
@@ -482,7 +564,9 @@ class Backend:
         return self._queue()
 
     def _shutdown(self, args):
-        self._player.quit()
+        if self._owner is None:
+            self._player.quit()
+        self.close()
         return {"stopping": True}
 
     # -- events -----------------------------------------------------------------
@@ -502,7 +586,12 @@ class Backend:
         is never shared with a blocking read.
         """
         try:
-            observer = self._make_player(spawn=False, timeout=None)
+            with self._lifecycle_lock:
+                if self._closed:
+                    return
+                observer = self._make_player(spawn=False, timeout=None)
+                self._observer = observer
+                self._mixer_stop = threading.Event()
         except PlayerError as exc:
             raise BackendError(str(exc)) from exc
         stop_mixer = self._watch_mixer()
@@ -584,12 +673,14 @@ class Backend:
         finally:
             stop_mixer.set()
             observer.close()
+            if self._mixer_thread is not None:
+                self._mixer_thread.join(3)
 
     def _watch_mixer(self):
         """Follow the system volume while `listen()` runs, so a media key or
         the tray slider shows up in the TUI like a `+`/`-` would. Returns
         the event that stops the watcher thread; a no-op without a mixer."""
-        stop = threading.Event()
+        stop = self._mixer_stop
         mixer = getattr(self._player, "mixer", None)
         if mixer is None:
             return stop
@@ -603,21 +694,39 @@ class Backend:
                 paused = False
             self._emit("state_changed", {"paused": paused, "volume": level})
 
-        threading.Thread(
+        self._mixer_thread = threading.Thread(
             target=mixer.watch, args=(changed, stop), daemon=True, name="ytm-mixer"
-        ).start()
+        )
+        self._mixer_thread.start()
         return stop
 
     def close(self):
-        self._closed = True
-        self._player.close()
+        with self._lifecycle_lock:
+            if self._closed:
+                return
+            self._closed = True
+            self._mixer_stop.set()
+            observer = self._observer
+        try:
+            if observer is not None:
+                observer.close()
+            self._player.close()
+        finally:
+            try:
+                if self._owner is not None:
+                    self._owner.close()
+                if self._mixer_thread is not None and self._mixer_thread is not threading.current_thread():
+                    self._mixer_thread.join(3)
+            finally:
+                if self._runtime is not None:
+                    self._runtime.cleanup()
 
 
-def _default_player(spawn=True, timeout=None):
+def _default_player(spawn=True, timeout=REPLY_TIMEOUT, **kwargs):
     """`timeout=None` really means no timeout: the observing connection
     blocks for as long as mpv is silent, which while paused is forever.
     (It used to fall back to the 5 s default, so the listener died quietly
     after five seconds of pause and the pane froze.)"""
     from ytm import cli
 
-    return cli.player(spawn=spawn, timeout=timeout)
+    return cli.player(spawn=spawn, timeout=timeout, **kwargs)

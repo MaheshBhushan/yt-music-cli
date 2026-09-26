@@ -356,7 +356,7 @@ def test_a_missing_track_count_is_asked_for_once(backend, monkeypatch, tmp_path)
                         lambda limit=25, yt=None: [music.Playlist("LM", "Liked Music", 0)])
     monkeypatch.setattr(music, "mixes", lambda yt=None: [])
     asked = []
-    monkeypatch.setattr(music, "playlist_count", lambda pid, yt=None: (asked.append(pid), 9)[1])
+    monkeypatch.setattr(music, "playlist_count", lambda pid, yt=None, **kw: (asked.append(pid), 9)[1])
 
     for _ in range(3):
         listed = backend.request("playlist_list")["playlists"]
@@ -372,7 +372,7 @@ def test_an_empty_mix_list_is_not_asked_for_again(backend, monkeypatch, tmp_path
     monkeypatch.setattr(playlists_local, "DEFAULT_PATH", tmp_path / "pl.json")
     monkeypatch.setattr(music, "library_playlists",
                         lambda limit=25, yt=None: [music.Playlist("PL1", "Mine", 4)])
-    monkeypatch.setattr(music, "playlist_count", lambda pid, yt=None: 0)
+    monkeypatch.setattr(music, "playlist_count", lambda pid, yt=None, **kw: 0)
     calls = []
     monkeypatch.setattr(music, "mixes", lambda yt=None: (calls.append(1), [])[1])
 

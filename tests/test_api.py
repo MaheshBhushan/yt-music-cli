@@ -195,13 +195,18 @@ def test_get_lyrics_null_result_returns_none():
     assert source is None
 
 
-def test_get_lyrics_expired_auth_raises_typed_autherror():
-    expired = YTMusicServerError(
+def test_get_lyrics_provider_rejection_is_not_an_auth_error():
+    """Lyrics are public: a 401 says the item is unavailable, not that the
+    user must sign in again (E05)."""
+    rejected = YTMusicServerError(
         "Server returned HTTP 401: Unauthorized.\nRequest had invalid authentication credentials."
     )
-    yt = FakeLyricsYTMusic(error=expired)
-    with pytest.raises(auth.AuthExpired):
-        api.get_lyrics("v1", yt=yt)
+    yt = FakeLyricsYTMusic(error=rejected)
+
+    from ytm import music
+
+    with pytest.raises(YTMusicServerError):
+        music.get_lyrics("v1", yt=yt)
 
 
 def test_playlist_normalisation_marks_remote_and_local():
@@ -215,7 +220,7 @@ def test_playlist_normalisation_marks_remote_and_local():
 def test_missing_auth_file_raises_authmissing(tmp_path):
     with pytest.raises(auth.AuthMissing) as excinfo:
         auth.load_headers(tmp_path / "auth.json")
-    assert "ytm auth" in str(excinfo.value)
+    assert "ytm login" in str(excinfo.value)
 
 
 def test_cookies_exposed_for_stream_resolution(tmp_path):
@@ -363,14 +368,14 @@ def test_no_lyrics_on_either_endpoint_is_none_with_no_source():
     assert music.get_lyrics("v", yt=yt, timestamps=True) == (None, None)
 
 
-def test_expired_auth_on_the_timed_endpoint_is_still_an_auth_error():
+def test_a_rejection_on_the_timed_endpoint_is_not_papered_over_with_plain():
     from ytm import music
 
-    expired = YTMusicServerError("Server returned HTTP 401: Unauthorized.\nRequest had invalid authentication credentials.")
-    yt = ScriptedLyricsClient(timed=expired, plain=PLAIN)
-    with pytest.raises(auth.AuthExpired):
+    rejected = YTMusicServerError("Server returned HTTP 401: Unauthorized.\nRequest had invalid authentication credentials.")
+    yt = ScriptedLyricsClient(timed=rejected, plain=PLAIN)
+    with pytest.raises(YTMusicServerError):
         music.get_lyrics("v", yt=yt, timestamps=True)
-    assert yt.calls == [True]  # no plain retry papers over a broken session
+    assert yt.calls == [True]  # no plain retry papers over a provider rejection
 
 
 def test_other_timed_endpoint_errors_propagate_unchanged():
@@ -401,8 +406,7 @@ def test_timed_bad_request_does_not_hide_plain_fallback_errors(status):
         timed=YTMusicServerError("Server returned HTTP 400: Bad Request."),
         plain=error,
     )
-    expected = auth.AuthExpired if status in (401, 403) else YTMusicServerError
-    with pytest.raises(expected):
+    with pytest.raises(YTMusicServerError):
         music.get_lyrics("v", yt=yt, timestamps=True)
     assert yt.calls == [True, False]
 

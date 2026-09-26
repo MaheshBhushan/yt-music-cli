@@ -17,7 +17,6 @@ import re
 import shutil
 import subprocess
 import threading
-import time
 
 #: how often to re-read the volume when no ``pactl subscribe`` is available
 POLL_INTERVAL = 1.0
@@ -35,6 +34,7 @@ class SystemVolume:
         self._wpctl = wpctl
         self._pactl = pactl
         self._run = run
+        self.owner = None
 
     @classmethod
     def detect(cls, which=shutil.which):
@@ -97,15 +97,22 @@ class SystemVolume:
         last = self.get()
         if self._pactl:
             try:
-                proc = subprocess.Popen(
+                proc = (self.owner.spawn if self.owner is not None else subprocess.Popen)(
                     [self._pactl, "subscribe"],
                     stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True,
                 )
             except OSError:
                 proc = None
             if proc is not None:
+                finished = threading.Event()
+                def stop_subscription():
+                    while not finished.wait(0.05):
+                        if stop.is_set():
+                            if proc.poll() is None:
+                                proc.terminate()
+                            return
                 killer = threading.Thread(
-                    target=lambda: (stop.wait(), proc.kill()), daemon=True
+                    target=stop_subscription, daemon=True, name="ytm-mixer-stop"
                 )
                 killer.start()
                 try:
@@ -119,7 +126,16 @@ class SystemVolume:
                             last = current
                             callback(current)
                 finally:
-                    proc.kill()
+                    finished.set()
+                    if proc.poll() is None:
+                        proc.terminate()
+                    try:
+                        proc.wait(timeout=1)
+                    except subprocess.TimeoutExpired:
+                        proc.kill()
+                        proc.wait()
+                    proc.stdout.close()
+                    killer.join(1)
                 if stop.is_set():
                     return
         while not stop.wait(POLL_INTERVAL):

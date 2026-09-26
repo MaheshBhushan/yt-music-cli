@@ -25,17 +25,21 @@ classifiers = [
     "Topic :: Multimedia :: Sound/Audio :: Players",
 ]
 dependencies = [
-    "ytmusicapi>=1.9.0",
+    "ytmusicapi>=1.12.2,<1.13",
     "requests",
     "google-auth-oauthlib>=1.2.2",
     "yt-dlp",
     "bgutil-ytdlp-pot-provider",
     "textual",
     "textual-image",
+    "platformdirs>=4",
 ]
 
 [project.optional-dependencies]
 dev = ["pytest"]
+# Isolated `ytm login --method playwright` needs Playwright; the browser binary it
+# drives is installed separately (`ytm login --install-browser`).
+login = ["playwright>=1.40"]
 
 [project.scripts]
 ytm = "ytm.cli:main"

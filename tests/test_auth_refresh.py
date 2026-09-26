@@ -82,6 +82,15 @@ class Stale:
     def get_library_playlists(self, limit=25):
         return [{"playlistId": "LM", "title": "Liked Music"}] if self.fresh() else []
 
+    def get_account_info(self):
+        # the bounded probe an empty library listing triggers: stale cookies
+        # are signed out, a refreshed client has a real account
+        if not self.fresh():
+            from ytmusicapi.exceptions import YTMusicServerError
+
+            raise YTMusicServerError("Server returned HTTP 401: Unauthorized.")
+        return {"accountName": "Test Listener"}
+
 
 def _browser_auth(monkeypatch, tmp_path, refresh_ok=True):
     """Auth at the test AUTH_PATH that came from a browser; `refreshed` flips

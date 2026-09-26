@@ -19,15 +19,15 @@ def _jar(*cookies):
 
 def _fake_client_ok(path):
     class _Client:
-        def search(self, query, limit=1):
-            return [{"title": "ok"}]
+        def get_account_info(self):
+            return {"accountName": "Example"}
 
     return _Client()
 
 
 def _fake_client_fails(path):
     class _Client:
-        def search(self, query, limit=1):
+        def get_account_info(self):
             raise auth.YTMusicError("Server returned HTTP 401")
 
     return _Client()
@@ -180,7 +180,7 @@ def test_windows_dpapi_failure_gets_browser_alternatives(tmp_path, monkeypatch, 
     with pytest.raises(auth.AuthError) as excinfo:
         auth.from_browser("chrome", path=path, client_factory=_fake_client_ok, config=_config())
     message = str(excinfo.value)
-    assert reason in message
+    assert "could not be decrypted" in message
     assert "--from-browser firefox" in message
     assert "'ytm auth'" in message
     assert not path.exists()

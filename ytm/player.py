@@ -59,6 +59,8 @@ class PlayerError(Exception):
 
 def default_ipc_path(platform=None):
     """Where the persistent mpv listens: a socket on POSIX, a pipe on Windows."""
+    if os.environ.get("YTM_IPC_PATH"):
+        return os.environ["YTM_IPC_PATH"]
     platform = platform or sys.platform
     if platform.startswith("win"):
         return r"\\.\pipe\ytm-mpv"
@@ -252,8 +254,10 @@ def startup_log_path(args):
     return None
 
 
-def spawn_mpv(args):
-    """Start mpv detached from this process so it outlives the CLI command.
+def spawn_mpv(args, owner=None):
+    """Start mpv separately; a TUI owner supervises its lifetime.
+
+    Without an owner, the one-shot CLI leaves playback running.
 
     Returns the `Popen`, so the caller can tell an mpv that is starting
     slowly from one that has already died -- they look identical from the
@@ -278,6 +282,12 @@ def spawn_mpv(args):
     else:
         kwargs["start_new_session"] = True
     try:
+        if owner is not None:
+            env = dict(os.environ)
+            for arg in args:
+                if arg.startswith("--input-ipc-server="):
+                    env["YTM_IPC_PATH"] = arg.split("=", 1)[1]
+            return owner.spawn(args, env=env, **kwargs)
         return subprocess.Popen(args, **kwargs)
     except OSError as exc:
         raise PlayerError(f"could not start mpv ({args[0]}): {exc}") from exc
@@ -320,6 +330,7 @@ class Player:
         spawner=spawn_mpv,
         timeout=REPLY_TIMEOUT,
         mixer=None,
+        owner=None,
         **mpv_options,
     ):
         self._ipc_path = ipc_path or default_ipc_path()
@@ -330,10 +341,21 @@ class Player:
         #: None for a connection that sits in `observe()` indefinitely
         self._timeout = timeout
         self._file = None
+        self._socket = None
+        self._owner = owner
         self._request_id = 0
         # one request/reply at a time on the socket; callers may be on any thread
         self._io_lock = threading.RLock()
-        self._connect(spawn=spawn, spawner=spawner)
+        try:
+            self._connect(spawn=spawn, spawner=(
+                (lambda args: spawn_mpv(args, owner=owner))
+                if owner is not None and spawner is spawn_mpv else spawner
+            ))
+        except BaseException:
+            self.close()
+            if owner is not None:
+                owner.close()
+            raise
 
     # -- connection ----------------------------------------------------------
 
@@ -352,6 +374,8 @@ class Player:
         deadline = time.monotonic() + SPAWN_TIMEOUT
         last = None
         while time.monotonic() < deadline:
+            if self._owner is not None and self._owner.stop_event.is_set():
+                raise PlayerError("YTM is shutting down")
             try:
                 self._open()
                 return
@@ -373,10 +397,23 @@ class Player:
         Path(self._ipc_path).parent.mkdir(parents=True, exist_ok=True)
         sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         sock.settimeout(self._timeout)
-        sock.connect(self._ipc_path)
-        self._file = sock.makefile("rwb", buffering=0)
+        try:
+            sock.connect(self._ipc_path)
+            self._file = sock.makefile("rwb", buffering=0)
+            self._socket = sock
+        except BaseException:
+            sock.close()
+            raise
 
     def close(self):
+        # Interrupt a blocking observer read before closing the file wrapper.
+        sock, self._socket = self._socket, None
+        if sock is not None:
+            try:
+                sock.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+            sock.close()
         if self._file is not None:
             try:
                 self._file.close()
@@ -400,14 +437,15 @@ class Player:
         answers with anything but ``success``.
         """
         with self._io_lock:
-            if self._file is None:
+            file = self._file
+            if file is None:
                 raise PlayerError("player connection is closed")
             self._request_id += 1
             request = {"command": list(args), "request_id": self._request_id}
             try:
-                self._file.write((json.dumps(request) + "\n").encode("utf-8"))
+                file.write((json.dumps(request) + "\n").encode("utf-8"))
                 while True:
-                    line = self._file.readline()
+                    line = file.readline()
                     if not line:
                         raise PlayerError("mpv closed the connection")
                     try:
@@ -421,7 +459,7 @@ class Player:
                             f"mpv rejected {args[0]}: {message.get('error')}"
                         )
                     return message.get("data")
-            except (OSError, socket.timeout) as exc:
+            except (OSError, ValueError) as exc:
                 raise PlayerError(f"lost the connection to mpv: {exc}") from exc
 
     def get_many(self, *names, default=None):
@@ -434,7 +472,8 @@ class Player:
         is what the individual `get` does too.
         """
         with self._io_lock:
-            if self._file is None:
+            file = self._file
+            if file is None:
                 raise PlayerError("player connection is closed")
             wanted = {}
             try:
@@ -445,10 +484,10 @@ class Player:
                         "command": ["get_property", name],
                         "request_id": self._request_id,
                     }
-                    self._file.write((json.dumps(request) + "\n").encode("utf-8"))
+                    file.write((json.dumps(request) + "\n").encode("utf-8"))
                 values = {}
                 while wanted:
-                    line = self._file.readline()
+                    line = file.readline()
                     if not line:
                         raise PlayerError("mpv closed the connection")
                     try:
@@ -464,7 +503,7 @@ class Player:
                     value = message.get("data")
                     values[name] = default if value is None else value
                 return values
-            except (OSError, socket.timeout) as exc:
+            except (OSError, ValueError) as exc:
                 raise PlayerError(f"lost the connection to mpv: {exc}") from exc
 
     def observe(self, *names):
@@ -479,7 +518,8 @@ class Player:
         # away, and `command()` would discard those events while waiting
         # for the next reply -- which is how the first track sometimes went
         # unannounced. Replies are skipped here instead.
-        if self._file is None:
+        file = self._file
+        if file is None:
             raise PlayerError("player connection is closed")
         try:
             for observe_id, name in enumerate(names, 1):
@@ -488,9 +528,9 @@ class Player:
                     "command": ["observe_property", observe_id, name],
                     "request_id": self._request_id,
                 }
-                self._file.write((json.dumps(request) + "\n").encode("utf-8"))
+                file.write((json.dumps(request) + "\n").encode("utf-8"))
             while True:
-                line = self._file.readline()
+                line = file.readline()
                 if not line:
                     raise PlayerError("mpv closed the connection")
                 try:
@@ -501,7 +541,7 @@ class Player:
                     raise PlayerError(f"mpv rejected observe_property: {message.get('error')}")
                 if message.get("event") == "property-change":
                     yield message.get("name"), message.get("data")
-        except (OSError, socket.timeout) as exc:
+        except (OSError, ValueError) as exc:
             raise PlayerError(f"lost the connection to mpv: {exc}") from exc
 
     def get(self, name, default=None):

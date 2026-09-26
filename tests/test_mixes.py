@@ -19,6 +19,9 @@ class FakeYT:
     def get_library_playlists(self, limit=25):
         return [{"playlistId": "LM", "title": "Liked Music"}]
 
+    def get_account_info(self):
+        return {"accountName": "Test Listener"}
+
 
 def test_mixes_dedupes_and_skips_none_and_non_mix_ids():
     result = music.mixes(yt=FakeYT(FIXTURE))
@@ -53,6 +56,11 @@ def test_empty_mixes_on_a_signed_out_feed_raise_auth_expired():
         def get_library_playlists(self, limit=25):
             return []
 
+        def get_account_info(self):
+            from ytmusicapi.exceptions import YTMusicServerError
+
+            raise YTMusicServerError("Server returned HTTP 401: Unauthorized.")
+
     with pytest.raises(AuthExpired, match="signed out"):
         music.mixes(yt=SignedOut([{"title": "Quick picks", "contents": []}]))
     # a signed-in account that simply has no mixes yet is not an error
@@ -66,6 +74,11 @@ def test_empty_library_listing_means_signed_out():
     class SignedOut(FakeYT):
         def get_library_playlists(self, limit=25):
             return []
+
+        def get_account_info(self):
+            from ytmusicapi.exceptions import YTMusicServerError
+
+            raise YTMusicServerError("Server returned HTTP 401: Unauthorized.")
 
     with pytest.raises(AuthExpired, match="signed out"):
         music.library_playlists(yt=SignedOut([]))
@@ -81,6 +94,11 @@ def test_mix_fetch_on_signed_out_cookies_says_so_instead_of_dumping_the_response
     class SignedOut(FakeYT):
         def get_library_playlists(self, limit=25):
             return []
+
+        def get_account_info(self):
+            from ytmusicapi.exceptions import YTMusicServerError
+
+            raise YTMusicServerError("Server returned HTTP 401: Unauthorized.")
 
         def get_playlist(self, playlist_id, limit=100):
             raise KeyError("Unable to find 'contents' using path [...] on {'responseContext': {...}}")

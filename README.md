@@ -26,18 +26,24 @@ mpv is the only long-running process. `ytm` starts it once, idle, with a JSON IP
 pipx install ytm              # or: uv tool install ytm   /   pip install ytm
 
 ytm install-mpv               # mpv plays the audio and pip cannot install it
-ytm auth                      # sign in with Google, see Authentication
+ytm search "daft punk"        # public: no account needed
 ytm play "daft punk"          # search, play the first hit, radio follows
 ytm                           # the TUI
 ytm update                    # later: newest ytm and yt-dlp, whatever installed it
+
+# Account features (library, likes, your playlists):
+ytm login                     # a real browser session, see Authentication
+ytm liked
+ytm library
+ytm playlists
 ```
 
-To hack on it instead:
+To hack on it instead (add the `login` extra to work on browser sign-in):
 
 ```bash
 git clone https://github.com/MaheshBhushan/yt-music-cli.git && cd yt-music-cli
 python3 -m venv .venv && source .venv/bin/activate
-pip install -e '.[dev]'
+pip install -e '.[dev]'       # or '.[dev,login]'
 ```
 
 > [!IMPORTANT]
@@ -74,6 +80,9 @@ ytm add 4                      # enqueue; add --next 4 puts it right after the c
 ytm radio                      # replace the queue with a station for the current track
 ytm mix                        # list your daily mixes (Supermix, Discover Mix, ...)
 ytm mix discover               # replace the queue with a mix, matched by substring
+ytm liked | library            # account lists; empty results are not errors
+ytm playlists                  # your playlists; --local for the ones stored here
+ytm login | account | logout   # sign in, inspect the session, sign out locally
 ytm status | queue | lyrics | like
 ytm pause | resume | toggle | next | prev | stop
 ytm seek -10 | seek --to 90 | volume 60 | clear | shuffle
@@ -87,34 +96,100 @@ The queue never holds a track twice: playing something already queued jumps to i
 
 ## Authentication
 
-Search and playback work signed out. Library, playlists, likes and lyrics need your account. Credentials live in `~/.config/ytm/auth.json` (mode 0600) and are checked with a live call before being kept. Two ways in:
+Search, playback, radio, lyrics and public playlists work signed out. Your library, likes, playlists and daily mixes need an account.
 
 ```bash
-ytm auth                          # 1. sign in with Google (OAuth): a desktop browser, or a device code for SSH and headless boxes
-ytm auth --from-browser           # 2. cookies from a browser you are logged in to (auto-detects)
-ytm auth --from-browser firefox   #    or name one: chrome, chromium, edge, brave, vivaldi, opera, helium, firefox
-ytm auth --from-browser helium --profile "Profile 1"   # pick a browser profile (default: the one that is logged in)
+ytm login                     # opens a real browser window; sign in there
+ytm login --from-browser      # or import cookies from a browser you are already signed in to
+ytm account                   # what is signed in, and whether the session still works
+ytm logout                    # sign out locally: tombstone plus credential cleanup
 ```
 
-OAuth tokens refresh themselves. Browser cookies expire after a few weeks; re-run `ytm auth --from-browser` when the app says so. OAuth has no browser cookies, so streams resolve anonymously for OAuth users: search, library and the normal catalogue play fine, private or age-gated tracks do not; import cookies from a browser if you need those.
+### Browser session (default)
 
-### From a browser
+`ytm login` opens your operating system's default browser, using its normal profile. Sign in at Google's real page, then return to the terminal and press Enter. ytm imports only the selected browser profile's YouTube cookies, verifies the account with YouTube Music, asks you to confirm it, and stores the session. It never asks for your Google password.
 
-Log in at <https://music.youtube.com>, then run `ytm auth --from-browser`. It tries each browser in turn and, within a browser, every profile (Chromium's `Default`, `Profile 1`, ...; System and Guest profiles are skipped), taking the first with a YouTube session. To read one profile only, name its directory: `ytm auth --from-browser helium --profile "Profile 1"` (for Firefox, the profile folder name). If none works, the error says why for each browser: not installed, no such profile, cookies could not be decrypted, database locked, no YouTube login, or a network failure while checking the cookies against YouTube Music.
+```bash
+ytm login                            # supported OS default browser
+ytm login --browser chrome           # Chrome's Default profile
+ytm login --browser chrome --profile "Profile 1"
+ytm login --browser firefox          # Firefox's configured default profile
+ytm login --browser edge --authuser 1 # second Google account
+```
 
-Browser cookies go stale on their own: Google rotates the session tokens in the browser about once a day, and YouTube then treats ytm's copy as signed out. ytm remembers which browser and profile the cookies came from (`auth.source.json` next to `auth.json`) and, the first time a request comes back signed out, re-extracts them from that browser and retries, so the TUI recovers without a visit to the terminal. If the browser itself is signed out, the error says so and that the re-extraction failed. Pasted headers and OAuth are never refreshed this way.
+Chrome, Chromium, Edge, Firefox, Brave, Vivaldi, Opera and Helium are supported browser choices. Browser discovery and cookie decryption depend on the operating system and installation; sandboxed distributions may need explicit import. Safari is not supported. Chrome-family profiles default to the directory named `Default`, not the last active profile. Firefox uses its configured default. Use `--profile` to choose another.
 
-If the browser is signed in to more than one Google account, pass `ytm auth --from-browser --authuser 1` (0 is the first account, 1 the second, ...) or set `auth.x-goog-authuser` in `config.toml` to make it the default.
+Answering `n` at account confirmation cancels without replacing existing credentials. `--yes` skips this final confirmation; normal-profile login still requires a terminal and Enter after sign-in. ytm never closes your normal browser. If its cookie database is locked, close it yourself before pressing Enter. `--timeout` is checked after you return from the terminal prompt; it cannot interrupt a blocking Enter prompt.
+
+### Isolated browser observation (optional)
+
+For automatic page detection, use an isolated Playwright browser:
+
+```bash
+pip install "ytm[login]"
+ytm login --install-browser                 # install bundled Chromium
+ytm login --method playwright
+ytm login --method playwright --browser chrome
+ytm login --method playwright --browser edge
+ytm login --install-browser --browser firefox
+ytm login --method playwright --browser firefox
+```
+
+Chromium, installed Chrome/Edge channels, Playwright Firefox and WebKit are supported choices. These use a temporary browser context, not your usual profile. ytm observes only allowlisted YouTube Music session data and cookies, verifies the account, then closes its own browser. `--timeout SECONDS` bounds observation; closing the window cancels. Google may reject automated-browser sign-in. Normal-profile login or explicit import is the fallback.
+
+Playwright cannot reliably attach to Chrome's ordinary default profile: Chrome 136+ disables remote debugging against its normal data directory. ytm therefore opens that profile normally and imports its session after your confirmation; it does not copy your profile or disable browser protections.
+
+### Import from a browser
+
+Already signed in at <https://music.youtube.com>? Import that browser's session instead; ytm validates the cookies with a read-only account call before storing anything:
+
+```bash
+ytm login --from-browser                # auto-detect the browser and profile
+ytm login --from-browser firefox        # or name one: chrome, chromium, edge, brave, vivaldi, opera, helium, firefox
+ytm login --from-browser helium --profile "Profile 1"
+ytm login --from-browser --authuser 1   # second Google account in that browser
+```
+
+Auto-detection tries each browser in turn and, within a browser, every profile (Chromium's `Default`, `Profile 1`, …; System and Guest profiles are skipped), taking the first with a YouTube session. Each browser's failure reason is reported: not installed, no such profile, cookies could not be decrypted, database locked, or no YouTube login. If the browser has several Google accounts, `--authuser N` (0 is the first) or `auth.x-goog-authuser` in `config.toml` picks the default.
+
+New browser-session records require `ytm login` again when they expire. Legacy imports with a recorded source retain their existing single reimport attempt. OAuth retains its own token-refresh mechanism.
 
 > [!WARNING]
-> **Windows:** Chrome, Edge, Brave, Vivaldi and Opera encrypt their cookies with App-Bound Encryption (Chrome 127 and newer), which no other program can read, so `ytm auth --from-browser` cannot import from them. Plain `ytm auth` (Google sign-in) needs no cookies; otherwise log in with **Firefox** and run `ytm auth --from-browser firefox`.
+> **Windows:** Chrome, Edge, Brave, Vivaldi and Opera encrypt their cookies with App-Bound Encryption (Chrome 127 and newer), which can prevent external cookie extraction in both normal-profile login and `--from-browser`. Use **Firefox**, isolated `--method playwright` if Google permits it, or OAuth.
 
 > [!WARNING]
-> **macOS:** a program may not read another app's data until it has Full Disk Access, so `ytm auth --from-browser` sees nothing in any browser until your terminal has it: **System Settings → Privacy & Security → Full Disk Access**, switch your terminal on (add it with **+** if it is not listed), then quit it completely and reopen it. `ytm auth --from-browser` says so when this is what stopped it. Plain `ytm auth` (Google sign-in) needs none of this.
+> **macOS:** privacy controls or Keychain permissions can prevent browser import. If the error indicates a disk-access restriction, review: **System Settings → Privacy & Security → Full Disk Access**, switch your terminal on (add it with **+** if it is not listed), then quit it completely and reopen it. The import says so when this is what stopped it.
 
-### OAuth
+### Status, expiry and logout
 
-Plain `ytm auth` opens Google sign-in using ytm's bundled Desktop app client. Approve access in the browser on the same computer; no client ID, client secret, or Google Cloud project is needed. The token refreshes itself. If the browser does not open, use the printed link. Google may restrict access while the app is in Testing; the project owner must add your account as a test user in that case.
+```bash
+ytm account             # checks with YouTube Music whether the session still works
+ytm account --no-check  # local facts only, no network
+```
+
+`account` distinguishes **expired** (YouTube rejected the session: run `ytm login`), **unknown** (offline or provider trouble: credentials are kept and nothing is deleted), and **invalid** (the stored record is unreadable). Permission errors (HTTP 403) are reported as permission problems with that operation, never as an expired sign-in.
+
+`ytm logout` is local and idempotent: it writes a logged-out tombstone and deletes ytm's credential copies (the legacy `auth.json`, its source sidecar, `cookies.txt`, and managed OAuth generations). The `session.json` tombstone remains. It never calls Google's logout or revocation endpoint, and never clears your normal browser cookies, local playlists, search history or cached audio. A file that cannot be removed is reported instead of hidden.
+
+### Where credentials live
+
+ytm stores a small versioned record in the platformdirs user configuration directory: Linux `~/.config/ytm/session.json` (or `$XDG_CONFIG_HOME/ytm`), macOS `~/Library/Application Support/ytm/session.json`, Windows `%LOCALAPPDATA%\ytm\session.json` (mode 0600, inside a 0700 directory on platforms that support it). It holds allowlisted request headers and an account index — never a password, page dump, screenshot or request body. Storage is permission-restricted, **not encrypted**; treat the file like a browser session. The legacy `~/.config/ytm/auth.json` is still read when no record exists and is left untouched until you next log in or out.
+
+### OAuth (advanced)
+
+OAuth remains for SSH, headless boxes, or when a browser session cannot be established:
+
+```bash
+ytm login --method oauth
+ytm login --method oauth --client-file ~/Downloads/client_secret_....json
+ytm login --method oauth --client-id YOUR_CLIENT_ID --client-secret YOUR_CLIENT_SECRET
+```
+
+The legacy `ytm auth` command keeps its established OAuth and `--from-browser` behaviour for existing scripts; new setups should use `ytm login`.
+
+### OAuth setup
+
+`ytm login --method oauth` opens Google sign-in using ytm's bundled Desktop app client. Approve access in the browser on the same computer; no client ID, client secret, or Google Cloud project is needed. The token refreshes itself. If the browser does not open, use the printed link. Google may restrict access while the app is in Testing; the project owner must add your account as a test user in that case.
 
 Release packages include the default client at build time; source checkouts need their own client configuration. Existing saved Desktop clients and explicit flags/environment variables still take precedence. To use your own client, or set up the device-code flow for SSH/headless use:
 
@@ -126,21 +201,21 @@ Release packages include the default client at build time; source checkouts need
 **Desktop app** (a browser on the machine running ytm): download the client JSON, then
 
 ```bash
-ytm auth --client-file ~/Downloads/client_secret_....json
-ytm auth                          # later: the client is remembered
+ytm login --method oauth --client-file ~/Downloads/client_secret_....json
+ytm login --method oauth          # later: the client is remembered
 ```
 
-Open the printed link in a browser on the same computer and approve YouTube access. The callback listens only on loopback, uses PKCE, and gives up after 15 minutes. `YTM_OAUTH_CLIENT_FILE` can name the JSON instead of the flag. The client is remembered in `~/.config/ytm/oauth_desktop_client.json`; a failed or incomplete sign-in leaves your existing credentials untouched.
+Open the printed link in a browser on the same computer and approve YouTube access. The callback listens only on loopback, uses PKCE, and gives up after 15 minutes. `YTM_OAUTH_CLIENT_FILE` can name the JSON instead of the flag. The client is remembered alongside its token in a managed OAuth generation under the configuration directory; a failed or incomplete sign-in leaves your existing credentials untouched.
 
 **TVs and Limited Input devices** (SSH and headless boxes: the link can be opened on any device): copy the **Client ID** and **Client secret**, then
 
 ```bash
-ytm auth --client-id YOUR_CLIENT_ID --client-secret YOUR_CLIENT_SECRET
+ytm login --method oauth --client-id YOUR_CLIENT_ID --client-secret YOUR_CLIENT_SECRET
 ```
 
-ytm prints a URL and a short code; open the URL anywhere, sign in and enter the code. The flags can also come from `YTM_OAUTH_CLIENT_ID` / `YTM_OAUTH_CLIENT_SECRET`, and with neither set `ytm` prompts for them.
+ytm prints a URL and a short code; open the URL anywhere, sign in and enter the code. The flags can also come from `YTM_OAUTH_CLIENT_ID` / `YTM_OAUTH_CLIENT_SECRET`, and with neither set `ytm` prompts for them. (`ytm auth` accepts the same OAuth flags for compatibility.)
 
-Either way the client ID and secret are kept in `~/.config/ytm/oauth_client.json` (mode 0600) because every token refresh needs them again. Revoking access in your Google account is reported as expired auth; run `ytm auth` again.
+Either way the client ID and secret are kept in `~/.config/ytm/oauth_client.json` (mode 0600) because every token refresh needs them again. Revoking access in your Google account is reported as expired auth; run `ytm login --method oauth` again.
 
 > [!NOTE]
 > Streams resolve **anonymously by default** for everyone. With account cookies, YouTube hands out URLs that require an account-bound proof-of-origin token and then answers 403. Anonymous resolution plays the same catalogue. Set `behaviour.authenticated_streams = true` only if you need private or age-gated tracks.
@@ -232,9 +307,10 @@ This run's generated report and machine-readable summary are in [`benchmarks/res
 ytm/
   cli.py            commands and the mpv launch configuration
   player.py         Player: mpv over JSON IPC
-  music.py          ytmusicapi wrappers, Track
+  music.py          ytmusicapi wrappers, Track, public/account policy
   state.py          remembered searches and track metadata
-  auth.py           browser cookies, DevTools headers, OAuth
+  auth.py           auth facade: credential discovery, OAuth, browser import
+  authentication/   session model, atomic storage, AuthManager, browser login
   cache.py          offline downloads
   update.py         version check against PyPI, in-place upgrade
   mpv/autoplay.lua  radio autoplay inside mpv
@@ -251,3 +327,5 @@ pip install -e '.[dev]' && pytest -q
 ## License
 
 MIT, see [LICENSE](LICENSE).
+
+Detailed architecture, reviewed fixes, browser support and verification: [browser authentication handout](docs/BROWSER_AUTH_REVIEW_AND_MULTIBROWSER_HANDOUT.md).
