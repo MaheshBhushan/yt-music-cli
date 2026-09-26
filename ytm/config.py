@@ -31,6 +31,7 @@ startup. The shape and defaults are::
     toggle = "space"
     next = "n"
     prev = "p"
+    like = "!"
     search = "/"
     quit = "e"
 
@@ -90,6 +91,7 @@ DEFAULTS = {
         "toggle": "space",
         "next": "n",
         "prev": "p",
+        "like": "!",
         "search": "/",
         "quit": "e",
     },
@@ -116,6 +118,7 @@ _TYPES = {
     ("keys", "toggle"): str,
     ("keys", "next"): str,
     ("keys", "prev"): str,
+    ("keys", "like"): str,
     ("keys", "search"): str,
     ("keys", "quit"): str,
     ("update", "check"): bool,

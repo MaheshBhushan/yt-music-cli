@@ -24,6 +24,7 @@ def test_missing_file_yields_documented_defaults(tmp_path):
             "toggle": "space",
             "next": "n",
             "prev": "p",
+            "like": "!",
             "search": "/",
             "quit": "e",
         },
@@ -48,6 +49,7 @@ def test_partial_config_overrides_only_its_own_keys(tmp_path):
     assert config["keys"]["toggle"] == "k"
     assert config["keys"]["next"] == "n"
     assert config["keys"]["prev"] == "p"
+    assert config["keys"]["like"] == "!"
     assert config["keys"]["search"] == "/"
     assert config["keys"]["quit"] == "e"
     assert config["behaviour"] == {
