@@ -11,3 +11,17 @@ cookies.txt
 oauth_desktop_client.json
 ytm/oauth_default_client.json
 benchmarks/results/
+# browser-session auth: generated credentials and launch artifacts
+session.json
+session.json.tmp*
+session.json.lock
+browser.json
+auth.source.json
+playwright/.auth/
+.ytm-browser-profile/
+
+# Atomic browser-session staging files
+.session.json.tmp*
+
+# Local static-analysis cache
+.code-health-cache/

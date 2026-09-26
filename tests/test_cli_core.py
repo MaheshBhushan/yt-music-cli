@@ -573,8 +573,9 @@ def test_install_mpv_finds_an_mpv_the_shell_cannot_see_yet(monkeypatch):
 def test_auth_defaults_to_oauth_and_from_browser_imports_cookies(monkeypatch, tmp_path):
     from ytm import auth
     calls = []
-    monkeypatch.setattr(auth, "oauth_setup", lambda **kw: (calls.append(("oauth", kw)), tmp_path / "auth.json")[1])
-    monkeypatch.setattr(auth, "from_browser", lambda browser, **kw: (calls.append(("browser", browser, kw)), tmp_path / "auth.json")[1])
+    from ytm.authentication.storage import StoredRecord
+    monkeypatch.setattr(auth, "oauth_login", lambda **kw: (calls.append(("oauth", kw)), StoredRecord.oauth(tmp_path / "auth.json"))[1])
+    monkeypatch.setattr(auth, "import_from_browser", lambda browser, **kw: (calls.append(("browser", browser, kw)), tmp_path / "session.json")[1])
     monkeypatch.setattr(auth, "cookies_file", lambda: None)
     assert run("auth")[0] == 0
     assert calls[-1][0] == "oauth" and calls[-1][1]["client_file"] is None

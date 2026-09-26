@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+- `ytm login` opens the supported OS default browser's normal profile, waits for terminal confirmation, imports that profile's YouTube session, and verifies the account before saving. Chrome, Chromium, Edge, Firefox, Brave, Vivaldi, Opera and Helium are selectable. `--method playwright` provides optional isolated browser observation with Chromium, Chrome/Edge, Firefox or WebKit. Normal Chrome profiles are never attached to remote debugging.
+- Authentication review fixes: anonymous clients bypass credential storage; stale request/account capture is rejected; OAuth acquisition is staged and verified before activation; logout and credential cleanup share a transaction; locks use OS advisory locking; late login results cannot supersede logout; malformed account responses and network errors are not reported as valid/expired sessions; TUI account responses are discarded after credential changes.
+- `ytm logout` signs out locally and idempotently: a logged-out tombstone is written first, then ytm's credential copies are deleted (legacy `auth.json`, its source sidecar, `cookies.txt`, managed OAuth client files). It never contacts Google and never touches local playlists, search history or cached audio; files it could not remove are reported.
+- `ytm account` reports the signed-in account with an honest session status: valid, expired, unknown (offline or provider trouble), invalid, or not checked (`--no-check`, no network). HTTP 403 is a permission problem, not an expired sign-in, and HTTP 400/429/5xx, network and provider-parser failures no longer masquerade as expiry.
+- New account listings: `ytm liked`, `ytm library` (library songs) and `ytm playlists` (`--local` needs no account). Empty results are valid, and missing credentials say to run `ytm login`.
+- Public mode is fully anonymous: search, song metadata, radio, plain and timed lyrics, and public/unlisted playlist reads no longer read stored credentials, build OAuth clients, reimport browser cookies, or import Playwright. Timed lyrics run on a dedicated anonymous client because ytmusicapi's mobile context switch is not thread-safe. Account-only ids (Liked Music, Episodes for Later, daily mixes) and library-sourced playlists still use the account explicitly.
+- Account writes (playlist create/add/remove/edit/delete, like) are never replayed automatically after a rejection or timeout; only reads may recover once through a scoped browser reimport.
+- `ytm auth --from-browser` now takes the same validate-before-save path as `ytm login --from-browser`; the legacy file is no longer overwritten before validation.
+- A stale session now surfaces the login instruction instead of a provider response dump, and an empty library listing is probed before being trusted. The manager, status and logout all see the canonical legacy `auth.json`, so an existing account is no longer reported as logged out or left behind on logout.
+
 ## 0.9.5 — 2026-09-19
 
 - Interactive Windows `ytm update` can now hand off to a separate PowerShell window after confirmation (#54). The helper waits for the original process and launcher locks, runs the installer, verifies the installed version, and preserves the manual command on failure. It never terminates other processes.

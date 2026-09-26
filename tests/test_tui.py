@@ -309,7 +309,7 @@ def test_position_event_moves_progress_bar_without_polling():
     asyncio.run(scenario())
 
 
-def test_lowercase_q_quits_without_shutdown():
+def test_e_uses_central_cleanup():
     async def scenario():
         stub = StubClient()
         app = YTMApp(client=stub)
@@ -324,7 +324,7 @@ def test_lowercase_q_quits_without_shutdown():
     asyncio.run(scenario())
 
 
-def test_uppercase_q_quits_and_shuts_down_daemon():
+def test_x_uses_the_same_central_cleanup():
     async def scenario():
         stub = StubClient()
         app = YTMApp(client=stub)
@@ -333,7 +333,7 @@ def test_uppercase_q_quits_and_shuts_down_daemon():
             await settle(pilot)
             await pilot.press("x")
             await settle(pilot)
-        assert any(c[0] == "shutdown" for c in stub.calls)
+        assert not any(c[0] == "shutdown" for c in stub.calls)
         assert stub.closed
 
     asyncio.run(scenario())

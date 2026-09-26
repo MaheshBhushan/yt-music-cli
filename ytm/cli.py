@@ -11,6 +11,7 @@ the formatting entirely, which is what makes the TUI a client of this CLI.
 """
 
 import argparse
+import importlib.util
 import json
 import os
 import re
@@ -79,6 +80,9 @@ def player(spawn=True, **player_kwargs):
     pot = cfg["pot"]
     autoplay = cfg["behaviour"]["autoplay_radio"]
     mixer = volume.SystemVolume.detect() if cfg["audio"]["control"] == "system" else None
+    if mixer is not None and player_kwargs.get("owner") is not None:
+        mixer.owner = player_kwargs["owner"]
+        mixer._run = mixer.owner.run
     return Player(
         spawn=spawn,
         mixer=mixer,
@@ -424,6 +428,50 @@ def cmd_like(args):
     return {"liked": fmt_track(track)}, f"liked {track.title} — {track.artist}"
 
 
+def render_playlists(playlists):
+    lines = []
+    for playlist in playlists:
+        counted = (
+            f"{playlist.track_count} tracks"
+            if playlist.track_count is not None
+            else "track count unknown"
+        )
+        lines.append(f"{playlist.title} — {counted}")
+    return "\n".join(lines)
+
+
+def cmd_liked(args):
+    from ytm import music
+
+    tracks = music.liked_songs(limit=args.limit)
+    if not tracks:
+        return {"tracks": []}, "no liked songs"
+    return {"tracks": [fmt_track(t) for t in tracks]}, render_results(tracks)
+
+
+def cmd_library(args):
+    from ytm import music
+
+    tracks = music.library_songs(limit=args.limit)
+    if not tracks:
+        return {"tracks": []}, "your library has no songs"
+    return {"tracks": [fmt_track(t) for t in tracks]}, render_results(tracks)
+
+
+def cmd_playlists(args):
+    from ytm import music, playlists_local
+
+    if args.local:
+        playlists = playlists_local.list_playlists()
+        if not playlists:
+            return {"playlists": []}, "no local playlists"
+    else:
+        playlists = music.library_playlists()
+        if not playlists:
+            return {"playlists": []}, "no playlists"
+    return {"playlists": [asdict(p) for p in playlists]}, render_playlists(playlists)
+
+
 def cmd_install_mpv(args):
     """Install mpv with whatever package manager this machine has.
 
@@ -483,13 +531,214 @@ def cmd_auth(args):
     from ytm import auth
 
     if args.from_browser is not None:
-        path = auth.from_browser(args.from_browser or None, profile=args.profile, authuser=args.authuser)
+        auth.import_from_browser(args.from_browser or None, profile=args.profile, authuser=args.authuser)
+        auth.cookies_file()
+        return {"saved": str(auth.SESSION_PATH)}, "Saved a verified browser session"
+
+    record = auth.oauth_login(client_id=args.client_id, client_secret=args.client_secret,
+                              client_file=args.client_file)
+    _reset_account_clients()
+    return _login_payload(record), "Login successful. Credentials stored locally."
+
+
+def _confirm_account(name):
+    """The first-release account check; --yes skips it, EOF is a no."""
+    shown = name or "an unnamed account"
+    try:
+        print(f"Use this account: {shown}? [Y/n] ", end="", file=sys.stderr, flush=True)
+        answer = input().strip().lower()
+    except EOFError:
+        return False
+    return answer in ("", "y", "yes")
+
+
+def _login_payload(record):
+    return {"authenticated": True, "method": record.method, "status": "valid"}
+
+
+def _reset_account_clients():
+    """Retire a client built from the credentials this login replaced.
+
+    One-shot CLI runs would notice the new revision anyway; a long-lived
+    process (or a test) must not keep serving the old account.
+    """
+    from ytm import music
+
+    music.reset_client()
+
+
+def _login_interactive(args):
+    from ytm import auth
+    from ytm.authentication import browser_login
+
+    print("Opening YouTube Music login...", file=sys.stderr)
+    print("Sign in using the browser window.", file=sys.stderr)
+    print("Waiting for YouTube Music authentication...", file=sys.stderr)
+
+    def confirm(verified):
+        print("YouTube Music account verified.", file=sys.stderr)
+        if args.yes:
+            return True
+        return _confirm_account(verified.account_name)
+
+    if args.method == "playwright":
+        browser = browser_login.PlaywrightBrowser(channel=args.browser)
     else:
-        path = auth.oauth_setup(client_id=args.client_id, client_secret=args.client_secret,
-                                client_file=args.client_file)
-    # regenerate the cookie file yt-dlp reads, so mpv's next resolve is authenticated
-    auth.cookies_file()
-    return {"saved": str(path)}, f"Saved credentials to {path}"
+        from ytm.authentication.browser_profiles import NativeBrowser
+        browser = NativeBrowser(browser=args.browser, profile=args.profile, authuser=args.authuser)
+    record = browser_login.interactive_login(
+        auth.auth_manager(), browser=browser, timeout=args.timeout, confirm=confirm
+    )
+    _reset_account_clients()
+    return _login_payload(record), "Login successful. Credentials stored locally."
+
+
+def _login_from_browser(args):
+    from ytm import auth
+
+    print("Importing the browser's YouTube Music session...", file=sys.stderr)
+
+    def confirm(verified):
+        if args.yes:
+            return True
+        return _confirm_account(verified.account_name)
+
+    record = auth.import_from_browser(
+        args.from_browser or None,
+        profile=args.profile,
+        authuser=args.authuser,
+        confirm=confirm,
+    )
+    _reset_account_clients()
+    return _login_payload(record), "Login successful. Credentials stored locally."
+
+
+def _install_login_browser(args):
+    if importlib.util.find_spec("playwright") is None:
+        raise CliError(
+            "The Playwright package is not installed. Install it with "
+            "'pip install \"ytm[login]\"' (or 'pip install playwright'), then run "
+            "'ytm login --install-browser' again."
+        )
+    browser = {"edge": "msedge"}.get(args.browser, args.browser) or "chromium"
+    command = [sys.executable, "-m", "playwright", "install", browser]
+    print(f"$ {' '.join(command)}", file=sys.stderr)
+    try:
+        code = subprocess.call(command)
+    except OSError as exc:
+        raise CliError(f"could not run {command[0]}: {exc}") from exc
+    if code != 0:
+        raise CliError(f"browser installation failed (exit {code})")
+    return {"installed": True, "browser": browser}, f"{browser} installed for Playwright"
+
+
+_METHOD_LABELS = {"browser": "Browser session", "oauth": "OAuth"}
+
+
+def cmd_account(args):
+    """Report the signed-in account: local facts first, validation second."""
+    from ytm import auth
+
+    status = auth.auth_manager().status(validate=not args.no_check)
+    data = {
+        "logged_in": status.logged_in,
+        "method": status.method,
+        "session_status": status.state,
+    }
+    if status.account_name:
+        data["account"] = status.account_name
+    method = _METHOD_LABELS.get(status.method, "None")
+    if status.state == "valid":
+        lines = ["Logged in: Yes", f"Authentication: {method}", "Session status: Valid"]
+        if status.account_name:
+            lines.append(f"Account: {status.account_name}")
+        return data, "\n".join(lines)
+    if status.state == "not_checked":
+        stored = "Yes" if status.logged_in else "No"
+        return data, f"Credentials stored: {stored}\nSession status: Not checked"
+    if status.state == "unknown":
+        return data, "Credentials stored: Yes\nSession status: Unknown (could not verify)"
+    if status.state == "expired":
+        return data, (
+            f"Logged in: No\nAuthentication: {method}\nSession status: Expired\n"
+            "Run `ytm login` to sign in."
+        )
+    if status.state == "invalid":
+        return data, (
+            "Credentials stored: Yes\nSession status: Invalid\n"
+            "Run `ytm login` to replace them."
+        )
+    return data, "Logged in: No\nRun `ytm login` to sign in."
+
+
+def cmd_logout(args):
+    """Sign out on this computer: local tombstone plus file cleanup."""
+    from ytm import auth
+
+    result = auth.auth_manager().logout()
+    _reset_account_clients()
+    data = {
+        "signed_out": True,
+        "cleaned": list(result.removed),
+        "cleanup_failures": [{"path": path, "reason": reason} for path, reason in result.failed],
+    }
+    if result.failed:
+        details = "\n".join(f"could not remove {path}: {reason}" for path, reason in result.failed)
+        raise CliError(
+            "Signed out, but some credential files could not be removed and could "
+            f"resurface if the session record is deleted:\n{details}"
+        )
+    return data, "Signed out of YTM on this computer."
+
+
+def cmd_login(args):
+    """Sign in: interactive browser by default, or an explicit alternative."""
+    from ytm import auth
+
+    if args.install_browser:
+        return _install_login_browser(args)
+    if args.from_browser is not None:
+        return _login_from_browser(args)
+    if args.method == "oauth":
+        record = auth.oauth_login(
+            client_id=args.client_id,
+            client_secret=args.client_secret,
+            client_file=args.client_file,
+        )
+        _reset_account_clients()
+        return _login_payload(record), "Login successful. Credentials stored locally."
+    return _login_interactive(args)
+
+
+def _login_usage_error(args):
+    """Reject inconsistent browser modes before touching profiles or credentials."""
+    from ytm.authentication.browser_profiles import NATIVE_BROWSERS
+
+    managed = ("chromium", "chrome", "chrome-beta", "chrome-dev", "chrome-canary",
+               "edge", "msedge", "msedge-beta", "msedge-dev", "msedge-canary", "firefox", "webkit")
+    import math
+    if args.timeout is not None and (not math.isfinite(args.timeout) or args.timeout <= 0):
+        return "--timeout must be a positive number of seconds"
+    if args.install_browser:
+        if args.from_browser is not None or args.profile or args.authuser or args.method in ("browser", "oauth") or args.client_file or args.client_id or args.client_secret:
+            return "--install-browser only installs a Playwright browser; do not combine it with a login method or profile"
+        if args.browser and args.browser not in managed:
+            return "unsupported Playwright browser; choose chromium, chrome, edge, firefox or webkit"
+        return None
+    if args.from_browser is not None and args.method in ("oauth", "playwright"):
+        return "--from-browser cannot be combined with --method oauth or playwright"
+    if args.browser and (args.from_browser is not None or args.method == "oauth"):
+        return "--browser cannot be combined with --from-browser or --method oauth"
+    if (args.profile is not None or args.authuser is not None) and args.method in ("oauth", "playwright"):
+        return "--profile/--authuser select an existing browser session; omit them for OAuth or Playwright"
+    if (args.client_file or args.client_id or args.client_secret) and args.method != "oauth":
+        return "--client-file/--client-id/--client-secret require --method oauth"
+    choices = managed if args.method == "playwright" else (*NATIVE_BROWSERS, "default", "msedge")
+    if args.browser and args.browser not in choices:
+        return "unsupported browser for this method; use --method playwright for isolated Firefox/WebKit/Chromium"
+    if args.authuser is not None and (not args.authuser.isascii() or not args.authuser.isdecimal()):
+        return "--authuser must be a nonnegative numeric account index"
+    return None
 
 
 def cmd_cache(args):
@@ -590,6 +839,15 @@ def build_parser():
     p.add_argument("query")
     p.add_argument("-n", "--limit", type=int, default=10)
 
+    p = add("liked", cmd_liked, "list your liked songs")
+    p.add_argument("-n", "--limit", type=int, default=25)
+
+    p = add("library", cmd_library, "list songs saved in your library")
+    p.add_argument("-n", "--limit", type=int, default=25)
+
+    p = add("playlists", cmd_playlists, "list your playlists (--local: the ones stored on this computer)")
+    p.add_argument("--local", action="store_true", help="list local playlists only; no account needed")
+
     p = add("play", cmd_play, "play a song: a query, a result number, or a video id")
     p.add_argument("what", nargs="*")
     p = add("add", cmd_add, "queue a song at the end (or right after the current one)")
@@ -624,6 +882,48 @@ def build_parser():
     p = add("install-mpv", cmd_install_mpv, "install mpv, which pip cannot")
     p.add_argument("-y", "--yes", action="store_true", help="do not ask before running it")
     p.add_argument("--force", action="store_true", help="run it even if mpv is already on PATH")
+
+    p = add("login", cmd_login, "sign in to YouTube Music (browser session by default)")
+    p.add_argument(
+        "--timeout", type=float, default=600, metavar="SECONDS",
+        help="how long to wait for the browser sign-in (default: 600)",
+    )
+    p.add_argument(
+        "--browser", default=None, metavar="CHANNEL",
+        help='browser to open, e.g. chrome, edge, firefox, brave (default: system HTTPS browser)',
+    )
+    p.add_argument(
+        "--from-browser", nargs="?", const="", default=None, metavar="BROWSER",
+        help="import cookies from a logged-in browser instead: auto-detect, or chrome, chromium, "
+             "edge, brave, vivaldi, opera, helium, firefox",
+    )
+    p.add_argument(
+        "--profile", default=None, metavar="NAME",
+        help='browser profile directory to read, e.g. "Default" or "Profile 1" (normal browser or --from-browser)',
+    )
+    p.add_argument(
+        "--authuser", default=None, metavar="N",
+        help="Google account index when the browser is signed in to several (normal browser or --from-browser)",
+    )
+    p.add_argument(
+        "--method", choices=("browser", "playwright", "oauth"), default=None,
+        help="browser: normal profile (default); playwright: isolated browser; oauth: advanced fallback",
+    )
+    p.add_argument("--client-file", default=None, help="Google 'Desktop app' OAuth client JSON (only with --method oauth)")
+    p.add_argument("--client-id", default=None, help="OAuth client id (only with --method oauth)")
+    p.add_argument("--client-secret", default=None, help="OAuth client secret (only with --method oauth)")
+    p.add_argument(
+        "--install-browser", action="store_true",
+        help="install the browser binary Playwright drives, then exit",
+    )
+    p.add_argument("-y", "--yes", action="store_true", help="skip account confirmation (normal browser still waits for you to finish signing in)")
+
+    add("logout", cmd_logout, "sign out on this computer (local only; never contacts Google)")
+    p = add("account", cmd_account, "show the signed-in account and session status")
+    p.add_argument(
+        "--no-check", action="store_true",
+        help="report stored credentials without asking YouTube Music whether they still work",
+    )
 
     p = add("auth", cmd_auth, "sign in with Google (or --from-browser to import a browser's cookies)")
     p.add_argument(
@@ -662,6 +962,10 @@ def build_parser():
 def main(argv=None, out=sys.stdout, err=sys.stderr):
     parser = build_parser()
     args = parser.parse_args(argv)
+    if args.command == "login":
+        problem = _login_usage_error(args)
+        if problem:
+            parser.error(problem)
     if args.command is None:
         # cmd_tui answers (data, text) like every other command, and a
         # two-None tuple is truthy: `return cmd_tui(args) or 0` handed that
@@ -671,11 +975,15 @@ def main(argv=None, out=sys.stdout, err=sys.stderr):
         return 0
     try:
         data, text = args.func(args)
+    except KeyboardInterrupt:
+        print("cancelled", file=err)
+        return 130
     except (CliError, PlayerError) as exc:
         print(exc, file=err)
         return 1
     except Exception as exc:  # auth and network failures included
         import requests
+        from ytmusicapi.exceptions import YTMusicError
 
         from ytm import auth
 
@@ -684,7 +992,16 @@ def main(argv=None, out=sys.stdout, err=sys.stderr):
             return 1
         if isinstance(exc, requests.exceptions.RequestException):
             # no route to YouTube is a fact to report, not a stack trace
-            print(f"could not reach YouTube Music: {exc}", file=err)
+            print("could not reach YouTube Music; check your connection and try again.", file=err)
+            return 1
+        from ytm import music
+
+        if isinstance(exc, music.ProviderError):
+            print(exc, file=err)
+            return 1
+        if isinstance(exc, YTMusicError):
+            # the raw message can carry a whole response body; keep it out
+            print(music.provider_message(exc), file=err)
             return 1
         raise
     if data is None:

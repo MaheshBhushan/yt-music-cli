@@ -1,5 +1,7 @@
 """Authentication module."""
 import getpass
+import shutil
+import uuid
 import json
 import threading
 import re
@@ -13,12 +15,32 @@ from pathlib import Path
 import requests
 import ytmusicapi
 from ytm import config as config_mod
+from ytm.authentication import session as session_mod
+from ytm.authentication import storage as storage_mod
+from ytm.authentication.errors import (
+    AccountSelectionError as AccountSelectionError,
+    AuthError,
+    AuthExpired,
+    AuthInvalidFormat as AuthInvalidFormat,
+    AuthMissing,
+    AuthStorageError,
+    BrowserUnavailable as BrowserUnavailable,
+    LoginCancelled,
+    LoginTimedOut as LoginTimedOut,
+    SessionVerificationUnavailable,
+)
+from ytm.authentication.manager import AuthManager
 from ytmusicapi.auth.oauth.credentials import OAuthCredentials
 from ytmusicapi.auth.oauth.exceptions import BadOAuthClient, UnauthorizedOAuthClient
 from ytmusicapi.auth.oauth.token import OAuthToken
 from ytmusicapi.exceptions import YTMusicError
 
 AUTH_PATH = Path.home() / ".config" / "ytm" / "auth.json"
+
+#: The versioned active-record store new logins commit to. Kept separate
+#: from AUTH_PATH so the legacy file stays readable during migration.
+SESSION_PATH = storage_mod.default_session_path()
+
 DEFAULT_DESKTOP_CLIENT = Path(__file__).with_name("oauth_default_client.json")
 
 # Order in which --from-browser auto-detection tries local browser profiles.
@@ -51,16 +73,15 @@ _USER_AGENT = (
 )
 
 _EXPIRED_HINT = (
-    "YouTube Music authentication is no longer valid (browser cookies expire "
-    "when the session is revoked or the cookie ages out). Run 'ytm auth' to "
-    "sign in with Google, or 'ytm auth --from-browser' to import fresh cookies."
+    "YouTube Music authentication is no longer valid. Run 'ytm login' to sign in again."
 )
-_MISSING_HINT = "No YouTube Music credentials found at {path}. Run 'ytm auth' to set them up."
+_MISSING_HINT = (
+    "This command requires your YouTube Music account.\nRun 'ytm login' to sign in."
+)
 
 _SIGNED_OUT_HINT = (
-    "YouTube Music is treating these credentials as signed out: the library "
-    "and home feed came back empty instead of failing. Browser cookies have "
-    "expired or were copied from a signed-out tab. Run 'ytm auth' again."
+    "YouTube Music is treating these credentials as signed out: the account "
+    "service answered as if nobody is logged in. Run 'ytm login' again."
 )
 
 _REFRESH_FAILED_HINT = (
@@ -69,7 +90,8 @@ _REFRESH_FAILED_HINT = (
 
 _OAUTH_EXPIRED_HINT = (
     "YouTube Music OAuth authentication is no longer valid (the refresh token "
-    "was revoked or rejected). Run 'ytm auth' to sign in again."
+    "was revoked or rejected). Run 'ytm login --method oauth' to sign in again, "
+    "or plain 'ytm login' for a browser session."
 )
 
 _OAUTH_CLIENT_MISSING_HINT = (
@@ -194,16 +216,95 @@ def _unreadable_directory(text, isdir=None, readable=None):
     return None
 
 
-class AuthError(Exception):
-    """Base class for authentication problems."""
+def session_store(legacy_path=None):
+    """The active-record store; ``legacy_path`` defaults to the current AUTH_PATH.
+
+    ``None`` means "the canonical legacy location", not "no legacy file": the
+    manager, status and logout must see the same credential the music layer
+    does, or an existing ``auth.json`` is used by one code path while another
+    reports "logged out" and leaves it behind on cleanup.
+    """
+    return storage_mod.SessionStore(
+        SESSION_PATH,
+        legacy_path=AUTH_PATH if legacy_path is None else legacy_path,
+    )
 
 
-class AuthMissing(AuthError):
-    """No credentials have been stored yet."""
+def active_record(legacy_path=None):
+    """The new-format active record, or None (legacy files are not records).
+
+    Malformed records raise AuthInvalidFormat rather than falling through to
+    another credential source.
+    """
+    return session_store(legacy_path).load()
 
 
-class AuthExpired(AuthError):
-    """Stored credentials are present but no longer accepted by YouTube Music."""
+def credential_stamp(legacy_path=None):
+    """A value that changes whenever the active credential changes.
+
+    The record revision when a new-format record is active, else the legacy
+    file's (path, mtime_ns, size) -- the same identity the cached client
+    already used.
+    """
+    path = AUTH_PATH if legacy_path is None else legacy_path
+    record = session_store(path).load()
+    if record is not None:
+        return ("record", str(SESSION_PATH), record.revision, record.method)
+    try:
+        stat = os.stat(path)
+    except OSError:
+        return (str(path), None)
+    return (str(path), stat.st_mtime_ns, stat.st_size)
+
+
+def _browser_client_factory(headers, user=None):
+    return client_from_headers(headers, user=user)
+
+
+def _probe_account(client):
+    return client.get_account_info()
+
+
+def auth_manager(legacy_path=None, *, client_factory=None, probe=None):
+    """An AuthManager on the current store; injectable for tests."""
+    return AuthManager(
+        session_store(legacy_path),
+        client_factory=client_factory or _browser_client_factory,
+        probe=probe or _probe_account,
+        oauth_client_factory=lambda record: _oauth_client(
+            _managed_token_path(record, AUTH_PATH if legacy_path is None else legacy_path)
+        ),
+    )
+
+
+def _managed_token_path(record, legacy_path):
+    """The token file a stored OAuth record may point at.
+
+    Only managed locations count: a path out of an untrusted JSON envelope
+    must not make ytm read an arbitrary file.
+    """
+    token = Path(record.token_path)
+    root = Path(SESSION_PATH).parent / "oauth"
+    managed_generation = (
+        token.name == "auth.json"
+        and token.parent.parent == root
+        and re.fullmatch(r"[0-9a-f]{32}", token.parent.name) is not None
+        and token.resolve() == token.absolute()
+    )
+    if token != Path(legacy_path) and not managed_generation:
+        raise AuthStorageError(
+            "The stored OAuth record points outside the managed credential "
+            "directory; run 'ytm login' again."
+        )
+    return token
+
+
+def _client_from_record(record, legacy_path, credentials_factory=None):
+    if record.method == "none":
+        raise AuthMissing(_MISSING_HINT)
+    if record.method == "browser":
+        return client_from_headers(dict(record.headers or {}), legacy_path, user=record.user)
+    return _oauth_client(_managed_token_path(record, legacy_path), credentials_factory)
 
 
 def _oauth_client_path(path):
@@ -261,7 +362,7 @@ def _load_oauth_client(path):
 def oauth_setup(
     client_id=None,
     client_secret=None,
-    path=AUTH_PATH,
+    path=None,
     credentials_factory=None,
     sleep=time.sleep,
     client_file=None,
@@ -274,6 +375,7 @@ def oauth_setup(
     persisted separately (see _oauth_client_path) since they are needed again for
     every future token refresh.
     """
+    path = Path(AUTH_PATH if path is None else path)
     desktop_file = client_file or os.environ.get("YTM_OAUTH_CLIENT_FILE")
     stored_desktop = _desktop_client_path(path)
     tv_client_given = bool(client_id or client_secret or os.environ.get("YTM_OAUTH_CLIENT_ID")
@@ -295,7 +397,7 @@ def oauth_setup(
     try:
         code = credentials.get_code()
     except Exception as exc:
-        raise AuthError(f"Could not start the OAuth device flow: {exc}") from exc
+        raise AuthError("Could not start the OAuth device flow; check the client configuration and connection.") from exc
 
     print(f"Go to {code['verification_url']} and enter the code: {code['user_code']}")
     print("Waiting for you to authorise this device...")
@@ -312,7 +414,7 @@ def oauth_setup(
         if error == "slow_down":
             interval += 5
         elif error != "authorization_pending":
-            raise AuthError(f"OAuth device authorisation failed: {raw}")
+            raise AuthError("OAuth device authorisation was rejected; existing credentials were kept.")
         if time.time() > deadline:
             raise AuthError(
                 "OAuth device code expired before authorisation completed; "
@@ -331,8 +433,9 @@ def oauth_setup(
     return path
 
 
-def desktop_oauth_setup(client_file, path=AUTH_PATH):
+def desktop_oauth_setup(client_file, path=None):
     """Authorize a desktop client using PKCE and a loopback callback."""
+    path = Path(AUTH_PATH if path is None else path)
     from google_auth_oauthlib.flow import InstalledAppFlow
 
     try:
@@ -408,10 +511,21 @@ def _cookie_header_from_jar(jar):
 
     Returns None if the jar has no usable logged-in YouTube session (no __Secure-3PAPISID).
     """
-    pairs = [(cookie.name, cookie.value) for cookie in jar if "youtube.com" in cookie.domain]
-    if not any(name == "__Secure-3PAPISID" for name, _ in pairs):
-        return None
-    return "; ".join(f"{name}={value}" for name, value in pairs)
+    records = []
+    for cookie in jar:
+        domain = cookie.domain.lstrip(".").lower()
+        expires = getattr(cookie, "expires", None)
+        path = getattr(cookie, "path", "/") or "/"
+        if domain not in ("youtube.com", "music.youtube.com"):
+            continue
+        if expires is not None and expires <= time.time():
+            continue
+        request_path = "/youtubei/v1/browse"
+        if not (request_path == path or request_path.startswith(path.rstrip("/") + "/")):
+            continue
+        records.append({"name": cookie.name, "value": cookie.value})
+    header = session_mod.cookies_to_header(records)
+    return header if session_mod.cookie_value(header, session_mod.SIGNING_COOKIE) else None
 
 
 def _fork_settings(browser_name):
@@ -560,7 +674,9 @@ def _extract_browser_cookie_header(browser_name, profile=None):
             return None, "not installed or no profile found"
         if "locked" in text.lower():
             return None, "cookie database locked; close the browser and retry"
-        return None, text.splitlines()[0] if text else type(exc).__name__
+        if "decrypt" in text.lower() or "dpapi" in text.lower():
+            return None, "cookies could not be decrypted"
+        return None, "cookie extraction failed; check browser permissions and profile availability"
     header = _cookie_header_from_jar(jar)
     if header:
         return header, None
@@ -604,18 +720,40 @@ def _is_network_error(exc):
     return False
 
 
-def from_browser(browser=None, path=AUTH_PATH, client_factory=None, profile=None, config=None, authuser=None):
-    """Extract YouTube cookies from a local browser profile and store credentials at path.
+def _find_browser_cookie_header(browser, profile=None):
+    """(cookie header, browser name, failures per browser) over one or all browsers."""
+    candidates = [browser] if browser else list(_AUTODETECT_BROWSERS)
+    reasons = {}
+    for name in candidates:
+        cookie_header, reason = _extract_browser_cookie_header(name, profile=profile)
+        if cookie_header:
+            return cookie_header, name, reasons
+        reasons[name] = reason
+    return None, None, reasons
 
-    If browser is None, tries each of _AUTODETECT_BROWSERS in turn and uses the first
-    that yields a logged-in YouTube cookie set. `profile` names one browser profile
-    directory (Chromium: "Default", "Profile 1"; Firefox: the profile folder name)
-    instead of letting the newest one win. `authuser` is the index of the Google
-    account when the browser is signed in to several (the x-goog-authuser header);
-    it overrides `auth.x-goog-authuser` in config.toml. Validates the extracted credentials with
-    a live call before leaving the auth file in place; on failure the file is removed
-    and AuthError is raised so a dead auth file is never left behind silently.
-    """
+
+def _no_browser_session_error(reasons):
+    details = "; ".join(f"{name}: {reason}" for name, reason in reasons.items())
+    blocked = _macos_access_hint(reasons)
+    # being locked out of every browser is not the same as having no
+    # login in any of them, and "log in first" is the wrong thing to
+    # tell someone who already is
+    closing = (
+        "."
+        if blocked
+        else ". Log in at https://music.youtube.com in one of these browsers "
+        "first, then run 'ytm auth --from-browser' again."
+    )
+    return (
+        "No logged-in YouTube session found. "
+        + details
+        + closing
+        + blocked
+        + _windows_chromium_hint(reasons)
+    )
+
+
+def _authuser_index(config, authuser):
     if authuser is None:
         cfg = config if config is not None else config_mod.load()
         authuser = (cfg.get("auth") or config_mod.DEFAULTS["auth"])["x-goog-authuser"]
@@ -625,33 +763,32 @@ def from_browser(browser=None, path=AUTH_PATH, client_factory=None, profile=None
             f"--authuser must be the numeric index of the Google account in the browser "
             f"(0 for the first, 1 for the second, ...), not {authuser!r}."
         )
-    candidates = [browser] if browser else list(_AUTODETECT_BROWSERS)
-    cookie_header = None
-    reasons = {}
-    for name in candidates:
-        cookie_header, reason = _extract_browser_cookie_header(name, profile=profile)
-        if cookie_header:
-            break
-        reasons[name] = reason
+    return authuser
+
+
+def from_browser(browser=None, path=None, client_factory=None, profile=None, config=None, authuser=None):
+    """Extract YouTube cookies from a local browser profile and store credentials at path.
+
+    If browser is None, tries each of _AUTODETECT_BROWSERS in turn and uses the first
+    that yields a logged-in YouTube cookie set. `profile` names one browser profile
+    directory (Chromium: "Default", "Profile 1"; Firefox: the profile folder name)
+    instead of letting the newest one win. `authuser` is the index of the Google
+    account when the browser is signed in to several (the x-goog-authuser header);
+    it overrides `auth.x-goog-authuser` in config.toml. Validates the extracted credentials with
+    an account read before replacing the auth file; a failed candidate is
+    discarded without changing existing credentials.
+
+    Compatibility path: new imports should use `import_from_browser`, which
+    validates before writing anything and commits the versioned record.
+    """
+    path = Path(AUTH_PATH if path is None else path)
+    store = session_store(path)
+    expected = auth_manager(path).expected_revision()
+    before = credential_stamp(path)
+    authuser = _authuser_index(config, authuser)
+    cookie_header, name, reasons = _find_browser_cookie_header(browser, profile=profile)
     if cookie_header is None:
-        details = "; ".join(f"{name}: {reason}" for name, reason in reasons.items())
-        blocked = _macos_access_hint(reasons)
-        # being locked out of every browser is not the same as having no
-        # login in any of them, and "log in first" is the wrong thing to
-        # tell someone who already is
-        closing = (
-            "."
-            if blocked
-            else ". Log in at https://music.youtube.com in one of these browsers "
-            "first, then run 'ytm auth --from-browser' again."
-        )
-        raise AuthError(
-            "No logged-in YouTube session found. "
-            + details
-            + closing
-            + blocked
-            + _windows_chromium_hint(reasons)
-        )
+        raise AuthError(_no_browser_session_error(reasons))
 
     headers = {
         "cookie": cookie_header,
@@ -663,41 +800,124 @@ def from_browser(browser=None, path=AUTH_PATH, client_factory=None, profile=None
         "origin": "https://music.youtube.com",
     }
 
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with open(fd, "w", encoding="utf-8") as file:
-        json.dump(headers, file)
-    os.chmod(path, 0o600)
-
-    make_client = client_factory or client
-    try:
-        make_client(path).search("test", limit=1)
-    except Exception as exc:
-        path.unlink(missing_ok=True)
-        source_path(path).unlink(missing_ok=True)
-        if _is_network_error(exc):
-            raise AuthError(
-                "Browser cookies were extracted, but the check against YouTube Music "
-                "failed to connect, so no auth file was left behind. This is a network "
-                "problem, not a login problem: check connectivity (a machine whose IPv6 "
-                "route is broken hangs here until the 30 s timeout; try disabling IPv6 "
-                f"or setting a proxy). Underlying error: {exc}"
-            ) from exc
-        raise AuthError(
-            "Extracted browser cookies were written but did not authenticate "
-            "successfully; no auth file was left behind. Make sure you are logged "
-            "in at https://music.youtube.com and try again. "
-            f"Underlying error: {exc}"
-        ) from exc
-    # remember where these came from, so a stale set can be re-extracted
-    # without asking (see refresh_from_browser)
-    _write_source(path, {"browser": name, "profile": profile, "authuser": authuser})
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    # Legacy callers retain the old file format, but candidates are staged.
+    with tempfile.TemporaryDirectory(prefix=".ytm-login-", dir=path.parent) as directory:
+        candidate_path = Path(directory) / "auth.json"
+        _write_json_0600(candidate_path, headers)
+        make_client = client_factory or (lambda value: ytmusicapi.YTMusic(str(value)))
+        try:
+            checked = make_client(candidate_path)
+            auth_manager(path)._read_account(checked)
+        except Exception as exc:
+            if _is_network_error(exc):
+                raise AuthError("Browser session verification failed due to a network problem; existing credentials were kept.") from exc
+            raise AuthError("Browser cookies did not authenticate successfully; existing credentials were kept. Run 'ytm login'.") from exc
+        store._ensure_directory()
+        with store._lock():
+            if credential_stamp(path) != before or auth_manager(path).expected_revision() != expected:
+                raise AuthStorageError("Credentials changed during browser import; nothing was replaced.")
+            if store.load() is not None:
+                # A deliberate import must replace the selected record, never
+                # leave a tombstone or older session silently taking precedence.
+                record = storage_mod.StoredRecord.browser(headers, source=f"existing_browser:{name}")
+                store.save(record, expected_revision=expected)
+                return store.path
+            if path.is_symlink():
+                raise AuthStorageError("Refusing to replace a symlinked credential file.")
+            os.replace(candidate_path, path)
+            _write_source(path, {"browser": name, "profile": profile, "authuser": authuser})
     return path
 
 
-def source_path(path=AUTH_PATH):
+def import_from_browser(browser=None, path=None, profile=None, config=None, authuser=None,
+                        confirm=None):
+    """Import a logged-in browser session and store it only after validation.
+
+    The new path: extraction happens first, but nothing replaces the stored
+    credentials until the candidate has answered a real account read and
+    (when ``confirm`` is given) the account has been accepted. A failure or
+    a stale commit after a concurrent logout leaves whatever existed
+    byte-for-byte intact.
+    """
+    path = AUTH_PATH if path is None else Path(path)
+    manager = auth_manager(path)
+    expected = manager.expected_revision()
+    authuser = _authuser_index(config, authuser)
+    cookie_header, browser_name, reasons = _find_browser_cookie_header(browser, profile=profile)
+    if cookie_header is None:
+        raise AuthError(_no_browser_session_error(reasons))
+    headers = {
+        "cookie": cookie_header,
+        "x-goog-authuser": authuser,
+        "user-agent": _USER_AGENT,
+        "authorization": "SAPISIDHASH 0_0",
+        "origin": "https://music.youtube.com",
+    }
+    candidate = session_mod.build_session(
+        headers, source=f"existing_browser:{browser_name}"
+    )
+    verified = manager.validate_candidate(candidate)
+    if confirm is not None and not confirm(verified):
+        raise LoginCancelled("Login cancelled; the previous credentials were kept.")
+    return manager.save_verified(verified, expected_revision=expected)
+
+
+def activate_oauth(token_path, path=None, credentials_factory=None):
+    """Make an already-obtained OAuth token the active credential.
+
+    Compatibility bridge for plain ``ytm auth``: the token was just issued
+    by Google, so no account read is repeated, but the client is still built
+    once so an unusable token fails before anything is switched. An older
+    browser record must not keep taking precedence over an explicit sign-in.
+    """
+    path = Path(AUTH_PATH if path is None else path)
+    _oauth_client(token_path, credentials_factory)
+    manager = auth_manager(path)
+    return manager.save_oauth(token_path, expected_revision=manager.expected_revision())
+
+
+def oauth_login(client_id=None, client_secret=None, path=None, client_file=None,
+                credentials_factory=None):
+    """Acquire and verify OAuth in a new generation; activate only on success."""
+    path = AUTH_PATH if path is None else Path(path)
+    manager = auth_manager(path)
+    expected = manager.expected_revision()
+    manager.store._ensure_directory()
+    root = manager.store.path.parent / "oauth"
+    if root.is_symlink():
+        raise AuthStorageError("OAuth storage directory must not be a symlink.")
+    root.mkdir(mode=0o700, exist_ok=True)
+    staging = root / uuid.uuid4().hex
+    staging.mkdir(mode=0o700)
+    committed = False
+    try:
+        remembered = _desktop_client_path(path)
+        active = manager.store.load()
+        if active is not None and active.method == "oauth":
+            managed = _managed_token_path(active, path)
+            remembered = _desktop_client_path(managed)
+        explicit_tv = client_id or client_secret or os.environ.get("YTM_OAUTH_CLIENT_ID") or os.environ.get("YTM_OAUTH_CLIENT_SECRET")
+        if not client_file and not os.environ.get("YTM_OAUTH_CLIENT_FILE") and not explicit_tv and remembered.is_file():
+            client_file = remembered
+        token_path = oauth_setup(
+            client_id=client_id, client_secret=client_secret, path=staging / "auth.json",
+            client_file=client_file, credentials_factory=credentials_factory,
+        )
+        client = _oauth_client(token_path, credentials_factory)
+        manager._read_account(client)
+        result = manager.save_oauth(token_path, expected_revision=expected)
+        committed = True
+        return result
+    finally:
+        if not committed:
+            shutil.rmtree(staging, ignore_errors=True)
+
+
+def source_path(path=None):
     """Where the browser an auth file came from is recorded (a sidecar, since
     every key in auth.json itself is sent to YouTube as a request header)."""
+    path = Path(AUTH_PATH if path is None else path)
     path = Path(path)
     return path.with_name(path.stem + ".source.json")
 
@@ -707,9 +927,10 @@ def _write_source(path, source):
         json.dump(source, file)
 
 
-def browser_source(path=AUTH_PATH):
+def browser_source(path=None):
     """The browser, profile and authuser the auth at `path` was extracted from,
     or None if it was pasted, came from OAuth, or predates the record."""
+    path = Path(AUTH_PATH if path is None else path)
     try:
         with open(source_path(path), encoding="utf-8") as file:
             source = json.load(file)
@@ -723,10 +944,10 @@ def browser_source(path=AUTH_PATH):
 _refresh_lock = threading.Lock()
 
 
-def refresh_from_browser(path=AUTH_PATH, client_factory=None):
+def refresh_from_browser(path=None, client_factory=None):
     """Re-extract cookies from the browser the current auth came from.
 
-    Google rotates the session tokens in the browser every day or so, and
+    Google may rotate or revoke the session tokens in the browser, and
     the copy ytm holds is then treated as signed out. When that happens the
     catalogue layer calls this once and retries; the browser still has the
     live session, so the user never has to run 'ytm auth' by hand.
@@ -735,6 +956,7 @@ def refresh_from_browser(path=AUTH_PATH, client_factory=None):
     OAuth) or when the extraction itself fails, for example because the
     browser is signed out too.
     """
+    path = Path(AUTH_PATH if path is None else path)
     source = browser_source(path)
     if source is None:
         raise AuthError("these credentials were not extracted from a browser")
@@ -748,38 +970,47 @@ def refresh_from_browser(path=AUTH_PATH, client_factory=None):
         )
 
 
-def load_headers(path=AUTH_PATH):
+def load_headers(path=None):
     """Return the stored request headers.
 
     Raises AuthMissing if no usable credentials have been stored.
     """
+    path = Path(AUTH_PATH if path is None else path)
     try:
         with open(path, encoding="utf-8") as file:
             return json.load(file)
     except (OSError, ValueError) as exc:
-        raise AuthMissing(_MISSING_HINT.format(path=path)) from exc
+        raise AuthMissing(_MISSING_HINT) from exc
 
 
-def load_cookies(path=AUTH_PATH):
+def load_cookies(path=None):
     """Return the stored Cookie header value, for reuse by stream resolution.
 
-    OAuth auth files have no cookies (there is no browser session to extract
-    one from), so this returns None for them rather than raising -- stream
-    resolution falls back to cookie-less requests, see ytm/resolve.py.
+    OAuth credentials have no cookies (there is no browser session to
+    extract one from), so this returns None for them rather than raising --
+    stream resolution falls back to cookie-less requests.
     """
+    path = Path(AUTH_PATH if path is None else path)
+    record = active_record(path)
+    if record is not None:
+        if record.method == "none":
+            raise AuthMissing(_MISSING_HINT)
+        if record.method == "oauth":
+            return None
+        return (record.headers or {}).get("cookie")
     headers = load_headers(path)
     if OAuthToken.is_oauth(headers):
         return None
     for key, value in headers.items():
         if key.lower() == "cookie":
             return value
-    raise AuthMissing(_MISSING_HINT.format(path=path))
+    raise AuthMissing(_MISSING_HINT)
 
 
 COOKIES_PATH = AUTH_PATH.parent / "cookies.txt"
 
 
-def cookies_file(path=AUTH_PATH, cookies_path=COOKIES_PATH):
+def cookies_file(path=None, cookies_path=None):
     """A Netscape-format cookie file for yt-dlp, derived from the stored auth.
 
     yt-dlp (and therefore mpv's ytdl_hook) reads cookies from a file, while
@@ -788,6 +1019,8 @@ def cookies_file(path=AUTH_PATH, cookies_path=COOKIES_PATH):
     so re-authenticating is the only step the user ever takes. Returns None
     when there are no cookies to write (OAuth auth, or not authenticated).
     """
+    path = Path(AUTH_PATH if path is None else path)
+    cookies_path = Path(COOKIES_PATH if cookies_path is None else cookies_path)
     try:
         header = load_cookies(path)
     except AuthError:
@@ -795,8 +1028,9 @@ def cookies_file(path=AUTH_PATH, cookies_path=COOKIES_PATH):
     if header is None:
         return None
     cookies_path = Path(cookies_path)
+    source = SESSION_PATH if active_record(path) is not None else Path(path)
     try:
-        fresh = cookies_path.stat().st_mtime >= Path(path).stat().st_mtime
+        fresh = cookies_path.stat().st_mtime >= source.stat().st_mtime
     except OSError:
         fresh = False
     if fresh:
@@ -818,30 +1052,54 @@ def _write_text_0600(path, text):
     os.chmod(path, 0o600)
 
 
-def client(path=AUTH_PATH, credentials_factory=None):
-    """Return an authenticated ytmusicapi client, for either auth kind stored at path."""
+def client(path=None, credentials_factory=None):
+    """Return an authenticated ytmusicapi client.
+
+    A new-format record takes precedence over the legacy file, including a
+    logged-out tombstone (which raises rather than falling back). Without a
+    record, the legacy file keeps working exactly as before.
+    """
+    path = Path(AUTH_PATH if path is None else path)
+    record = active_record(path)
+    if record is not None:
+        return _client_from_record(record, path, credentials_factory)
     headers = load_headers(path)
     if OAuthToken.is_oauth(headers):
         return _oauth_client(path, credentials_factory)
     return client_from_headers(headers, path)
 
 
-def browser_headers(path=AUTH_PATH):
-    """The stored browser request headers, or None when the auth is OAuth.
+def browser_headers(path=None):
+    """The browser request headers for the active credential, or None.
 
     Exposed so a caller can add to them (ytmusicapi treats the dict it is
     given as the client's base headers) before building the client.
     """
+    path = Path(AUTH_PATH if path is None else path)
+    record = active_record(path)
+    if record is not None:
+        if record.method != "browser":
+            return None
+        return dict(record.headers or {})
     headers = load_headers(path)
     return None if OAuthToken.is_oauth(headers) else headers
 
 
-def client_from_headers(headers, path=AUTH_PATH):
-    """A ytmusicapi client for browser headers that are already in hand."""
+def client_from_headers(headers, path=None, user=None):
+    """A ytmusicapi client for browser headers that are already in hand.
+
+    ``user`` is ytmusicapi's supported brand-account hook; it becomes the
+    request context's ``onBehalfOfUser``.
+    """
+    path = Path(AUTH_PATH if path is None else path)
     try:
-        return ytmusicapi.YTMusic(headers)
+        if user is None:
+            return ytmusicapi.YTMusic(headers)
+        return ytmusicapi.YTMusic(headers, user=user)
     except YTMusicError as exc:
-        raise AuthExpired(_EXPIRED_HINT) from exc
+        if is_expiry(exc):
+            raise AuthExpired(_EXPIRED_HINT) from exc
+        raise SessionVerificationUnavailable("Could not prepare the YouTube Music session. Try again later.") from exc
 
 
 def _oauth_client(path, credentials_factory=None):
@@ -860,6 +1118,22 @@ def _oauth_client(path, credentials_factory=None):
     return ytm
 
 
+#: ytmusicapi's own status prefix; the only place a status is trusted. A
+#: body that happens to contain an HTTP-looking number is not a status.
+_HTTP_STATUS = re.compile(r"^Server returned HTTP (\d{3})(?:\D|$)")
+
+
+def http_status(exc):
+    """The HTTP status ytmusicapi reported in `exc`, or None."""
+    match = _HTTP_STATUS.search(str(exc))
+    return int(match.group(1)) if match else None
+
+
 def is_expiry(exc):
-    """Whether a ytmusicapi error indicates credentials are no longer accepted."""
-    return any(code in str(exc) for code in ("HTTP 401", "HTTP 403"))
+    """Whether a ytmusicapi error means the session was rejected.
+
+    Only HTTP 401 says that. A 403 can be a permission outcome for a valid
+    session (playlist ownership, private items, audio CDNs), so it must be
+    classified by the operation, not treated as expiry.
+    """
+    return http_status(exc) == 401

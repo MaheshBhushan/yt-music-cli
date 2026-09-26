@@ -2,7 +2,9 @@
 daemon events to widget updates without ever polling.
 """
 
+import asyncio
 import os
+import signal
 import sys
 import threading
 import time
@@ -17,6 +19,7 @@ from textual.widgets import DataTable, Input, Static
 
 from ytm import config as config_mod
 from ytm import update
+from ytm.lifecycle import daemon_call
 from ytm.tui.backend import Backend, BackendError
 from ytm.tui.lyrics import LyricsPane
 from ytm.tui.nowplaying import DEFAULT_ART, NowPlaying
@@ -133,6 +136,7 @@ class YTMApp(App):
         Binding("escape", "focus_results", "Results", show=False),
         Binding("down", "leave_search", "Results", show=False),
         ("e", "quit_only", "Exit"),
+        Binding("ctrl+c", "quit_only", "Exit", priority=True, show=False),
         ("x", "quit_and_shutdown", "Exit + stop player"),
     ]
 
@@ -148,11 +152,10 @@ class YTMApp(App):
         self._config = config if config is not None else config_mod.load()
         self._bindings = BindingsMap(self._build_bindings(self._config["keys"]))
         self.theme = self._resolve_theme(self._config["ui"]["theme"])
-        try:
-            self.client = client if client is not None else Backend()
-        except BackendError as exc:
-            self.client = None
-            self._client_error = str(exc)
+        self.client = client
+        self._backend_factory = Backend if client is None else None
+        self._terminal_poll = None
+        self._shutdown_event = threading.Event()
         self._listener_thread = None
         # results from background work are applied only while this is set;
         # `_begin_shutdown` clears it before the widgets go away
@@ -193,6 +196,7 @@ class YTMApp(App):
             # `s`/`e` are plain (non-priority) bindings: they act from any
             # pane but stay ordinary letters while the search box has focus
             ("s", "focus_search", "Search"),
+            Binding("ctrl+c", "quit_only", "Exit", priority=True, show=False),
             ("h", "toggle_search", "Hide search"),
             ("q", "enqueue_selected", "Enqueue"),
             ("u", "play_next_selected", "Up next"),
@@ -304,6 +308,13 @@ class YTMApp(App):
         from ytm.update import installed_version
 
         _trace(f"ytm {installed_version()} started, size {self.size.width}x{self.size.height}", mode="w")
+        if self._backend_factory is not None:
+            try:
+                self.client = self._backend_factory(stop_event=self._shutdown_event)
+            except BackendError as exc:
+                self._client_error = str(exc)
+        if self._terminal_poll is not None:
+            self.set_interval(0.2, self._check_terminal)
         if self._client_error is not None:
             self._show_error(self._client_error)
             return
@@ -317,7 +328,7 @@ class YTMApp(App):
         self._seed_volume()
         self.query_one("#search-input", Input).focus()
         if self._update_setting("check"):
-            self.run_worker(self._check_for_update, thread=True, name="update-check", group="update")
+            self.run_worker(daemon_call(self._check_for_update), name="update-check", group="update")
 
     def _update_setting(self, key):
         # configs built by hand (tests, old files) may lack the section
@@ -337,7 +348,10 @@ class YTMApp(App):
                 title="Update available", timeout=12,
             )
             return
-        ok, text = update.upgrade(target=latest)
+        owner = getattr(self.client, "_owner", None)
+        kwargs = ({"run": owner.run, "verify": lambda: update.installed_version_now(run=owner.run)}
+                  if owner is not None else {})
+        ok, text = update.upgrade(target=latest, **kwargs)
         if ok:
             self.call_from_thread(
                 self.notify, f"Updated ytm to {latest}. Restart to use it.",
@@ -426,16 +440,60 @@ class YTMApp(App):
         if not self._accepting_results:
             return
         self._accepting_results = False
+        self._shutdown_event.set()
         self._lyrics_generation += 1
         with self._lyrics_lock:
             self._lyrics_pending = None
         self.workers.cancel_group(self, "requests")
         self.workers.cancel_group(self, "update")
+        self.workers.cancel_group(self, "art")
         if self.client is not None:
             self.client.close()
+        if self._listener_thread is not None and self._listener_thread is not threading.current_thread():
+            self._listener_thread.join(1.5)
 
     def on_unmount(self):
         self._begin_shutdown()
+
+    def _check_terminal(self):
+        if self._terminal_poll.poll(0):
+            self.action_quit_only()
+
+    async def run_async(self, **kwargs):
+        """Route signals through Textual's normal teardown, with a final safety net."""
+        loop = asyncio.get_running_loop()
+        previous = {}
+        terminal = None
+        if threading.current_thread() is threading.main_thread():
+            def interrupted(signum, frame):
+                self._shutdown_event.set()
+                loop.call_soon_threadsafe(self.exit)
+            for name in ("SIGHUP", "SIGTERM", "SIGINT"):
+                sig = getattr(signal, name, None)
+                if sig is not None:
+                    previous[sig] = signal.signal(sig, interrupted)
+        try:
+            if os.name == "posix" and sys.stdin.isatty():
+                import select
+                import termios
+                fd = sys.stdin.fileno()
+                terminal = (fd, termios.tcgetattr(fd))
+                self._terminal_poll = select.poll()
+                self._terminal_poll.register(fd, select.POLLHUP | select.POLLERR | select.POLLNVAL)
+            return await super().run_async(**kwargs)
+        finally:
+            try:
+                self._begin_shutdown()
+            finally:
+                # Textual restores raw mode, cursor and alternate screen. The
+                # saved attributes also cover failures during driver startup.
+                if terminal is not None:
+                    try:
+                        termios.tcsetattr(terminal[0], termios.TCSANOW, terminal[1])
+                    except termios.error:
+                        pass  # the terminal may already have disappeared
+                for sig, handler in previous.items():
+                    signal.signal(sig, handler)
 
     # -- lyrics ----------------------------------------------------------
 
@@ -566,7 +624,7 @@ class YTMApp(App):
                 _trace(f"request {cmd} done in {time.monotonic() - started:.1f}s")
                 self.post_message(RequestDone(cmd, data, None, then))
 
-        self.run_worker(work, thread=True, name=cmd, group="requests")
+        self.run_worker(daemon_call(work), name=cmd, group="requests")
 
     def on_request_done(self, message: RequestDone):
         if not self._accepts_results():
@@ -933,10 +991,10 @@ class YTMApp(App):
         self.exit()
 
     def action_quit_and_shutdown(self):
-        if self.client is not None:
-            self._request("shutdown")
-        self._begin_shutdown()
-        self.exit()
+        self.action_quit_only()
+
+    def action_quit(self):
+        self.action_quit_only()
 
 
 def run():

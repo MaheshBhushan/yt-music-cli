@@ -170,7 +170,7 @@ def test_playlist_play_replaces_the_queue(backend, monkeypatch):
 
     monkeypatch.setattr(
         music, "get_playlist",
-        lambda pid, limit=100, yt=None: (Playlist(pid, "Mix", 2), [track("p1", "P1", "X"), track("p2", "P2", "Y")]),
+        lambda pid, limit=100, yt=None, **kwargs: (Playlist(pid, "Mix", 2), [track("p1", "P1", "X"), track("p2", "P2", "Y")]),
     )
     q = backend.request("playlist_play", {"playlist_id": "PLx"})
     names = [c[0] for c in backend.fake.calls]
@@ -195,7 +195,7 @@ def test_playlist_list_fills_in_missing_remote_counts(backend, catalogue, monkey
     monkeypatch.setattr(music, "library_playlists", lambda limit=25, yt=None: [
         music.Playlist("LM", "Liked Music", 0), music.Playlist("PL9", "Mix", 12)])
     asked = []
-    monkeypatch.setattr(music, "playlist_count", lambda pid, yt=None: (asked.append(pid), 9)[1])
+    monkeypatch.setattr(music, "playlist_count", lambda pid, yt=None, **kw: (asked.append(pid), 9)[1])
     lists = backend.request("playlist_list")["playlists"]
     assert asked == ["LM"]  # only the one without a count
     assert [(p["title"], p["track_count"]) for p in lists] == [("Liked Music", 9), ("Mix", 12)]
@@ -214,7 +214,7 @@ def test_playlist_list_keeps_zero_when_count_lookup_returns_none(
     )
     asked = []
     monkeypatch.setattr(
-        music, "playlist_count", lambda pid, yt=None: (asked.append(pid), None)[1]
+        music, "playlist_count", lambda pid, yt=None, **kw: (asked.append(pid), None)[1]
     )
     assert backend.request("playlist_list")["playlists"][0]["track_count"] == 0
     assert backend.request("playlist_list")["playlists"][0]["track_count"] == 0
@@ -232,7 +232,7 @@ def test_playlist_list_does_not_hide_programmer_errors(
         "library_playlists",
         lambda limit=25, yt=None: (_ for _ in ()).throw(TypeError("bug")),
     )
-    with pytest.raises(BackendError, match="TypeError: bug"):
+    with pytest.raises(BackendError, match="request failed unexpectedly"):
         backend.request("playlist_list")
 
 
@@ -261,7 +261,7 @@ def test_playlist_create_remote_and_local(backend, monkeypatch, tmp_path):
 def test_playlist_add_remote_returns_a_fresh_count(backend, monkeypatch):
     added = []
     monkeypatch.setattr(music, "add_playlist_items", lambda pid, vids, yt=None: added.append((pid, list(vids))))
-    monkeypatch.setattr(music, "playlist_count", lambda pid, yt=None: 7)
+    monkeypatch.setattr(music, "playlist_count", lambda pid, yt=None, **kw: 7)
     out = backend.request("playlist_add", {"playlist_id": "PL1", "video_ids": ["v1"]})
     assert added == [("PL1", ["v1"])]
     assert out == {"playlist_id": "PL1", "added": 1, "track_count": 7}
@@ -272,7 +272,7 @@ def test_playlist_add_to_liked_music_likes_instead_of_inserting(backend, monkeyp
     liked = []
     monkeypatch.setattr(music, "like", lambda vid, yt=None: liked.append(vid))
     monkeypatch.setattr(music, "add_playlist_items", lambda *a, **k: pytest.fail("must not insert into LM"))
-    monkeypatch.setattr(music, "playlist_count", lambda pid, yt=None: 10)
+    monkeypatch.setattr(music, "playlist_count", lambda pid, yt=None, **kw: 10)
     out = backend.request("playlist_add", {"playlist_id": "LM", "video_ids": ["v1", "v2"]})
     assert liked == ["v1", "v2"]
     assert out["added"] == 2 and out["track_count"] == 10
@@ -305,7 +305,7 @@ def test_playlist_add_count_failure_does_not_undo_the_add(backend, monkeypatch):
     import requests
 
     monkeypatch.setattr(music, "add_playlist_items", lambda pid, vids, yt=None: None)
-    def boom(pid, yt=None):
+    def boom(pid, yt=None, **kw):
         raise requests.ConnectionError("network")
     monkeypatch.setattr(music, "playlist_count", boom)
     out = backend.request("playlist_add", {"playlist_id": "PL1", "video_ids": ["v1"]})
@@ -314,7 +314,7 @@ def test_playlist_add_count_failure_does_not_undo_the_add(backend, monkeypatch):
 
 def test_playlist_add_does_not_cache_or_return_a_missing_count(backend, monkeypatch):
     monkeypatch.setattr(music, "add_playlist_items", lambda pid, vids, yt=None: None)
-    monkeypatch.setattr(music, "playlist_count", lambda pid, yt=None: None)
+    monkeypatch.setattr(music, "playlist_count", lambda pid, yt=None, **kw: None)
     out = backend.request("playlist_add", {"playlist_id": "PL1", "video_ids": ["v1"]})
     assert out == {"playlist_id": "PL1", "added": 1}
     assert "PL1" not in backend._playlist_counts
@@ -338,7 +338,7 @@ def test_mix_tracklist_is_cached_until_refreshed(backend, catalogue, monkeypatch
         calls["mixes"] += 1
         return [music.Playlist("RDTMAKfoo", "Discover Mix", None)]
 
-    def fake_get(pid, limit=100, yt=None):
+    def fake_get(pid, limit=100, yt=None, **kwargs):
         calls["get"] += 1
         return music.Playlist(pid, "Discover Mix", 1), [track(f"m{calls['get']}", "Mix song", "X")]
 
@@ -434,6 +434,28 @@ def test_a_slow_network_request_does_not_block_player_requests(backend, catalogu
     assert elapsed < 1, f"volume waited {elapsed:.1f}s behind the search"
 
 
+def test_a_login_or_logout_elsewhere_resets_only_the_account_caches(
+    backend, catalogue, monkeypatch, tmp_path
+):
+    from ytm import auth, playlists_local
+
+    monkeypatch.setattr(playlists_local, "DEFAULT_PATH", tmp_path / "pl.json")
+    playlists_local.create("mine")
+    mixes_calls = []
+    monkeypatch.setattr(music, "mixes", lambda yt=None: (mixes_calls.append(1), [])[1])
+
+    first = backend.request("playlist_list")["playlists"]
+    assert [p["title"] for p in first] == ["mine", "Liked"]
+    assert len(mixes_calls) == 1  # cached on the second read
+    backend.request("playlist_list")
+    assert len(mixes_calls) == 1
+
+    monkeypatch.setattr(auth, "credential_stamp", lambda legacy_path=None: ("record", "rev-2"))
+    after = backend.request("playlist_list")["playlists"]
+    assert [p["title"] for p in after] == ["mine", "Liked"]  # local data is not account data
+    assert len(mixes_calls) == 2                              # account data was re-fetched
+
+
 def test_playlist_list_keeps_local_playlists_and_reports_a_signed_out_account(backend, catalogue, monkeypatch, tmp_path):
     from ytm import playlists_local
     from ytm.auth import AuthExpired
@@ -458,10 +480,10 @@ def _lagging_playlist(monkeypatch, pid, served):
     playlist, standing in for YouTube while an add has not propagated."""
     monkeypatch.setattr(music, "add_playlist_items", lambda p, vids, yt=None: None)
     monkeypatch.setattr(music, "like", lambda vid, yt=None: None)
-    monkeypatch.setattr(music, "playlist_count", lambda p, yt=None: len(served))
+    monkeypatch.setattr(music, "playlist_count", lambda p, yt=None, **kw: len(served))
     monkeypatch.setattr(
         music, "get_playlist",
-        lambda p, limit=100, yt=None: (music.Playlist(p, "List", len(served)), list(served)),
+        lambda p, limit=100, yt=None, **kw: (music.Playlist(p, "List", len(served)), list(served)),
     )
 
 
@@ -564,7 +586,7 @@ def test_a_failed_lyrics_fetch_does_not_block_the_next_attempt(backend, monkeypa
         return ("words", "src")
 
     monkeypatch.setattr(music, "get_lyrics", flaky)
-    with pytest.raises(BackendError, match="network down"):
+    with pytest.raises(BackendError, match="request failed unexpectedly"):
         backend.request("lyrics", {"video_id": "v"})
     assert backend._lyrics_inflight == {}
     assert backend.request("lyrics", {"video_id": "v"})["lyrics"] == "words"
