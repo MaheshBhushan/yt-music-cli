@@ -205,6 +205,11 @@ def shared_client():
 
     Errors are never cached: a missing or expired auth file raises here
     exactly as a per-call client did, and the next call tries again.
+
+    Builder ownership is released in a ``finally`` that covers both
+    construction and the final revision check, so a failure in either --
+    including a credential file that becomes unreadable mid-build -- cannot
+    leave later callers waiting on `_CLIENT_READY` forever.
     """
     path = auth_mod.AUTH_PATH
     while True:
@@ -226,22 +231,20 @@ def shared_client():
                 if headers is None
                 else auth_mod.client_from_headers(headers, path)
             )
-        except BaseException:
+            with _CLIENT_READY:
+                unchanged = (
+                    generation == _CLIENT["generation"]
+                    and key == _auth_stamp(path)
+                )
+                if unchanged:
+                    _CLIENT.update(key=key, client=built, visitor_saved=False)
+                    return built
+            # A generation or revision change means this build is stale;
+            # loop and build against the new credentials.
+        finally:
             with _CLIENT_READY:
                 _CLIENT["building"] = False
                 _CLIENT_READY.notify_all()
-            raise
-        with _CLIENT_READY:
-            unchanged = (
-                generation == _CLIENT["generation"]
-                and key == _auth_stamp(path)
-            )
-            if unchanged:
-                _CLIENT.update(key=key, client=built, visitor_saved=False)
-            _CLIENT["building"] = False
-            _CLIENT_READY.notify_all()
-            if unchanged:
-                return built
 
 
 def _seeded_headers(path):
