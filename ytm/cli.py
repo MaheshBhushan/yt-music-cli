@@ -520,7 +520,15 @@ def cmd_quit(args):
     return {"stopped": True}, "mpv stopped"
 
 
-from ytm.authentication.diagnostics import traced as trace_auth
+def trace_auth(function):
+    # Keep public/player commands free of authentication imports.
+    from functools import wraps
+
+    @wraps(function)
+    def run(*args, **kwargs):
+        from ytm.authentication.diagnostics import traced
+        return traced(function)(*args, **kwargs)
+    return run
 
 
 @trace_auth

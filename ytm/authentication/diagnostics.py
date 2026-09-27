@@ -17,7 +17,7 @@ from ytm.paths import application_path
 
 _CURRENT = contextvars.ContextVar('ytm_auth_diagnostics', default=None)
 _CODES = frozenset({
-    'started', 'succeeded', 'failed', 'profile_missing', 'browser_missing',
+    'started', 'browser_opened', 'succeeded', 'failed', 'profile_missing', 'browser_missing',
     'database_copy_failed', 'database_locked', 'permission_denied',
     'app_bound_encryption', 'decryption_failed', 'extraction_failed',
     'AuthMissing', 'AuthExpired', 'AuthInvalidFormat', 'AuthStorageError',
@@ -28,7 +28,7 @@ _CODES = frozenset({
 _BROWSERS = frozenset({'chrome','chromium','edge','msedge','firefox','safari','brave','vivaldi','opera','helium'})
 
 
-def event(code, *, browser=None, profile_selected=False, errno=None, winerror=None):
+def event(code, *, browser=None, profile_selected=False, errno=None, winerror=None, method=None):
     path = _CURRENT.get()
     if path is None or code not in _CODES:
         return
@@ -36,6 +36,8 @@ def event(code, *, browser=None, profile_selected=False, errno=None, winerror=No
     if browser in _BROWSERS:
         data['browser'] = browser
     data['explicit_profile'] = bool(profile_selected)
+    if method in ('browser', 'playwright', 'oauth', 'import', 'install_browser'):
+        data['method'] = method
     for name, value in (('errno', errno), ('winerror', winerror)):
         if type(value) is int:
             data[name] = value
@@ -76,7 +78,14 @@ def traced(function):
     def run(*args, **kwargs):
         path = start()
         token = _CURRENT.set(path)
-        event('started')
+        options = args[0] if args else None
+        method = getattr(options, 'method', None) or ('oauth' if function.__name__ == 'cmd_auth' else 'browser')
+        if getattr(options, 'from_browser', None) is not None:
+            method = 'import'
+        if getattr(options, 'install_browser', False):
+            method = 'install_browser'
+        event('started', method=method, browser=getattr(options, 'browser', None),
+              profile_selected=bool(getattr(options, 'profile', None)))
         try:
             result = function(*args, **kwargs)
             event('succeeded')

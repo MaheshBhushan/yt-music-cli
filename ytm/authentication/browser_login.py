@@ -141,6 +141,8 @@ class PlaywrightBrowser:
         with sync_playwright() as playwright:
             launcher = getattr(playwright, self.engine)
             browser = self._launch(launcher, {"headless": False, "timeout": max(1, (deadline - time.monotonic()) * 1000)})
+            from ytm.authentication import diagnostics
+            diagnostics.event("browser_opened", browser=self.channel or self.engine, method="playwright")
             try:
                 return self._observe_context(browser, deadline=deadline)
             except PlaywrightError as exc:
@@ -298,4 +300,6 @@ def interactive_login(manager, *, browser=None, timeout=DEFAULT_TIMEOUT, confirm
     diagnostics.event("validated")
     if confirm is not None and not confirm(verified):
         raise LoginCancelled("Login cancelled; the previous credentials were kept.")
-    return manager.save_verified(verified, expected_revision=expected_revision)
+    record = manager.save_verified(verified, expected_revision=expected_revision)
+    diagnostics.event("stored")
+    return record

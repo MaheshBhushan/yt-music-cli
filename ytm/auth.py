@@ -903,7 +903,9 @@ def import_from_browser(browser=None, path=None, profile=None, config=None, auth
     diagnostics.event('validated')
     if confirm is not None and not confirm(verified):
         raise LoginCancelled("Login cancelled; the previous credentials were kept.")
-    return manager.save_verified(verified, expected_revision=expected)
+    record = manager.save_verified(verified, expected_revision=expected)
+    diagnostics.event("stored")
+    return record
 
 
 def activate_oauth(token_path, path=None, credentials_factory=None):
