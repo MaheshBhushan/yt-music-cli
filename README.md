@@ -124,6 +124,18 @@ Chrome, Chromium, Edge, Firefox, Brave, Vivaldi, Opera and Helium are supported 
 
 Answering `n` at account confirmation cancels without replacing existing credentials. `--yes` skips this final confirmation; normal-profile login still requires a terminal and Enter after sign-in. ytm never closes your normal browser. If its cookie database is locked, close it yourself before pressing Enter. `--timeout` is checked after you return from the terminal prompt; it cannot interrupt a blocking Enter prompt.
 
+### Windows: Chrome is signed in but import fails
+
+A successful Chrome login does not guarantee that another program can read its stored cookies. `database_copy_failed` usually means Chrome still holds its database open, or the OS denies access. Close Chrome yourself (including its background processes), use the same Windows user, and retry with the correct profile:
+
+```powershell
+ytm login --from-browser chrome --profile "Default"
+```
+
+Use `"Profile 1"` or another directory name if that is where Music is signed in. An encryption failure is different: Chrome's App-Bound Encryption can prevent external decryption even after Chrome closes. Do not disable Chrome's security or run YTM as Administrator to bypass it. Sign in at music.youtube.com in Firefox and run `ytm login --from-browser firefox`, or try the isolated observation flow below (Google can reject automated browsers). See [Google's explanation of App-Bound Encryption](https://security.googleblog.com/2024/07/improving-security-of-chrome-cookies-on.html) and [yt-dlp's cookie database copy failure](https://github.com/yt-dlp/yt-dlp/issues/7271).
+
+`ytm login` and `ytm auth` now record authentication diagnostics automatically. On failure the terminal prints the exact `auth-*.jsonl` path. New Windows installations use `%LOCALAPPDATA%\ytm\state\logs\`; older installations may retain their legacy logs directory. Share the printed authentication log for debugging. It contains dependency versions, classified extraction reasons, OS error numbers when available, and validation progress. It excludes raw exception messages, cookies, headers, tokens, account names and profile paths. Ten recent logs are retained, with a ten-minute grace period for active runs. These diagnostics are separate from mpv logs, which can contain signed media URLs.
+
 ### Isolated browser observation (optional)
 
 For automatic page detection, use an isolated Playwright browser:
@@ -153,7 +165,7 @@ ytm login --from-browser helium --profile "Profile 1"
 ytm login --from-browser --authuser 1   # second Google account in that browser
 ```
 
-Auto-detection tries each browser in turn and, within a browser, every profile (Chromium's `Default`, `Profile 1`, …; System and Guest profiles are skipped), taking the first with a YouTube session. Each browser's failure reason is reported: not installed, no such profile, cookies could not be decrypted, database locked, or no YouTube login. If the browser has several Google accounts, `--authuser N` (0 is the first) or `auth.x-goog-authuser` in `config.toml` picks the default.
+Auto-detection tries each browser in turn. Profile discovery for standard browsers is delegated to yt-dlp; it does not guarantee selection of your active Chrome profile. Use `--profile "Profile 1"` (or the actual directory name shown by `chrome://version`) when needed. The custom Chromium-fork extractor tries eligible profiles and skips System/Guest profiles. Each browser's failure reason is reported: not installed, no such profile, cookies could not be decrypted, database locked, or no YouTube login. If the browser has several Google accounts, `--authuser N` (0 is the first) or `auth.x-goog-authuser` in `config.toml` picks the default.
 
 New browser-session records require `ytm login` again when they expire. Legacy imports with a recorded source retain their existing single reimport attempt. OAuth retains its own token-refresh mechanism.
 

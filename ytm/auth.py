@@ -739,8 +739,8 @@ def _windows_chromium_hint(reasons):
     ):
         return ""
     return (
-        " Chrome, Edge, Brave, Vivaldi and Opera on Windows protect their cookies "
-        "with App-Bound Encryption (Chrome 127 and newer), which other programs "
+        " Chrome 127 and newer on Windows use App-Bound Encryption; other Chromium browsers "
+        "may apply similar protections. These cookies are ones that external programs "
         "may not be able to decrypt. Closing Chrome does not remove this protection. "
         "Try 'ytm login --method playwright --browser chrome' (Google may reject automated browsers), "
         "or log in at https://music.youtube.com in Firefox and run "

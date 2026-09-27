@@ -40,7 +40,7 @@ def test_default_paths_never_live_in_the_repository():
 
 
 def test_no_system_mixer_is_a_supported_fallback():
-    """Without wpctl/pactl (the Windows case) playback uses mpv's volume."""
+    """Without a detected Linux mixer, playback uses mpv volume."""
     assert SystemVolume.detect(platform="linux", which=lambda name: None) is None
     # the Player's mixer stays None, so volume() reads/writes mpv's own
     # property; tests/test_volume.py covers that behavior with the fake mpv

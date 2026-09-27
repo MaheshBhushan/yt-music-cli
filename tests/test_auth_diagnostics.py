@@ -1,6 +1,5 @@
 """Real log writes with injected failures; no browser or credentials touched."""
 import json
-from pathlib import Path
 
 import pytest
 from ytm import auth
