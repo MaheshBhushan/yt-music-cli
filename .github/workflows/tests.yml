@@ -27,4 +27,16 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
       - run: pip install -e '.[dev]'
+      - name: Install mpv for native decoding smoke test
+        if: runner.os == 'Windows'
+        run: choco install mpv --yes --no-progress
       - run: pytest -q
+      - name: Windows PowerShell 5.1 updater tests
+        if: runner.os == 'Windows'
+        env:
+          YTM_TEST_POWERSHELL: powershell.exe
+        run: python -m pytest -q tests/test_windows_update.py
+      - name: Native Windows locking and smoke results
+        if: runner.os == 'Windows'
+        run: python -m pytest -v tests/test_windows_ipc_native.py tests/test_windows_process_native.py tests/test_windows_locking_native.py tests/test_windows_smoke.py
+

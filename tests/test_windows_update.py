@@ -1,5 +1,6 @@
 """Confirmed Windows update handoff; installers are always faked."""
 import io
+import os
 from types import SimpleNamespace
 
 import pytest
@@ -127,7 +128,7 @@ def run_powershell(tmp_path, body):
     import subprocess
     from pathlib import Path
 
-    shell = shutil.which("pwsh") or shutil.which("powershell.exe")
+    shell = shutil.which(os.environ.get("YTM_TEST_POWERSHELL", "pwsh")) or shutil.which("powershell.exe")
     if not shell:
         pytest.skip("PowerShell is not installed")
     source = str(Path(update.__file__).with_name("windows_update.ps1")).replace("'", "''")
@@ -206,7 +207,7 @@ def test_powershell_entrypoint_shows_fallback_and_cleans_up(tmp_path):
     import sys
     from pathlib import Path
 
-    shell = shutil.which("pwsh") or shutil.which("powershell.exe")
+    shell = shutil.which(os.environ.get("YTM_TEST_POWERSHELL", "pwsh")) or shutil.which("powershell.exe")
     if not shell:
         pytest.skip("PowerShell is not installed")
     folder = tmp_path / "helper"

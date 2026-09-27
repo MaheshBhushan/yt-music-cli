@@ -112,6 +112,7 @@ def test_windows_owner_propagates_a_failed_assignment(monkeypatch):
     owner.close()
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX ownership branch")
 def test_linux_owner_has_no_windows_job():
     owner = ProcessOwner()
     try:

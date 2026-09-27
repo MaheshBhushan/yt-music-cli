@@ -25,11 +25,11 @@ from contextlib import contextmanager
 from dataclasses import asdict
 from pathlib import Path
 
+from ytm.paths import application_path
+
 from ytm.music import track_from_dict
 
-STATE_PATH = Path(
-    os.environ.get("XDG_STATE_HOME", os.path.expanduser("~/.local/state"))
-) / "ytm" / "session.json"
+STATE_PATH = application_path("state", "session.json")
 
 #: how many tracks' metadata to remember before forgetting the oldest
 TRACK_MEMORY = 500

@@ -20,6 +20,8 @@ import subprocess
 import sys
 from dataclasses import asdict
 
+from ytm.paths import application_path
+
 from ytm.player import (
     MPV_SITE,
     Player,
@@ -32,9 +34,7 @@ from ytm.player import (
 _VIDEO_ID = re.compile(r"^[A-Za-z0-9_-]{11}$")
 
 #: where the detached mpv writes its log
-LOG_PATH = os.path.join(
-    os.environ.get("XDG_STATE_HOME", os.path.expanduser("~/.local/state")), "ytm", "mpv.log"
-)
+LOG_PATH = str(application_path("state", "mpv.log"))
 
 
 class CliError(Exception):
@@ -815,6 +815,20 @@ def cmd_tui(args):
 # -- parser ---------------------------------------------------------------------
 
 
+def cmd_migrate_paths(args):
+    from ytm.paths import MigrationError, migrate
+    if sys.platform != "win32":
+        raise CliError("Path migration is for Windows installations only.")
+    try:
+        items = migrate(apply=args.apply)
+    except MigrationError as exc:
+        raise CliError(str(exc)) from exc
+    action = "Migration completed; restart YTM. Legacy originals kept." if args.apply else "Preview only. Close other YTM instances, then use --apply to copy."
+    return {"applied": args.apply, "files": items}, action + "\n" + "\n".join(
+        f"{i['status']}: {i['source']} -> {i['target']}" for i in items
+    )
+
+
 def build_parser():
     parser = argparse.ArgumentParser(prog="ytm", description="YouTube Music from the terminal")
     parser.add_argument("--json", action="store_true", help="print JSON instead of text")
@@ -827,6 +841,9 @@ def build_parser():
         p = sub.add_parser(name, help=help, **kwargs)
         p.set_defaults(func=func)
         return p
+
+    p = add("migrate-paths", cmd_migrate_paths, "preview Windows data migration (credentials stay managed by login)")
+    p.add_argument("--apply", action="store_true", help="copy to application data; retain originals, refuse conflicts")
 
     p = add("search", cmd_search, "search songs")
     p.add_argument("query")
