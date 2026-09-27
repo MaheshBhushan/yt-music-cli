@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.10.1 — 2026-09-27
 
 - Clicking a playlist, queue entry or search result now selects it exactly once. Duplicate click dispatch previously issued a second playback request, stopping the first stream-resolution attempt and restarting it. Repeated clicks and keyboard Enter still work normally.
 - Account-client initialization recovers from every builder failure: a credential file that becomes unreadable between construction and the final revision check no longer leaves later calls waiting forever.
