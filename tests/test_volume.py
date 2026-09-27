@@ -171,10 +171,10 @@ def test_listen_reports_system_volume_changes_as_state_changed(monkeypatch, tmp_
     fake.mixer.watch = watch
 
     class Observer:
-        def observe(self, *names):
+        def observe_events(self, *names):
             assert watching.wait(2)
             fake.mixer.callback(60)  # the media key was pressed
-            yield ("pause", False)
+            yield "property", "pause", False
             backend.close()
             raise PlayerError("closed")
 

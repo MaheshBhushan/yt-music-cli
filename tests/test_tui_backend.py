@@ -99,8 +99,9 @@ def test_listen_translates_property_changes_into_events(backend, monkeypatch):
     changes = [("volume", 70.0), ("pause", False), ("playlist-pos", 0), ("duration", 200.0), ("time-pos", 12.5)]
 
     class Observer:
-        def observe(self, *names):
-            yield from changes
+        def observe_events(self, *names):
+            for name, value in changes:
+                yield "property", name, value
             raise_after()
 
         def close(self):
@@ -139,9 +140,10 @@ def test_listen_reannounces_position_once_the_duration_is_known(backend):
     changes = [("time-pos", 3.0), ("duration", 200.0), ("time-pos", 4.0)]
 
     class Observer:
-        def observe(self, *names):
+        def observe_events(self, *names):
             assert names.index("duration") < names.index("time-pos")
-            yield from changes
+            for name, value in changes:
+                yield "property", name, value
             backend.close()
             from ytm.player import PlayerError
             raise PlayerError("closed")
@@ -365,12 +367,13 @@ def test_listen_snaps_the_bar_to_zero_when_the_track_changes(backend):
     changes = [("playlist-pos", 0), ("time-pos", 50.0), ("duration", 200.0)]
 
     class Observer:
-        def observe(self, *names):
-            yield from changes
+        def observe_events(self, *names):
+            for name, value in changes:
+                yield "property", name, value
             for entry in backend.fake.entries:
                 entry["current"] = entry["video_id"] == "b"
-            yield ("playlist-pos", 1)
-            yield ("duration", None)  # mpv while the next file loads
+            yield "property", "playlist-pos", 1
+            yield "property", "duration", None  # mpv while the next file loads
             backend.close()
             from ytm.player import PlayerError
             raise PlayerError("closed")
@@ -393,8 +396,9 @@ def test_listen_preserves_subsecond_positions_for_lyrics(backend):
     changes = [("duration", 200.0), ("time-pos", 3.1), ("time-pos", 3.5), ("time-pos", 3.9), ("time-pos", 4.0)]
 
     class Observer:
-        def observe(self, *names):
-            yield from changes
+        def observe_events(self, *names):
+            for name, value in changes:
+                yield "property", name, value
             backend.close()
             from ytm.player import PlayerError
             raise PlayerError("closed")
@@ -597,11 +601,11 @@ def test_listen_announces_no_track_when_the_queue_loses_its_current_entry(backen
     backend.request("play", {"video_id": "a", "title": "A"})
 
     class Observer:
-        def observe(self, *names):
-            yield ("playlist-pos", 0)
+        def observe_events(self, *names):
+            yield "property", "playlist-pos", 0
             for entry in backend.fake.entries:
                 entry["current"] = False  # mpv reached the end of the playlist
-            yield ("playlist-pos", -1)
+            yield "property", "playlist-pos", -1
             backend.close()
             from ytm.player import PlayerError
             raise PlayerError("closed")
@@ -617,3 +621,79 @@ def test_listen_announces_no_track_when_the_queue_loses_its_current_entry(backen
     tracks = [d for e, d in events if e == "track_changed"]
     assert tracks[0]["video_id"] == "a"
     assert tracks[1] is None
+
+
+# -- D4: asynchronous playback failures ---------------------------------------
+
+
+def _listen_against(backend, script):
+    """Run listen() with a scripted observer; return the emitted events."""
+    class Observer:
+        def observe_events(self, *names):
+            yield from script()
+            backend.close()
+            from ytm.player import PlayerError
+            raise PlayerError("closed")
+
+        def close(self):
+            pass
+
+    backend._make_player = lambda spawn=True, timeout=None: Observer()
+    events = []
+    backend.on_event(lambda e, d: events.append((e, d)))
+    backend._closed = False
+    backend.listen()
+    return events
+
+
+def test_mpv_playback_error_reaches_the_ui_event_stream(backend):
+    backend.request("play", {"video_id": "a", "title": "A"})
+    entry_id = backend.fake.current_entry_id()
+
+    events = _listen_against(backend, lambda: [
+        ("property", "playlist-pos", 0),
+        ("end-file", None, {"reason": "error", "playlist_entry_id": entry_id}),
+        ("property", "pause", True),
+    ])
+    names = [e for e, _ in events]
+    assert "playback_error" in names
+    assert dict(events)["playback_error"] == {"video_id": "a"}
+    # the property stream keeps flowing after the failure
+    assert names.index("state_changed") > names.index("playback_error")
+
+
+def test_normal_end_events_are_not_playback_failures(backend):
+    backend.request("play", {"video_id": "a", "title": "A"})
+    entry_id = backend.fake.current_entry_id()
+
+    events = _listen_against(backend, lambda: [
+        ("end-file", None, {"reason": reason, "playlist_entry_id": entry_id})
+        for reason in ("stop", "eof", "quit", "redirect")
+    ])
+    assert [e for e, _ in events if e == "playback_error"] == []
+
+
+def test_replacing_the_current_track_is_not_a_playback_failure(backend):
+    backend.request("play", {"video_id": "a", "title": "A"})
+    replaced_id = backend.fake.current_entry_id()
+    backend.request("play", {"video_id": "b", "title": "B"})
+    assert replaced_id in backend._expected_end_ids
+
+    events = _listen_against(backend, lambda: [
+        ("end-file", None, {"reason": "error", "playlist_entry_id": replaced_id}),
+    ])
+    assert [e for e, _ in events if e == "playback_error"] == []
+    assert replaced_id not in backend._expected_end_ids  # the marker was consumed
+
+
+def test_a_late_error_from_an_older_entry_is_ignored(backend):
+    backend.request("play", {"video_id": "a", "title": "A"})
+    old_id = backend.fake.current_entry_id()
+    backend.request("enqueue", {"video_id": "b", "title": "B"})
+    for entry in backend.fake.entries:
+        entry["current"] = entry["video_id"] == "b"  # the user switched tracks
+
+    events = _listen_against(backend, lambda: [
+        ("end-file", None, {"reason": "error", "playlist_entry_id": old_id}),
+    ])
+    assert [e for e, _ in events if e == "playback_error"] == []

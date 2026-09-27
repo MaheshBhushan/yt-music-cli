@@ -506,8 +506,15 @@ class Player:
             except (OSError, ValueError) as exc:
                 raise PlayerError(f"lost the connection to mpv: {exc}") from exc
 
-    def observe(self, *names):
-        """Yield ``(name, value)`` for every change to the given properties.
+    def observe_events(self, *names):
+        """Yield structured mpv events for the given properties.
+
+        ``("property", name, value)`` for every change, plus
+        ``("end-file", None, {"reason": ..., "playlist_entry_id": ...})``
+        when mpv finishes a playlist entry. The end-file event is how an
+        asynchronous stream failure becomes visible: the ``loadfile`` reply
+        only acknowledged the command. The raw ``file_error`` text is
+        deliberately not carried -- it can contain signed media URLs.
 
         Blocks for as long as the caller iterates; build the Player with
         ``timeout=None`` for this. mpv reports each property once right
@@ -539,10 +546,26 @@ class Player:
                     continue
                 if "request_id" in message and message.get("error") != "success":
                     raise PlayerError(f"mpv rejected observe_property: {message.get('error')}")
-                if message.get("event") == "property-change":
-                    yield message.get("name"), message.get("data")
+                event = message.get("event")
+                if event == "property-change":
+                    yield "property", message.get("name"), message.get("data")
+                elif event == "end-file":
+                    yield "end-file", None, {
+                        "reason": message.get("reason"),
+                        "playlist_entry_id": message.get("playlist_entry_id"),
+                    }
         except (OSError, ValueError) as exc:
             raise PlayerError(f"lost the connection to mpv: {exc}") from exc
+
+    def observe(self, *names):
+        """Yield ``(name, value)`` for every change to the given properties.
+
+        The property-only view of `observe_events`; lifecycle events are
+        dropped here so existing consumers keep their two-tuple contract.
+        """
+        for kind, name, value in self.observe_events(*names):
+            if kind == "property":
+                yield name, value
 
     def get(self, name, default=None):
         """A property's value, or `default` if mpv says it is unavailable."""
@@ -697,10 +720,11 @@ class Player:
     # -- playlist ------------------------------------------------------------
 
     def playlist(self):
-        """The playlist as mpv holds it: url, title (if any) and cursor flag."""
+        """The playlist as mpv holds it: id, url, title (if any) and cursor flag."""
         entries = self.get("playlist", []) or []
         return [
             {
+                "id": entry.get("id"),
                 "url": entry.get("filename"),
                 "video_id": video_id_of(entry.get("filename")),
                 "title": entry.get("title"),
@@ -708,6 +732,22 @@ class Player:
             }
             for entry in entries
         ]
+
+    def current_entry_id(self):
+        """mpv's id for the currently playing playlist entry, or None.
+
+        Used to attribute an asynchronous end-file failure to the entry it
+        actually belongs to, instead of whichever row is current by the time
+        the error is read.
+        """
+        try:
+            index = self.get("playlist-pos", -1)
+            entries = self.get("playlist", []) or []
+        except PlayerError:
+            return None
+        if not isinstance(index, int) or index < 0 or index >= len(entries):
+            return None
+        return entries[index].get("id")
 
     def play_index(self, index):
         """Jump to entry `index` and make sure it is audible: mpv keeps its

@@ -569,6 +569,8 @@ class YTMApp(App):
                 self._volume = volume
         elif event == "queue_changed":
             self._queue_changed(data)
+        elif event == "playback_error":
+            self._show_error("Could not play this track. Try another track or retry playback.")
         elif event == "error":
             self._show_error((data or {}).get("error") or "daemon error")
 

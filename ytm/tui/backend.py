@@ -114,6 +114,10 @@ class Backend:
         self._closed = False
         self._lifecycle_lock = threading.RLock()
         self._observer = None
+        #: mpv entry ids whose end we asked for (skip/replacement/stop).
+        #: A forced end can surface as `reason: error` when a resolver was
+        #: killed mid-load; it must not be shown as a playback failure.
+        self._expected_end_ids = set()
         self._mixer_stop = threading.Event()
         self._mixer_thread = None
         try:
@@ -300,6 +304,7 @@ class Backend:
                 track.thumbnail = known.thumbnail
         state.remember_tracks([track])
         if play:
+            self._expect_current_end()
             method = self._player.play
         elif up_next:
             method = self._player.enqueue_next
@@ -309,8 +314,25 @@ class Backend:
         return self._status(args)
 
     def _transport(self, name):
+        if name in ("next", "prev"):
+            self._expect_current_end()
         getattr(self._player, name)()
         return self._status({})
+
+    def _expect_current_end(self):
+        """Remember that the playing entry is ending on purpose.
+
+        Called before a command that replaces, skips or clears the current
+        file. mpv reports the forced end as an `end-file` event; when a
+        killed resolver makes that event carry `reason: error` it must not
+        become a playback-failure banner for the track being replaced.
+        """
+        entry_id = self._player.current_entry_id()
+        if entry_id is None:
+            return
+        if len(self._expected_end_ids) >= 16:
+            self._expected_end_ids.clear()
+        self._expected_end_ids.add(entry_id)
 
     def _seek(self, args):
         seconds = float(args.get("seconds") or 0)
@@ -338,11 +360,15 @@ class Backend:
         return {"tracks": tracks, "index": index}
 
     def _queue_clear(self, args):
+        self._expect_current_end()
         self._player.clear()
         return self._queue()
 
     def _queue_remove(self, args):
-        self._player.remove(int(args["index"]))
+        index = int(args["index"])
+        if index == self._player.get("playlist-pos", -1):
+            self._expect_current_end()
+        self._player.remove(index)
         return self._queue()
 
     def _queue_move(self, args):
@@ -351,6 +377,7 @@ class Backend:
 
     def _queue_play(self, args):
         """Jump to queue entry `index` (a click or Enter on the queue pane)."""
+        self._expect_current_end()
         self._player.play_index(int(args["index"]))
         return self._status(args)
 
@@ -360,6 +387,7 @@ class Backend:
         if not tracks:
             raise BackendError(f"no radio available for {seed.video_id}")
         state.remember_tracks([seed] + tracks)
+        self._expect_current_end()
         self._player.stop()
         self._player.play(cache.playback_url(seed.video_id), title=_label(seed))
         self._player.enqueue_many(
@@ -559,6 +587,7 @@ class Backend:
             raise BackendError("that playlist is empty")
         tracks = [_from_args(entry) for entry in tracks]
         state.remember_tracks(tracks)
+        self._expect_current_end()
         self._player.stop()
         self._player.play(cache.playback_url(tracks[0].video_id), title=_label(tracks[0]))
         self._player.enqueue_many(
@@ -622,11 +651,14 @@ class Backend:
             # values arrives in a usable order; a duration that turns up
             # later (mpv learns it after the first time-pos of a new file)
             # re-announces the position so the bar gets its total
-            for name, value in observer.observe(
+            for kind, name, value in observer.observe_events(
                 "playlist-pos", "playlist-count", "pause", "volume", "duration", "time-pos"
             ):
                 if self._closed:
                     return
+                if kind == "end-file":
+                    self._on_end_file(value, current_id)
+                    continue
                 if name == "duration":
                     # None while the next file loads: keep the duration the
                     # track change already announced instead of zeroing it
@@ -678,6 +710,26 @@ class Backend:
             observer.close()
             if self._mixer_thread is not None:
                 self._mixer_thread.join(3)
+
+    def _on_end_file(self, info, current_id):
+        """Turn an asynchronous playback failure into a visible event.
+
+        Only ``reason: error`` is a failure; eof/stop/quit/redirect are
+        normal ends, so an explicit stop or a track replacement never shows
+        a banner. The mpv entry id distinguishes a late failure from a
+        track that was already replaced from the track playing now.
+        """
+        info = info or {}
+        entry_id = info.get("playlist_entry_id")
+        expected = entry_id is not None and entry_id in self._expected_end_ids
+        if entry_id is not None:
+            self._expected_end_ids.discard(entry_id)
+        if info.get("reason") != "error" or expected:
+            return
+        live_id = self._player.current_entry_id()
+        if entry_id is not None and live_id is not None and entry_id != live_id:
+            return
+        self._emit("playback_error", {"video_id": current_id})
 
     def _watch_mixer(self):
         """Follow the system volume while `listen()` runs, so a media key or
