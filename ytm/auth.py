@@ -129,7 +129,8 @@ class _QuietLogger:
     It does remember yt-dlp's own status lines -- "Extracted 0 cookies from
     chrome (312 could not be decrypted)", "could not find ..." -- so a failed
     extraction can say *why* instead of a blanket "not logged in". Those
-    lines carry counts and paths, never cookie values.
+    messages stay in bounded memory only: third-party output is not trusted
+    to be secret-free. Diagnostics persist only classified reason codes.
     """
 
     def __init__(self):

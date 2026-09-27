@@ -5,7 +5,7 @@
 - Classify Windows cookie-copy, locking and decryption failures without claiming a signed-in browser is logged out; add automatic, allowlisted authentication diagnostic logs.
 - Fix Windows pipe read/write deadlock with overlapped I/O and remove the pre-lock initialization race in state, playlist and credential sidecar locks.
 
-- Windows IPC is deadline-aware and cancelable: named-pipe reads run through one reader thread per connection and `CancelIoEx`, so a player that stops answering fails within the command timeout instead of hanging forever. A late reply can never satisfy a later command, and a timed-out request leaves no worker behind.
+- Windows IPC is deadline-aware and cancelable: named-pipe reads run through one reader thread per connection and `CancelIoEx`, so a player that stops answering fails within the command timeout instead of hanging forever. A late reply cannot satisfy a later command; closing a connection cancels and joins its reader.
 - Windows playback children are owned by a kill-on-close Job Object: mpv, yt-dlp and any JavaScript runtime are created suspended, assigned to the session job, then resumed, so closing or crashing the TUI removes the whole owned tree. Unrelated processes, the login browser and the detached updater are never affected.
 - CI runs the suite natively on Windows (Python 3.11 and 3.13) with named-pipe, job-object, `msvcrt` locking and PowerShell updater tests, alongside the existing Linux matrix.
 - Added Windows Core Audio master-volume control with mpv fallback when no endpoint is available.
