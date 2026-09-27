@@ -2,6 +2,7 @@
 ytm.state, the music.py additions, and auth.cookies_file."""
 
 import json
+import sys
 import os
 import stat
 import threading
@@ -118,7 +119,8 @@ def test_cookies_file_writes_netscape_format_from_the_header(tmp_path):
     assert lines[0].startswith("# Netscape")
     assert ".youtube.com\tTRUE\t/\tTRUE\t2147483647\tSID\tabc" in lines
     assert ".youtube.com\tTRUE\t/\tTRUE\t2147483647\t__Secure-3PAPISID\txyz" in lines
-    assert stat.S_IMODE(os.stat(cookies).st_mode) == 0o600
+    if sys.platform != "win32":  # POSIX modes are not Windows ACLs
+        assert stat.S_IMODE(os.stat(cookies).st_mode) == 0o600
 
 
 def test_cookies_file_is_reused_until_auth_changes(tmp_path):
@@ -202,7 +204,8 @@ def test_a_new_browser_record_exports_cookies():
     assert auth.cookies_file() == str(auth.COOKIES_PATH)
     text = auth.COOKIES_PATH.read_text()
     assert "__Secure-3PAPISID\txyz" in text
-    assert stat.S_IMODE(os.stat(auth.COOKIES_PATH).st_mode) == 0o600
+    if sys.platform != "win32":  # POSIX modes are not Windows ACLs
+        assert stat.S_IMODE(os.stat(auth.COOKIES_PATH).st_mode) == 0o600
 
 
 def test_a_tombstone_produces_no_export():

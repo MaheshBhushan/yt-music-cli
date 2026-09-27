@@ -116,9 +116,6 @@ def _file_lock(path):
     with path.with_name(path.name + '.lock').open('a+b') as lock:
         if os.name == 'nt':
             import msvcrt
-            lock.seek(0, os.SEEK_END)
-            if lock.tell() == 0:
-                lock.write(b'\0'); lock.flush()
             lock.seek(0)
             msvcrt.locking(lock.fileno(), msvcrt.LK_LOCK, 1)
         else:

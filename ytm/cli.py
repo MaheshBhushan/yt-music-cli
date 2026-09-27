@@ -520,6 +520,10 @@ def cmd_quit(args):
     return {"stopped": True}, "mpv stopped"
 
 
+from ytm.authentication.diagnostics import traced as trace_auth
+
+
+@trace_auth
 def cmd_auth(args):
     from ytm import auth
 
@@ -684,6 +688,7 @@ def cmd_logout(args):
     return data, "Signed out of YTM on this computer."
 
 
+@trace_auth
 def cmd_login(args):
     """Sign in: interactive browser by default, or an explicit alternative."""
     from ytm import auth

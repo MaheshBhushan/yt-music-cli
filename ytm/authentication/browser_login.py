@@ -292,7 +292,10 @@ def interactive_login(manager, *, browser=None, timeout=DEFAULT_TIMEOUT, confirm
     expected_revision = manager.expected_revision()
     runner = browser if browser is not None else PlaywrightBrowser()
     session = runner.observe(timeout=timeout)
+    from ytm.authentication import diagnostics
+    diagnostics.event("validating")
     verified = manager.validate_candidate(session)
+    diagnostics.event("validated")
     if confirm is not None and not confirm(verified):
         raise LoginCancelled("Login cancelled; the previous credentials were kept.")
     return manager.save_verified(verified, expected_revision=expected_revision)

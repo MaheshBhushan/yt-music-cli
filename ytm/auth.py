@@ -1,4 +1,5 @@
 """Authentication module."""
+from collections import deque
 import getpass
 import json
 import os
@@ -132,10 +133,10 @@ class _QuietLogger:
     """
 
     def __init__(self):
-        self.messages = []
+        self.messages = deque(maxlen=32)
 
     def debug(self, message):
-        pass
+        self.messages.append(str(message))
 
     def info(self, message):
         self.messages.append(str(message))
@@ -674,24 +675,50 @@ def _extract_browser_cookie_header(browser_name, profile=None):
         else:
             jar = extract_cookies_from_browser(browser_name, profile=profile, logger=logger)
     except Exception as exc:
-        text = str(exc)
-        if "could not find profile" in text:
-            return None, f'profile "{profile}" not found'
-        if isinstance(exc, FileNotFoundError) or "could not find" in text:
-            if _unreadable_directory(text) is not None:
-                return None, _MACOS_UNREADABLE.format(app=_terminal_name())
-            return None, "not installed or no profile found"
-        if "locked" in text.lower():
-            return None, "cookie database locked; close the browser and retry"
-        if "decrypt" in text.lower() or "dpapi" in text.lower():
-            return None, "cookies could not be decrypted"
-        return None, "cookie extraction failed; check browser permissions and profile availability"
+        from ytm.authentication import diagnostics
+        # Inspect causes and yt-dlp warnings in memory, but never write their
+        # raw text: a third-party exception may include cookies or a URL.
+        errors, seen = [], set()
+        current = exc
+        while current is not None and id(current) not in seen and len(errors) < 8:
+            seen.add(id(current))
+            errors.append(current)
+            current = current.__cause__ or current.__context__
+        text = " ".join([*(str(e) for e in errors), *logger.messages]).lower()
+        code = "extraction_failed"
+        reason = "cookie extraction failed; check browser permissions and profile availability"
+        if "app-bound" in text or "app bound" in text or "v20" in text:
+            code, reason = "app_bound_encryption", "cookies could not be decrypted (App-Bound Encryption)"
+        elif "decrypt" in text or "dpapi" in text:
+            code, reason = "decryption_failed", "cookies could not be decrypted"
+        elif "could not copy" in text and "cookie" in text:
+            code, reason = "database_copy_failed", "could not copy cookie database; close the browser completely and retry under the same Windows user"
+        elif "locked" in text or any(getattr(e, 'winerror', None) in (32, 33) for e in errors):
+            code, reason = "database_locked", "cookie database locked; close the browser and retry"
+        elif any(isinstance(e, PermissionError) for e in errors):
+            code, reason = "permission_denied", "permission denied reading browser data; use the same OS user as the browser"
+        elif "could not find profile" in text:
+            code, reason = "profile_missing", "selected profile not found; check --profile"
+        elif any(isinstance(e, FileNotFoundError) for e in errors) or "could not find" in text:
+            code, reason = "browser_missing", "not installed or no profile found"
+            if _unreadable_directory(str(exc)) is not None:
+                reason = _MACOS_UNREADABLE.format(app=_terminal_name())
+        underlying = errors[-1]
+        diagnostics.event(code, browser=browser_name, profile_selected=profile is not None,
+                          errno=getattr(underlying, 'errno', None), winerror=getattr(underlying, 'winerror', None))
+        return None, reason
+    from ytm.authentication import diagnostics
     header = _cookie_header_from_jar(jar)
     if header:
+        diagnostics.event('cookies_available', browser=browser_name, profile_selected=profile is not None)
         return header, None
     failed = logger.decrypt_failures()
-    if failed:
-        return None, f"{failed} cookies could not be decrypted"
+    evidence = " ".join(logger.messages).lower()
+    if failed or any(term in evidence for term in ('decrypt', 'dpapi', 'app-bound', 'v20')):
+        code = 'app_bound_encryption' if any(term in evidence for term in ('app-bound', 'v20')) else 'decryption_failed'
+        diagnostics.event(code, browser=browser_name, profile_selected=profile is not None)
+        return None, f"{failed} cookies could not be decrypted" if failed else "cookies could not be decrypted"
+    diagnostics.event('no_youtube_session', browser=browser_name, profile_selected=profile is not None)
     return None, "no YouTube login"
 
 
@@ -714,8 +741,9 @@ def _windows_chromium_hint(reasons):
     return (
         " Chrome, Edge, Brave, Vivaldi and Opera on Windows protect their cookies "
         "with App-Bound Encryption (Chrome 127 and newer), which other programs "
-        "cannot read. Options: plain 'ytm auth' signs in with Google without any "
-        "cookies; or log in at https://music.youtube.com in Firefox and run "
+        "may not be able to decrypt. Closing Chrome does not remove this protection. "
+        "Try 'ytm login --method playwright --browser chrome' (Google may reject automated browsers), "
+        "or log in at https://music.youtube.com in Firefox and run "
         "'ytm auth --from-browser firefox'."
     )
 
@@ -750,11 +778,14 @@ def _no_browser_session_error(reasons):
     closing = (
         "."
         if blocked
-        else ". Log in at https://music.youtube.com in one of these browsers "
-        "first, then run 'ytm auth --from-browser' again."
+        else ". Browser sign-in may still be valid; importing it failed. Check the selected profile and the reason above. "
+        "For a separate login, try 'ytm login --method playwright --browser chrome'; "
+        "or sign into music.youtube.com in Firefox and use 'ytm login --from-browser firefox'."
     )
+    if reasons and all(reason in ("not installed or no profile found", "no YouTube login") for reason in reasons.values()):
+        closing = ". Log in at https://music.youtube.com in the chosen browser profile, then retry with --from-browser."
     return (
-        "No logged-in YouTube session found. "
+        "Could not import a YouTube Music browser session. "
         + details
         + closing
         + blocked
@@ -866,7 +897,10 @@ def import_from_browser(browser=None, path=None, profile=None, config=None, auth
     candidate = session_mod.build_session(
         headers, source=f"existing_browser:{browser_name}"
     )
+    from ytm.authentication import diagnostics
+    diagnostics.event('validating')
     verified = manager.validate_candidate(candidate)
+    diagnostics.event('validated')
     if confirm is not None and not confirm(verified):
         raise LoginCancelled("Login cancelled; the previous credentials were kept.")
     return manager.save_verified(verified, expected_revision=expected)

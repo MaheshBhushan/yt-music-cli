@@ -436,7 +436,7 @@ def test_client_error_on_playlist_action_shows_banner_not_crash():
     asyncio.run(scenario())
 
 
-def test_smoke_render_layout():
+def test_smoke_render_layout(tmp_path):
     """Headless smoke run: the app starts up and lays out all panes,
     including the lyrics pane (Change B), at two terminal sizes."""
 
@@ -456,12 +456,12 @@ def test_smoke_render_layout():
             return svg
 
     svg_100x30 = asyncio.run(scenario((100, 30)))
-    with open("/tmp/ytm_tui_smoke_100x30.svg", "w") as fh:
+    with open(tmp_path / "ytm_tui_smoke_100x30.svg", "w", encoding="utf-8") as fh:
         fh.write(svg_100x30)
     print(f"Smoke screenshot written to /tmp/ytm_tui_smoke_100x30.svg ({len(svg_100x30)} bytes)")
 
     svg_120x40 = asyncio.run(scenario((120, 40)))
-    with open("/tmp/ytm_tui_smoke_120x40.svg", "w") as fh:
+    with open(tmp_path / "ytm_tui_smoke_120x40.svg", "w", encoding="utf-8") as fh:
         fh.write(svg_120x40)
     print(f"Smoke screenshot written to /tmp/ytm_tui_smoke_120x40.svg ({len(svg_120x40)} bytes)")
 

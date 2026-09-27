@@ -58,7 +58,7 @@ def test_real_updater_upgrades_disposable_installation(tmp_path):
 
     def run(argv, **kwargs):
         return subprocess.run(argv, check=True, capture_output=True, text=True,
-                              timeout=180, **kwargs)
+                              timeout=180, cwd=kwargs.pop("cwd", tmp_path), **kwargs)
 
     env = tmp_path/'disposable env'
     run([sys.executable, '-m', 'venv', '--system-site-packages', str(env)])
@@ -96,7 +96,12 @@ def test_windows_core_audio_read_only_probe():
     from ytm.windows_volume import WindowsVolume
     comtypes.CoInitialize()
     try:
-        device = AudioUtilities.GetSpeakers()
+        try:
+            device = AudioUtilities.GetSpeakers()
+        except comtypes.COMError as exc:
+            if exc.hresult == -2147023728:  # no endpoint on hosted runners
+                pytest.skip("Windows runner has no audio endpoint; desktop volume smoke pending")
+            raise
         has_endpoint = device is not None
         device = None
     finally:
