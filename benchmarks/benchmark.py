@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""YTM full-process benchmark runner (handout: docs/BENCHMARK_IMPLEMENTATION_HANDOUT.md).
+"""YTM full-process benchmark runner.
 
 Produces machine-readable evidence in benchmarks/results/<run-id>/ and a
 generated report. Standard library only; the measured target is the real
