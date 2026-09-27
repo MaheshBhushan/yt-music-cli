@@ -50,13 +50,6 @@ def _ytdlp_path():
     return shutil.which("yt-dlp", path=here) or shutil.which("yt-dlp")
 
 
-def _js_runtime():
-    for name in ("deno", "node"):
-        if shutil.which(name):
-            return name
-    return None
-
-
 AUTOPLAY_SCRIPT = os.path.join(os.path.dirname(__file__), "mpv", "autoplay.lua")
 
 
@@ -74,7 +67,7 @@ def _log_path():
 
 def player(spawn=True, **player_kwargs):
     """A connected Player, configured from config.toml and the stored auth."""
-    from ytm import auth, config, volume
+    from ytm import auth, config, js_runtime, volume
 
     cfg = config.load()
     pot = cfg["pot"]
@@ -101,7 +94,7 @@ def player(spawn=True, **player_kwargs):
         extractor_args=(
             f"youtubepot-bgutilhttp:base_url={pot['base_url']}" if pot["enabled"] else None
         ),
-        js_runtimes=_js_runtime(),
+        js_runtimes=js_runtime.find(),
         audio_device=cfg["audio"]["device"],
         extra_args=[
             # with a system mixer mpv's own volume stays at 100 (see
