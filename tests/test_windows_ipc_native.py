@@ -239,6 +239,8 @@ def test_windows_pipe_repeated_cycles_do_not_leak_handles(pipe_server):
     for _ in range(3):
         server = pipe_server(mode="silent")
         player = Player(ipc_path=server.path, spawn=False, timeout=0.1)
+        transport = player._transport
+        reader = transport._stream._thread
         with pytest.raises(PlayerError):
             player.command("get_property", "pause")
         player.close()
