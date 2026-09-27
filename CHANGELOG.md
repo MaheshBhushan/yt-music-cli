@@ -5,7 +5,9 @@
 - Windows IPC is deadline-aware and cancelable: named-pipe reads run through one reader thread per connection and `CancelIoEx`, so a player that stops answering fails within the command timeout instead of hanging forever. A late reply can never satisfy a later command, and a timed-out request leaves no worker behind.
 - Windows playback children are owned by a kill-on-close Job Object: mpv, yt-dlp and any JavaScript runtime are created suspended, assigned to the session job, then resumed, so closing or crashing the TUI removes the whole owned tree. Unrelated processes, the login browser and the detached updater are never affected.
 - CI runs the suite natively on Windows (Python 3.11 and 3.13) with named-pipe, job-object, `msvcrt` locking and PowerShell updater tests, alongside the existing Linux matrix.
-- Documented Windows behavior: mpv-only volume (no Windows master-volume integration), deferred path harmonization with an explicit location inventory, and honest browser-verification limits.
+- Added Windows Core Audio master-volume control with mpv fallback when no endpoint is available.
+- Added Windows application-data paths and explicit `ytm migrate-paths [--apply]` migration; legacy data remains readable and originals are retained.
+- Added native Windows locking, silent mpv decoding and disposable-installation PowerShell 5.1 update smoke tests. Desktop Google login and audible-output validation remain separate acceptance checks.
 
 ## 0.10.1 — 2026-09-27
 

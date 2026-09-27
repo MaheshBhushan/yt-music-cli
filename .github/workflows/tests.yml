@@ -31,13 +31,12 @@ jobs:
       - name: Install mpv for native decoding smoke test
         if: runner.os == 'Windows'
         run: choco install mpv --yes --no-progress
-      - run: pytest -q --timeout=180
+      - run: pytest -v --timeout=180
       - name: Windows PowerShell 5.1 updater tests
-        if: runner.os == 'Windows'
+        if: runner.os == 'Windows' && !cancelled()
         env:
           YTM_TEST_POWERSHELL: powershell.exe
         run: python -m pytest -q tests/test_windows_update.py
       - name: Native Windows locking and smoke results
-        if: runner.os == 'Windows'
-        run: python -m pytest -v tests/test_windows_ipc_native.py tests/test_windows_process_native.py tests/test_windows_locking_native.py tests/test_windows_smoke.py
-
+        if: runner.os == 'Windows' && !cancelled()
+        run: python -m pytest -v --timeout=60 tests/test_windows_ipc_native.py tests/test_windows_process_native.py tests/test_windows_locking_native.py tests/test_windows_smoke.py

@@ -13,7 +13,6 @@ import errno
 import json
 import os
 import re
-import select
 import signal
 import socket
 import struct

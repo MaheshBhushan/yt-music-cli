@@ -165,6 +165,7 @@ WINDOWS_MPV_DIRS = [
     ("LOCALAPPDATA", ("Microsoft", "WinGet", "Links")),
     ("USERPROFILE", ("scoop", "shims")),
     ("ProgramData", ("chocolatey", "bin")),
+    ("ProgramData", ("chocolatey", "lib", "mpvio.install", "tools")),
 ]
 
 

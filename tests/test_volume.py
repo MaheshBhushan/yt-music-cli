@@ -4,7 +4,6 @@ config use it. No wpctl/pactl is ever run: the subprocess runner is faked."""
 import subprocess
 import threading
 
-import pytest
 
 from ytm import config as config_mod
 from ytm.tui.backend import Backend

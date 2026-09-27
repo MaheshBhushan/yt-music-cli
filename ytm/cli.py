@@ -823,6 +823,8 @@ def cmd_migrate_paths(args):
         items = migrate(apply=args.apply)
     except MigrationError as exc:
         raise CliError(str(exc)) from exc
+    except OSError as exc:
+        raise CliError("Could not access migration files. Originals kept; close YTM and check directory permissions.") from exc
     action = "Migration completed; restart YTM. Legacy originals kept." if args.apply else "Preview only. Close other YTM instances, then use --apply to copy."
     return {"applied": args.apply, "files": items}, action + "\n" + "\n".join(
         f"{i['status']}: {i['source']} -> {i['target']}" for i in items

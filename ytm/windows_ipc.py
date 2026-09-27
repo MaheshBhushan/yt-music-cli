@@ -12,12 +12,10 @@ request never leaves a worker behind.
 
 `LineStream` is the platform-neutral framing core (deadlines, partial
 frames, UTF-8 line decoding, bounded buffering); the Win32 glue is a thin
-handle lookup plus the cancellation call. The core is exercised on every
+handle lookup plus overlapped I/O and cancellation. The core is exercised on every
 platform; the native pipe path is exercised by the Windows test job.
 """
 
-import ctypes
-import os
 import queue
 import socket
 import sys
@@ -174,44 +172,83 @@ class SocketTransport:
 
 
 class NamedPipeTransport:
-    """Windows named pipe: `LineStream` plus native cancellation.
+    """Overlapped Win32 I/O permits simultaneous reads and writes.
 
-    The handle is opened as a blocking byte stream, exactly as mpv's pipe
-    expects; ``CancelIoEx`` targets that handle so a blocked read returns
-    instead of parking a thread for the rest of the process's life.
+    CPython's Win32 wrapper owns each OVERLAPPED and its buffer until the
+    operation completes, including cancellation. Synchronous file handles
+    serialize reads/writes and deadlock when the reader starts first.
     """
 
     def __init__(self, path, timeout=None):
-        self._file = open(path, "r+b", buffering=0)
-        self._handle = _os_handle(self._file)
-        self._kernel32 = _kernel32()
+        import _winapi
+
+        self._api = _winapi
+        self._timeout = timeout
+        self._guard = threading.Lock()
+        self._pending = set()
+        self._closed = False
+        self._handle = _winapi.CreateFile(
+            str(path), _winapi.GENERIC_READ | _winapi.GENERIC_WRITE,
+            0, None, _winapi.OPEN_EXISTING, _winapi.FILE_FLAG_OVERLAPPED, None,
+        )
         self._stream = LineStream(self._read_chunk, self._cancel_io)
 
+    def _transfer(self, data=None, timeout=None):
+        api = self._api
+        with self._guard:
+            if self._closed:
+                raise PipeClosed("the pipe is closed")
+            if data is None:
+                operation, error = api.ReadFile(self._handle, READ_CHUNK, overlapped=True)
+            else:
+                operation, error = api.WriteFile(self._handle, data, overlapped=True)
+            self._pending.add(operation)
+        try:
+            if error == api.ERROR_IO_PENDING:
+                millis = api.INFINITE if timeout is None else max(0, int(timeout * 1000))
+                if api.WaitForSingleObject(operation.event, millis) == api.WAIT_TIMEOUT:
+                    operation.cancel()
+                    operation.GetOverlappedResult(True)
+                    raise PipeTimeout("no completion within the deadline")
+            size, error = operation.GetOverlappedResult(True)
+            if error:
+                raise PipeClosed("the pipe operation was cancelled or failed")
+            return operation.getbuffer() if data is None else size
+        finally:
+            # Cancel and drain even on KeyboardInterrupt: the kernel must no
+            # longer own a buffer when its Python OVERLAPPED is released.
+            operation.cancel()
+            operation.GetOverlappedResult(True)
+            with self._guard:
+                self._pending.discard(operation)
+
     def _read_chunk(self):
-        return self._file.read(READ_CHUNK)
+        return self._transfer()
 
     def _cancel_io(self):
-        # CancelIoEx cancels outstanding I/O for the handle regardless of
-        # which thread issued it; already-completed operations are a no-op.
-        self._kernel32.CancelIoEx(ctypes.c_void_p(self._handle), None)
+        with self._guard:
+            self._closed = True
+            for operation in self._pending:
+                operation.cancel()
 
     def readline(self, timeout=None):
         return self._stream.readline(timeout)
 
     def write_all(self, data):
-        view = memoryview(data)
-        while view:
-            written = self._file.write(view)
+        deadline = None if self._timeout is None else time.monotonic() + self._timeout
+        while data:
+            remaining = None if deadline is None else max(0, deadline - time.monotonic())
+            written = self._transfer(data, remaining)
             if not written:
                 raise PipeClosed("the player did not accept the request")
-            view = view[written:]
+            data = data[written:]
 
     def close(self):
         self._stream.close()
-        try:
-            self._file.close()
-        except OSError:
-            pass
+        with self._guard:
+            if self._handle is not None:
+                self._api.CloseHandle(self._handle)
+                self._handle = None
 
 
 def open_transport(path, timeout=None):
@@ -221,14 +258,3 @@ def open_transport(path, timeout=None):
     return SocketTransport(path, timeout)
 
 
-def _os_handle(file):
-    import msvcrt
-
-    return msvcrt.get_osfhandle(file.fileno())
-
-
-def _kernel32():
-    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-    kernel32.CancelIoEx.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
-    kernel32.CancelIoEx.restype = ctypes.c_int
-    return kernel32
