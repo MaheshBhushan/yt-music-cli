@@ -154,6 +154,7 @@ def test_connects_to_a_running_mpv_without_spawning(mpv):
         assert p.get("volume") == 70.0
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="Unix-socket startup fixture; native mpv startup covered separately")
 def test_spawns_mpv_when_nothing_listens_and_waits_for_the_socket(tmp_path):
     path = str(tmp_path / "mpv.sock")
     spawned = []
@@ -577,6 +578,7 @@ class _Process:
         return self.returncode
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="Unix-socket startup fixture; native mpv startup covered separately")
 def test_an_mpv_that_is_merely_slow_is_waited_for(tmp_path, monkeypatch):
     """mpv's first start after installation took 11 s on macOS -- one second
     past the old 10 s limit -- so ytm gave up on an mpv that was coming up

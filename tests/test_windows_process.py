@@ -6,8 +6,6 @@ once, and rejects work after close. `tests/test_windows_process_native.py`
 proves the kernel behavior on Windows (and is skipped elsewhere).
 """
 
-import os
-import subprocess
 import sys
 from pathlib import Path
 

@@ -87,3 +87,21 @@ def test_real_updater_upgrades_disposable_installation(tmp_path):
     assert 'Successfully updated' in result.stdout
     assert run([str(python),'-c','from importlib.metadata import version; print(version("ytm"))']).stdout.strip() == version('ytm')
     assert not helper.exists()
+
+
+def test_windows_core_audio_read_only_probe():
+    # Import failures must be visible here rather than hidden by runtime fallback.
+    import comtypes
+    from pycaw.pycaw import AudioUtilities
+    from ytm.windows_volume import WindowsVolume
+    comtypes.CoInitialize()
+    try:
+        device = AudioUtilities.GetSpeakers()
+        has_endpoint = device is not None
+        device = None
+    finally:
+        comtypes.CoUninitialize()
+    if not has_endpoint:
+        pytest.skip('Windows runner has no active audio endpoint; desktop master-volume smoke pending')
+    value = WindowsVolume().get()
+    assert value is not None and 0 <= value <= 100

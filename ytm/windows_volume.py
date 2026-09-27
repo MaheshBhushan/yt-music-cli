@@ -36,7 +36,10 @@ class WindowsVolume:
     def get(self):
         try:
             with self._endpoint_factory() as endpoint:
-                return round(endpoint.GetMasterVolumeLevelScalar() * 100)
+                try:
+                    return round(endpoint.GetMasterVolumeLevelScalar() * 100)
+                finally:
+                    del endpoint
         except Exception:  # COM/device loss is an expected fallback, never a traceback
             return None
 
@@ -44,8 +47,11 @@ class WindowsVolume:
         level = max(0, min(100, round(level)))
         try:
             with self._endpoint_factory() as endpoint:
-                endpoint.SetMasterVolumeLevelScalar(level / 100, None)
-                return round(endpoint.GetMasterVolumeLevelScalar() * 100)
+                try:
+                    endpoint.SetMasterVolumeLevelScalar(level / 100, None)
+                    return round(endpoint.GetMasterVolumeLevelScalar() * 100)
+                finally:
+                    del endpoint
         except Exception:
             return None
 
