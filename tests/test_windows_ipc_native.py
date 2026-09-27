@@ -161,6 +161,10 @@ def pipe_server():
     servers = []
 
     def make(**kwargs):
+        # Retaining closed test servers also retains their threading.Event
+        # locks, which themselves consume Windows handles on Python 3.11.
+        # Measure the client, not accumulated fixture synchronization objects.
+        servers[:] = [server for server in servers if server.handle is not None]
         server = PipeServer(**kwargs)
         servers.append(server)
         return server
