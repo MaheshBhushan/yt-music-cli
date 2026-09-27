@@ -27,6 +27,7 @@ import tempfile
 from pathlib import Path
 
 from ytm import config as config_mod
+from ytm import js_runtime
 
 #: default location for cached track audio
 DEFAULT_CACHE_DIR = Path(
@@ -192,4 +193,9 @@ def _ydl_opts(outtmpl):
     pot = config_mod.load()["pot"]
     if pot["enabled"]:
         opts["extractor_args"] = {"youtubepot-bgutilhttp": {"base_url": [pot["base_url"]]}}
+    runtimes = js_runtime.ytdlp_option()
+    if runtimes:
+        # parity with playback: without this the Python API keeps yt-dlp's
+        # Deno-only default even when Node is the runtime mpv uses
+        opts["js_runtimes"] = runtimes
     return opts
