@@ -2,15 +2,25 @@ name: tests
 
 on:
   push:
-    branches: [main]
+    branches: [main, "ci/windows-validation/**"]
   pull_request:
 
 jobs:
   pytest:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
+        os: [ubuntu-latest]
         python-version: ["3.11", "3.12", "3.13"]
+        include:
+          # Native Windows coverage for the named-pipe transport, job-object
+          # process ownership, msvcrt locking and the PowerShell updater.
+          # Oldest and newest supported Python first; expand once stable.
+          - os: windows-latest
+            python-version: "3.11"
+          - os: windows-latest
+            python-version: "3.13"
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6

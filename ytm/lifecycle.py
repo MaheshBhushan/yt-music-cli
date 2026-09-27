@@ -26,14 +26,23 @@ class ProcessOwner:
     _users = 0
     _previous_subreaper = 0
 
-    def __init__(self, stop_event=None):
+    def __init__(self, stop_event=None, *, platform=None, windows_job=None, windows_spawn=None):
         self._guard = threading.RLock()
         self._processes = []
         self._births = {}
         self._closed = False
         self.stop_event = stop_event or threading.Event()
         self._token = uuid.uuid4().hex
-        self._linux = sys.platform.startswith("linux")
+        self._platform = platform or sys.platform
+        self._linux = self._platform.startswith("linux")
+        self._windows = self._platform.startswith("win")
+        self._job = None
+        self._windows_spawn = None
+        if self._windows:
+            from ytm import windows_process
+
+            self._job = windows_job if windows_job is not None else windows_process.JobObject()
+            self._windows_spawn = windows_spawn or windows_process.spawn_in_job
         if self._linux:
             with self._lock:
                 if not self._users:
@@ -52,7 +61,12 @@ class ProcessOwner:
             env["YTM_PROCESS_OWNER"] = self._token
             if os.name != "nt":
                 kwargs.setdefault("start_new_session", True)
-            process = subprocess.Popen(args, env=env, **kwargs)
+            if self._windows:
+                # Created suspended, assigned to the session job, then
+                # resumed: nothing can spawn before ownership exists.
+                process = self._windows_spawn(self._job, args, env=env, **kwargs)
+            else:
+                process = subprocess.Popen(args, env=env, **kwargs)
             self._processes.append(process)
             if self._linux:
                 self._births[process.pid] = Path(f"/proc/{process.pid}/stat").read_text().rsplit(")", 1)[1].split()[19]
@@ -165,6 +179,15 @@ class ProcessOwner:
                         if not known or time.monotonic() >= deadline:
                             break
                         time.sleep(0.02)
+            elif self._windows:
+                # Kill-on-close covers the whole tree, including helpers mpv
+                # already spawned. Direct termination is the fallback for
+                # anything that raced outside the job.
+                if self._job is not None:
+                    self._job.terminate()
+                for process in processes:
+                    if process.poll() is None:
+                        process.terminate()
             else:
                 for process in processes:
                     if process.poll() is None:
@@ -179,6 +202,9 @@ class ProcessOwner:
                     process.kill()
                     process.wait()
         finally:
+            if self._windows and self._job is not None:
+                # Closing the last job handle terminates any survivor.
+                self._job.close()
             if self._linux:
                 with self._lock:
                     type(self)._users -= 1
