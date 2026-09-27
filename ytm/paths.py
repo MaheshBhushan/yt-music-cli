@@ -154,7 +154,10 @@ def migrate(*, apply=False, home=None, environ=None, roots=None):
         for path in lock_paths:
             stack.enter_context(_file_lock(path))
         # Recheck conflicts/content under locks, before publishing anything.
-        items = migration_plan(**kwargs)
+        updated = migration_plan(**kwargs)
+        if {(i['source'], i['target']) for i in updated} != {(i['source'], i['target']) for i in items}:
+            raise MigrationError('Migration inventory changed; retry with all YTM instances closed.')
+        items = updated
         if any(i['status'] in ('conflict', 'unsafe') for i in items):
             raise MigrationError('Files changed before migration. Nothing copied; retry after closing YTM.')
         for item in items:

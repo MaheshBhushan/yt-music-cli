@@ -19,7 +19,13 @@ import socket
 import struct
 import time
 
-from collector import now_ns, read_text
+from time import monotonic_ns as now_ns
+
+
+def read_text(path):
+    # The collector itself is Linux-specific; trace parsing is portable.
+    from collector import read_text as read
+    return read(path)
 
 STARTUP_TIMEOUT = 60.0
 SEARCH_TIMEOUT = 60.0

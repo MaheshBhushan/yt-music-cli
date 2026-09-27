@@ -1,5 +1,4 @@
 """Windows data migration: no personal directories or credentials are read."""
-from pathlib import Path
 import json
 
 import pytest

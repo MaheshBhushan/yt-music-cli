@@ -53,6 +53,9 @@ if sys.platform.startswith("win"):
         ctypes.POINTER(wintypes.DWORD), ctypes.c_void_p,
     ]
     kernel32.CancelIoEx.argtypes = [wintypes.HANDLE, ctypes.c_void_p]
+    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+    kernel32.DisconnectNamedPipe.argtypes = [wintypes.HANDLE]
+    kernel32.GetCurrentProcess.restype = wintypes.HANDLE
     kernel32.GetProcessHandleCount.argtypes = [
         wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD),
     ]

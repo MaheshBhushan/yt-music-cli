@@ -1,11 +1,4 @@
-"""W5/W6: Windows path policy and the no-mixer volume fallback.
-
-Path harmonization is deliberately deferred: the active credential record
-uses platformdirs while configuration, state and cache keep their
-Unix-style defaults, which can also exist on Windows. These tests pin the
-resolved policy so the documentation cannot drift, and record that a
-missing system mixer is a supported, tested fallback rather than a failure.
-"""
+"""Windows application-data policy; legacy data stays readable until migration."""
 
 from pathlib import Path
 

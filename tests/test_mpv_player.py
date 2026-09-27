@@ -231,10 +231,12 @@ def test_mpv_args_omit_what_is_not_configured():
 
 def test_default_ipc_path_is_a_socket_on_posix_and_a_pipe_on_windows(monkeypatch):
     monkeypatch.setenv("XDG_RUNTIME_DIR", "/run/user/1000")
-    assert default_ipc_path("linux") == "/run/user/1000/ytm/mpv.sock"
+    from pathlib import Path
+    assert Path(default_ipc_path("linux")) == Path("/run/user/1000/ytm/mpv.sock")
     assert default_ipc_path("win32") == r"\\.\pipe\ytm-mpv"
     monkeypatch.delenv("XDG_RUNTIME_DIR")
-    assert default_ipc_path("linux").endswith("/mpv.sock")
+    monkeypatch.setattr(os, "getuid", lambda: 1000, raising=False)
+    assert Path(default_ipc_path("linux")).name == "mpv.sock"
 
 
 # -- loading and transport --------------------------------------------------

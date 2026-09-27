@@ -7,6 +7,7 @@ on:
 
 jobs:
   pytest:
+    timeout-minutes: 20
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -26,11 +27,11 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.python-version }}
-      - run: pip install -e '.[dev]'
+      - run: pip install -e '.[dev]' pytest-timeout
       - name: Install mpv for native decoding smoke test
         if: runner.os == 'Windows'
         run: choco install mpv --yes --no-progress
-      - run: pytest -q
+      - run: pytest -q --timeout=180
       - name: Windows PowerShell 5.1 updater tests
         if: runner.os == 'Windows'
         env:
