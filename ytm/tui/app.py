@@ -8,7 +8,6 @@ import signal
 import sys
 import threading
 import time
-from pathlib import Path
 from typing import ClassVar
 
 from textual.app import App, ComposeResult
@@ -18,7 +17,7 @@ from textual.message import Message
 from textual.widgets import DataTable, Input, Static
 
 from ytm import config as config_mod
-from ytm import update
+from ytm import diagnostics, update
 from ytm.lifecycle import daemon_call
 from ytm.tui.backend import Backend, BackendError
 from ytm.tui.lyrics import LyricsPane
@@ -50,29 +49,21 @@ class DaemonEvent(Message):
         self.data = data
 
 
-#: where the TUI keeps a trace of the current run: the keys it received,
-#: focus moves, backend requests with their timing, errors and resizes.
-#: Truncated at every start, so it is always the last run. A keyboard or
+#: the TUI keeps a per-run trace of the keys it received, focus moves,
+#: backend requests with their timing, errors and resizes. A keyboard or
 #: focus problem in one particular terminal cannot be reproduced from a bug
-#: report alone; this is the report. YTM_TUI_LOG moves it elsewhere.
-TRACE_PATH = Path(
-    os.environ.get("XDG_STATE_HOME", os.path.expanduser("~/.local/state"))
-) / "ytm" / "tui.log"
-
-
-def _trace_path():
-    return Path(os.environ.get("YTM_TUI_LOG") or TRACE_PATH)
+#: report alone; this is the report. See `ytm.diagnostics` for the bounded
+#: per-run history and the YTM_TUI_LOG override.
 
 
 def _trace(line, mode="a"):
-    """Append one line to the trace file; never let logging break the app."""
-    try:
-        path = _trace_path()
-        path.parent.mkdir(parents=True, exist_ok=True)
-        with open(path, mode, encoding="utf-8") as file:
-            file.write(f"{time.strftime('%H:%M:%S')} {line}\n")
-    except OSError:
-        pass
+    """Append one line to this run's trace; never let logging break the app.
+
+    The file is per-run and bounded (see `ytm.diagnostics`), so a failed
+    launch is still readable after the restart that recovered from it.
+    YTM_TUI_LOG keeps its meaning: one explicit file, truncated each start.
+    """
+    diagnostics.write(line, mode=mode)
 
 
 class RequestDone(Message):
