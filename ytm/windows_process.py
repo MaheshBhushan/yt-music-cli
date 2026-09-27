@@ -73,6 +73,7 @@ if sys.platform.startswith("win"):
     JOB_OBJECT_EXTENDED_LIMIT_INFORMATION = 9
     PROCESS_SET_QUOTA = 0x0100
     PROCESS_TERMINATE = 0x0001
+    PROCESS_SUSPEND_RESUME = 0x0800
     CREATE_SUSPENDED = 0x00000004
 
     kernel32.CreateJobObjectW.restype = wintypes.HANDLE
@@ -148,7 +149,7 @@ def spawn_in_job(job, args, **kwargs):
     kwargs["creationflags"] = kwargs.get("creationflags", 0) | CREATE_SUSPENDED
     process = subprocess.Popen(args, **kwargs)
     handle = kernel32.OpenProcess(
-        PROCESS_SET_QUOTA | PROCESS_TERMINATE, False, process.pid
+        PROCESS_SET_QUOTA | PROCESS_TERMINATE | PROCESS_SUSPEND_RESUME, False, process.pid
     )
     if not handle:
         error = ctypes.get_last_error()

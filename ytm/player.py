@@ -707,7 +707,11 @@ class Player:
         if level is not None:
             if self.get("volume", 100) != 100:
                 self.set("volume", 100)
-            return self.mixer.set(level)
+            current = self.mixer.set(level)
+            if current is None:
+                self.set("volume", max(0, min(100, level)))
+                return self.get("volume", 0)
+            return current
         current = self.mixer.get()
         return self.get("volume", 0) if current is None else current
 

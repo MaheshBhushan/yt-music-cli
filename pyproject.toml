@@ -36,6 +36,7 @@ dependencies = [
     # deprecation warning) but requires Python >= 3.12.
     "textual-image",
     "platformdirs>=4",
+    "pycaw>=20251023; sys_platform == 'win32'",
 ]
 
 [project.optional-dependencies]

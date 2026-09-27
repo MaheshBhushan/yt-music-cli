@@ -10,7 +10,6 @@ consequences of that choice.
 from __future__ import annotations
 
 import errno
-import fcntl
 import json
 import os
 import re
@@ -18,7 +17,6 @@ import select
 import signal
 import socket
 import struct
-import termios
 import time
 
 from collector import now_ns, read_text
@@ -222,6 +220,11 @@ class Session:
     # -- launch ----------------------------------------------------------
 
     def launch(self) -> int:
+        if os.name == "nt":
+            raise RuntimeError("The PTY benchmark driver requires POSIX; protocol parsing is portable.")
+        import fcntl
+        import termios
+
         self.launch_ns = now_ns()
         self.bench.event("launch.requested", session=self.name,
                          monotonic_ns=self.launch_ns)

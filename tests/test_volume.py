@@ -41,8 +41,8 @@ class Runner:
 
 
 def test_detect_needs_wpctl_or_pactl():
-    assert SystemVolume.detect(which=lambda name: None) is None
-    only_pactl = SystemVolume.detect(which=lambda name: "/usr/bin/pactl" if name == "pactl" else None)
+    assert SystemVolume.detect(platform="linux", which=lambda name: None) is None
+    only_pactl = SystemVolume.detect(platform="linux", which=lambda name: "/usr/bin/pactl" if name == "pactl" else None)
     assert only_pactl._pactl == "/usr/bin/pactl" and only_pactl._wpctl is None
 
 
