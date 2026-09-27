@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+- Clicking a playlist, queue entry or search result now selects it exactly once. Duplicate click dispatch previously issued a second playback request, stopping the first stream-resolution attempt and restarting it. Repeated clicks and keyboard Enter still work normally.
+- Account-client initialization recovers from every builder failure: a credential file that becomes unreadable between construction and the final revision check no longer leaves later calls waiting forever.
+- Local playlist create/add/remove/delete now run as one transaction across threads and processes, with unique staging files. A corrupt, unreadable or permission-blocked file is refused with the original preserved instead of being replaced by an empty store.
+- Cookie export shares the credential lock with login and logout and publishes atomically: it cannot recreate a removed export after logout, publish through a symlink, or leave a half-written file behind.
+- Asynchronous playback failures (mpv `end-file` with `reason: error`) now reach the TUI as a safe banner. Normal EOF, explicit stop, quit and deliberate track replacement stay silent, and a late error from an already-replaced track is not attributed to the current one.
+- Plain `ytm` and `ytm tui` share one startup error boundary: expected startup failures exit 1 with a short message, and Ctrl-C exits 130.
+- Downloads and playback agree on the JavaScript runtime: a Node-only system now selects Node for both instead of leaving yt-dlp's Deno-only default.
+- The TUI keeps a bounded per-run diagnostic history under `~/.local/state/ytm/logs/`, with credential-looking values redacted, so a failed run survives the restart that recovered from it.
+
 ## 0.10.0 — 2026-09-26
 
 - `ytm login` opens the supported OS default browser's normal profile, waits for terminal confirmation, imports that profile's YouTube session, and verifies the account before saving. Chrome, Chromium, Edge, Firefox, Brave, Vivaldi, Opera and Helium are selectable. `--method playwright` provides optional isolated browser observation with Chromium, Chrome/Edge, Firefox or WebKit. Normal Chrome profiles are never attached to remote debugging.
