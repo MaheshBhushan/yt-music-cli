@@ -1,6 +1,8 @@
 """Tests for ytm.volume (the system mixer) and how the Player, backend and
 config use it. No wpctl/pactl is ever run: the subprocess runner is faked."""
 
+import sys
+import pytest
 import subprocess
 import threading
 
@@ -109,6 +111,7 @@ class FakeMixer:
         stop.wait()
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="Unix socket fixture; native playback tested separately")
 def test_player_with_mixer_uses_system_volume_and_pins_mpv_to_100(tmp_path):
     from tests.test_mpv_player import FakeMpv
     from ytm.player import Player
@@ -125,6 +128,7 @@ def test_player_with_mixer_uses_system_volume_and_pins_mpv_to_100(tmp_path):
         assert p.volume() == 60
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="Unix socket fixture; native playback tested separately")
 def test_player_without_mixer_keeps_mpv_volume(tmp_path):
     from tests.test_mpv_player import FakeMpv
     from ytm.player import Player
@@ -136,6 +140,7 @@ def test_player_without_mixer_keeps_mpv_volume(tmp_path):
         assert mpv.props["volume"] == 40
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="Unix socket fixture; native playback tested separately")
 def test_player_falls_back_to_mpv_volume_when_the_mixer_is_silent(tmp_path):
     from tests.test_mpv_player import FakeMpv
     from ytm.player import Player

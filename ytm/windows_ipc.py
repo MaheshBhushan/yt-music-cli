@@ -189,7 +189,7 @@ class NamedPipeTransport:
         self._closed = False
         self._handle = _winapi.CreateFile(
             str(path), _winapi.GENERIC_READ | _winapi.GENERIC_WRITE,
-            0, None, _winapi.OPEN_EXISTING, _winapi.FILE_FLAG_OVERLAPPED, None,
+            0, 0, _winapi.OPEN_EXISTING, _winapi.FILE_FLAG_OVERLAPPED, 0,
         )
         self._stream = LineStream(self._read_chunk, self._cancel_io)
 

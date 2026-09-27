@@ -544,7 +544,7 @@ def test_spawning_a_missing_mpv_explains_instead_of_reporting_errno(monkeypatch)
     """The bare OSError ("[Errno 2] No such file or directory: 'mpv'") is the
     first thing a fresh `uv tool install ytm` shows, and it does not say that
     mpv is a separate program, let alone how to get one."""
-    monkeypatch.setattr(player_mod.shutil, "which", lambda tool: None)
+    monkeypatch.setattr(player_mod, "find_mpv", lambda *args, **kwargs: None)
     with pytest.raises(PlayerError) as excinfo:
         spawn_mpv(["mpv", "--idle=yes"])
     assert "[Errno 2]" not in str(excinfo.value)
