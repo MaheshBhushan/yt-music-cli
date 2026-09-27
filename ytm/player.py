@@ -21,13 +21,14 @@ import json
 import os
 import re
 import shutil
-import socket
 import subprocess
 import sys
 import tempfile
 import threading
 import time
 from pathlib import Path
+
+from ytm.windows_ipc import open_transport
 
 #: How long to wait for a freshly spawned mpv to open its IPC endpoint.
 #: Generous on purpose: mpv's first start after it is installed can take
@@ -340,8 +341,7 @@ class Player:
         self.mixer = mixer
         #: None for a connection that sits in `observe()` indefinitely
         self._timeout = timeout
-        self._file = None
-        self._socket = None
+        self._transport = None
         self._owner = owner
         self._request_id = 0
         # one request/reply at a time on the socket; callers may be on any thread
@@ -389,37 +389,39 @@ class Player:
         raise PlayerError(_never_ready_message(args, self._ipc_path, last))
 
     def _open(self):
-        if sys.platform.startswith("win"):
-            # A named pipe behaves like a file on Windows; both directions
-            # go through the same handle.
-            self._file = open(self._ipc_path, "r+b", buffering=0)
-            return
-        Path(self._ipc_path).parent.mkdir(parents=True, exist_ok=True)
-        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        sock.settimeout(self._timeout)
+        # A named pipe behaves like a file on Windows; both directions go
+        # through one handle. The transport owns the deadline/cancellation
+        # policy so a player that stops answering cannot block a command.
+        if not sys.platform.startswith("win"):
+            Path(self._ipc_path).parent.mkdir(parents=True, exist_ok=True)
+        self._transport = open_transport(self._ipc_path, self._timeout)
+
+    def _readline(self, deadline):
+        """One line from the transport, mapped to safe PlayerErrors."""
+        transport = self._transport
+        if transport is None:
+            raise PlayerError("player connection is closed")
+        remaining = None if deadline is None else deadline - time.monotonic()
+        if remaining is not None and remaining <= 0:
+            raise PlayerError("mpv did not answer within the command timeout.")
         try:
-            sock.connect(self._ipc_path)
-            self._file = sock.makefile("rwb", buffering=0)
-            self._socket = sock
-        except BaseException:
-            sock.close()
-            raise
+            return transport.readline(remaining)
+        except TimeoutError:
+            raise PlayerError("mpv did not answer within the command timeout.") from None
+        except OSError as exc:
+            raise PlayerError("The connection to mpv was closed.") from exc
+
+    def _write_all(self, transport, data):
+        try:
+            transport.write_all(data)
+        except OSError as exc:
+            raise PlayerError("The connection to mpv was closed.") from exc
 
     def close(self):
-        # Interrupt a blocking observer read before closing the file wrapper.
-        sock, self._socket = self._socket, None
-        if sock is not None:
-            try:
-                sock.shutdown(socket.SHUT_RDWR)
-            except OSError:
-                pass
-            sock.close()
-        if self._file is not None:
-            try:
-                self._file.close()
-            except OSError:
-                pass
-            self._file = None
+        transport, self._transport = self._transport, None
+        if transport is not None:
+            # Cancels a blocked observer read before the handle goes away.
+            transport.close()
 
     def __enter__(self):
         return self
@@ -435,32 +437,37 @@ class Player:
         Events mpv pushes on the same connection are skipped; only the reply
         carrying our request id is returned. Raises PlayerError when mpv
         answers with anything but ``success``.
+
+        The reply budget is captured once, before the write: unrelated
+        events arriving while we wait consume elapsed time instead of
+        granting a fresh timeout. A late reply to a timed-out command can
+        never satisfy the next one, because request ids must match.
         """
         with self._io_lock:
-            file = self._file
-            if file is None:
+            transport = self._transport
+            if transport is None:
                 raise PlayerError("player connection is closed")
             self._request_id += 1
             request = {"command": list(args), "request_id": self._request_id}
-            try:
-                file.write((json.dumps(request) + "\n").encode("utf-8"))
-                while True:
-                    line = file.readline()
-                    if not line:
-                        raise PlayerError("mpv closed the connection")
-                    try:
-                        message = json.loads(line)
-                    except ValueError:
-                        continue
-                    if message.get("request_id") != self._request_id:
-                        continue
-                    if message.get("error") != "success":
-                        raise PlayerError(
-                            f"mpv rejected {args[0]}: {message.get('error')}"
-                        )
-                    return message.get("data")
-            except (OSError, ValueError) as exc:
-                raise PlayerError(f"lost the connection to mpv: {exc}") from exc
+            deadline = (
+                None if self._timeout is None else time.monotonic() + self._timeout
+            )
+            self._write_all(transport, (json.dumps(request) + "\n").encode("utf-8"))
+            while True:
+                line = self._readline(deadline)
+                if not line:
+                    raise PlayerError("The connection to mpv was closed.")
+                try:
+                    message = json.loads(line)
+                except ValueError:
+                    continue
+                if message.get("request_id") != self._request_id:
+                    continue
+                if message.get("error") != "success":
+                    raise PlayerError(
+                        f"mpv rejected {args[0]}: {message.get('error')}"
+                    )
+                return message.get("data")
 
     def get_many(self, *names, default=None):
         """Values for several properties in one round trip.
@@ -472,39 +479,39 @@ class Player:
         is what the individual `get` does too.
         """
         with self._io_lock:
-            file = self._file
-            if file is None:
+            transport = self._transport
+            if transport is None:
                 raise PlayerError("player connection is closed")
             wanted = {}
-            try:
-                for name in names:
-                    self._request_id += 1
-                    wanted[self._request_id] = name
-                    request = {
-                        "command": ["get_property", name],
-                        "request_id": self._request_id,
-                    }
-                    file.write((json.dumps(request) + "\n").encode("utf-8"))
-                values = {}
-                while wanted:
-                    line = file.readline()
-                    if not line:
-                        raise PlayerError("mpv closed the connection")
-                    try:
-                        message = json.loads(line)
-                    except ValueError:
-                        continue
-                    name = wanted.pop(message.get("request_id"), None)
-                    if name is None:
-                        continue
-                    if message.get("error") != "success":
-                        values[name] = default
-                        continue
-                    value = message.get("data")
-                    values[name] = default if value is None else value
-                return values
-            except (OSError, ValueError) as exc:
-                raise PlayerError(f"lost the connection to mpv: {exc}") from exc
+            deadline = (
+                None if self._timeout is None else time.monotonic() + self._timeout
+            )
+            for name in names:
+                self._request_id += 1
+                wanted[self._request_id] = name
+                request = {
+                    "command": ["get_property", name],
+                    "request_id": self._request_id,
+                }
+                self._write_all(transport, (json.dumps(request) + "\n").encode("utf-8"))
+            values = {}
+            while wanted:
+                line = self._readline(deadline)
+                if not line:
+                    raise PlayerError("The connection to mpv was closed.")
+                try:
+                    message = json.loads(line)
+                except ValueError:
+                    continue
+                name = wanted.pop(message.get("request_id"), None)
+                if name is None:
+                    continue
+                if message.get("error") != "success":
+                    values[name] = default
+                    continue
+                value = message.get("data")
+                values[name] = default if value is None else value
+            return values
 
     def observe_events(self, *names):
         """Yield structured mpv events for the given properties.
@@ -525,37 +532,34 @@ class Player:
         # away, and `command()` would discard those events while waiting
         # for the next reply -- which is how the first track sometimes went
         # unannounced. Replies are skipped here instead.
-        file = self._file
-        if file is None:
+        transport = self._transport
+        if transport is None:
             raise PlayerError("player connection is closed")
-        try:
-            for observe_id, name in enumerate(names, 1):
-                self._request_id += 1
-                request = {
-                    "command": ["observe_property", observe_id, name],
-                    "request_id": self._request_id,
+        for observe_id, name in enumerate(names, 1):
+            self._request_id += 1
+            request = {
+                "command": ["observe_property", observe_id, name],
+                "request_id": self._request_id,
+            }
+            self._write_all(transport, (json.dumps(request) + "\n").encode("utf-8"))
+        while True:
+            line = self._readline(None)
+            if not line:
+                raise PlayerError("The connection to mpv was closed.")
+            try:
+                message = json.loads(line)
+            except ValueError:
+                continue
+            if "request_id" in message and message.get("error") != "success":
+                raise PlayerError(f"mpv rejected observe_property: {message.get('error')}")
+            event = message.get("event")
+            if event == "property-change":
+                yield "property", message.get("name"), message.get("data")
+            elif event == "end-file":
+                yield "end-file", None, {
+                    "reason": message.get("reason"),
+                    "playlist_entry_id": message.get("playlist_entry_id"),
                 }
-                file.write((json.dumps(request) + "\n").encode("utf-8"))
-            while True:
-                line = file.readline()
-                if not line:
-                    raise PlayerError("mpv closed the connection")
-                try:
-                    message = json.loads(line)
-                except ValueError:
-                    continue
-                if "request_id" in message and message.get("error") != "success":
-                    raise PlayerError(f"mpv rejected observe_property: {message.get('error')}")
-                event = message.get("event")
-                if event == "property-change":
-                    yield "property", message.get("name"), message.get("data")
-                elif event == "end-file":
-                    yield "end-file", None, {
-                        "reason": message.get("reason"),
-                        "playlist_entry_id": message.get("playlist_entry_id"),
-                    }
-        except (OSError, ValueError) as exc:
-            raise PlayerError(f"lost the connection to mpv: {exc}") from exc
 
     def observe(self, *names):
         """Yield ``(name, value)`` for every change to the given properties.

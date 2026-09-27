@@ -9,6 +9,7 @@ the CLI expects. No real mpv, no network.
 import json
 import os
 import socket
+import sys
 import threading
 import time
 
@@ -131,6 +132,11 @@ class FakeMpv:
 
 @pytest.fixture
 def mpv(tmp_path):
+    if sys.platform.startswith("win"):
+        pytest.skip(
+            "Unix-socket fixture; the Windows pipe transport is covered by "
+            "tests/test_windows_ipc_native.py in the Windows job"
+        )
     fake = FakeMpv(str(tmp_path / "mpv.sock"))
     yield fake
     fake.close()
