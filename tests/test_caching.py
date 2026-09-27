@@ -189,6 +189,170 @@ def test_a_missing_auth_file_still_raises_every_time():
     for _ in range(2):
         with pytest.raises(AuthMissing):
             music.shared_client()
+        assert music._CLIENT["building"] is False
+
+
+def _final_stamp_failure(browser_auth, monkeypatch, error):
+    """Make the credential re-read at the end of a build fail once.
+
+    The builder's final validation runs after construction; an exception
+    there used to escape the cleanup path and leave `building` set forever.
+    """
+    real_stamp = music._auth_stamp
+    state = {"builder_ident": None, "fail_next": False}
+
+    def build(path=None):
+        state["builder_ident"] = threading.current_thread().ident
+        return object()
+
+    def stamp(path):
+        if threading.current_thread().ident == state["builder_ident"] and state["fail_next"]:
+            state["fail_next"] = False
+            raise error
+        return real_stamp(path)
+
+    state["fail_next"] = True
+    monkeypatch.setattr(music, "_auth_stamp", stamp)
+    monkeypatch.setattr(music, "client", build)
+    monkeypatch.setattr(music, "_seeded_headers", lambda path: None)
+    return real_stamp
+
+
+def _call_in_bounded_thread(fn, results, errors, timeout=5):
+    """Run `fn` on a daemon thread; optionally join for a bounded time.
+
+    Callers assert the worker finished. Nothing in a failure path may leave
+    a test thread blocked on the client condition forever.
+    """
+
+    def runner():
+        try:
+            results.append(fn())
+        except Exception as exc:  # the point is to observe, not re-raise
+            errors.append(exc)
+
+    worker = threading.Thread(target=runner, daemon=True)
+    worker.start()
+    if timeout is not None:
+        worker.join(timeout)
+    return worker
+
+
+def test_shared_client_releases_builder_after_final_stamp_failure(browser_auth, monkeypatch):
+    from ytm.authentication.errors import AuthStorageError
+
+    error = AuthStorageError("credentials became unreadable during construction")
+    _final_stamp_failure(browser_auth, monkeypatch, error)
+
+    results, errors = [], []
+    worker = _call_in_bounded_thread(music.shared_client, results, errors)
+    assert not worker.is_alive(), "caller waited forever on a failed builder"
+    assert errors and isinstance(errors[0], AuthStorageError)
+    assert music._CLIENT["building"] is False
+
+    results, errors = [], []
+    worker = _call_in_bounded_thread(music.shared_client, results, errors)
+    assert not worker.is_alive()
+    assert not errors and results, "the next call must be able to build again"
+    assert music._CLIENT["building"] is False
+
+
+def test_shared_client_releases_builder_after_final_stamp_parse_failure(browser_auth, monkeypatch):
+    """The same recovery for a malformed-record error, not only I/O errors."""
+    from ytm.auth import AuthInvalidFormat
+
+    _final_stamp_failure(browser_auth, monkeypatch, AuthInvalidFormat("record broke"))
+
+    results, errors = [], []
+    worker = _call_in_bounded_thread(music.shared_client, results, errors)
+    assert not worker.is_alive()
+    assert errors and isinstance(errors[0], AuthInvalidFormat)
+    assert music._CLIENT["building"] is False
+    results, errors = [], []
+    worker = _call_in_bounded_thread(music.shared_client, results, errors)
+    assert not worker.is_alive()
+    assert not errors and results
+
+
+def test_waiting_client_is_released_when_the_builder_fails(browser_auth, monkeypatch):
+    """A second caller already waiting on the condition must not stay there
+    when the builder's final validation fails."""
+    from ytm.authentication.errors import AuthStorageError
+
+    real_stamp = music._auth_stamp
+    state = {"builder_ident": None, "fails_left": 1, "builds": 0}
+    first_build_entered = threading.Event()
+    release_first = threading.Event()
+
+    def build(path=None):
+        state["builds"] += 1
+        if state["builds"] == 1:
+            state["builder_ident"] = threading.current_thread().ident
+            first_build_entered.set()
+            release_first.wait(5)
+        return object()
+
+    def stamp(path):
+        if threading.current_thread().ident == state["builder_ident"] and state["fails_left"]:
+            state["fails_left"] -= 1
+            raise AuthStorageError("stamp changed under the builder")
+        return real_stamp(path)
+
+    monkeypatch.setattr(music, "_auth_stamp", stamp)
+    monkeypatch.setattr(music, "client", build)
+    monkeypatch.setattr(music, "_seeded_headers", lambda path: None)
+
+    results, errors = [], []
+
+    def builder():
+        try:
+            results.append(music.shared_client())
+        except Exception as exc:
+            errors.append(exc)
+
+    worker = threading.Thread(target=builder, daemon=True)
+    worker.start()
+    assert first_build_entered.wait(2)
+
+    waiters, waiter_errors = [], []
+    waiter = _call_in_bounded_thread(music.shared_client, waiters, waiter_errors, timeout=None)
+    time.sleep(0.05)  # let the waiter block on _CLIENT_READY
+    release_first.set()
+
+    worker.join(5)
+    waiter.join(5)
+    assert not worker.is_alive() and not waiter.is_alive()
+    assert errors and isinstance(errors[0], AuthStorageError)
+    assert waiters, "the waiting caller must recover after the builder fails"
+    assert music._CLIENT["building"] is False
+
+
+def test_stale_builder_cannot_publish_after_reset(monkeypatch):
+    first_started = threading.Event()
+    release = threading.Event()
+    built = []
+
+    def build(path=None):
+        marker = object()
+        built.append(marker)
+        if len(built) == 1:
+            first_started.set()
+            release.wait(5)
+        return marker
+
+    monkeypatch.setattr(music, "client", build)
+    monkeypatch.setattr(music, "_seeded_headers", lambda path: None)
+    results, errors = [], []
+    worker = _call_in_bounded_thread(music.shared_client, results, errors, timeout=None)
+    assert first_started.wait(2)
+    music.reset_client()
+    release.set()
+    worker.join(5)
+    assert not worker.is_alive()
+    assert results and results[0] is built[-1]
+    assert results[0] is not built[0], "the pre-reset client must not be published"
+    assert music.shared_client() is results[0]
+
 
 
 def test_client_construction_does_not_hold_the_cache_lock(monkeypatch):
