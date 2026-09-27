@@ -1017,7 +1017,7 @@ def test_clicking_a_queue_row_jumps_to_it():
             await settle(pilot)
             await pilot.click("#queue-table", offset=(2, 1))
             await settle(pilot)
-            assert ("queue_play", {"index": 1}) in stub.calls
+            assert [call for call in stub.calls if call[0] == "queue_play"] == [("queue_play", {"index": 1})]
 
     asyncio.run(scenario())
 
@@ -1030,7 +1030,15 @@ def test_clicking_a_playlist_plays_it():
             await settle(pilot)
             await pilot.click("#playlists-table", offset=(2, 1))
             await settle(pilot)
-            assert ("playlist_play", {"playlist_id": "local-1"}) in stub.calls
+            assert [call for call in stub.calls if call[0] == "playlist_play"] == [("playlist_play", {"playlist_id": "local-1"})]
+            # Clicking the highlighted row again and keyboard Enter must each
+            # trigger exactly one more request, not be swallowed or doubled.
+            await pilot.click("#playlists-table", offset=(2, 1))
+            await settle(pilot)
+            assert len([call for call in stub.calls if call[0] == "playlist_play"]) == 2
+            await pilot.press("enter")
+            await settle(pilot)
+            assert len([call for call in stub.calls if call[0] == "playlist_play"]) == 3
 
     asyncio.run(scenario())
 
