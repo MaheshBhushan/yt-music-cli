@@ -11,6 +11,7 @@ endpoint.
 """
 
 import ctypes
+import gc
 import json
 import sys
 import threading
@@ -238,16 +239,20 @@ def test_windows_pipe_repeated_cycles_do_not_leak_handles(pipe_server):
             player.command("get_property", "pause")
         player.close()
         server.close()
+    gc.collect()  # discard pytest/context-manager traceback cycles before both samples
     baseline = _handle_count()
     for _ in range(15):
         server = pipe_server(mode="silent")
         player = Player(ipc_path=server.path, spawn=False, timeout=0.1)
-        reader = player._transport._stream._thread
+        transport = player._transport
+        reader = transport._stream._thread
         with pytest.raises(PlayerError):
             player.command("get_property", "pause")
         player.close()
         server.close()
         assert not reader.is_alive(), "cancelled pipe reader survived close"
+        assert transport._handle is None and not transport._pending
+    gc.collect()
     assert _handle_count() <= baseline + 3
 
 
