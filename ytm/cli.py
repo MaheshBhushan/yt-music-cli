@@ -999,6 +999,12 @@ def main(argv=None, out=sys.stdout, err=sys.stderr):
         if isinstance(exc, music.ProviderError):
             print(exc, file=err)
             return 1
+        from ytm import playlists_local
+
+        if isinstance(exc, playlists_local.PlaylistStorageError):
+            # local storage refused the change and kept the original file
+            print(exc, file=err)
+            return 1
         if isinstance(exc, YTMusicError):
             # the raw message can carry a whole response body; keep it out
             print(music.provider_message(exc), file=err)

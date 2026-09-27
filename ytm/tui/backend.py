@@ -228,6 +228,9 @@ class Backend:
             raise BackendError("Could not reach YouTube Music; check connectivity.") from exc
         except music.ProviderError as exc:
             raise BackendError(str(exc)) from exc
+        except playlists_local.PlaylistStorageError as exc:
+            # local storage refused the change and kept the original file
+            raise BackendError(str(exc)) from exc
         except Exception as exc:  # provider responses can contain private account data
             raise BackendError("The request failed unexpectedly; try again or update ytmusicapi.") from exc
 
