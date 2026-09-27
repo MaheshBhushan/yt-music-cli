@@ -18,6 +18,17 @@ def no_real_audio_cache(monkeypatch, tmp_path):
     monkeypatch.setattr(cache, "DEFAULT_CACHE_DIR", tmp_path / "tracks")
 
 
+@pytest.fixture(autouse=True)
+def isolated_tui_trace(monkeypatch, tmp_path):
+    """TUI traces go to a per-test file, never the developer's state dir."""
+    from ytm import diagnostics
+
+    monkeypatch.setenv("YTM_TUI_LOG", str(tmp_path / "tui.log"))
+    diagnostics.reset()
+    yield
+    diagnostics.reset()
+
+
 @pytest.fixture
 def real_latest_version():
     return REAL_LATEST_VERSION
