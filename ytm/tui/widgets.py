@@ -13,10 +13,15 @@ class SelectOnClickTable(DataTable):
     """
 
     async def _on_click(self, event):
+        # Textual dispatches handlers through the MRO itself. We call the
+        # parent explicitly, so suppress its second automatic invocation.
+        event.prevent_default()
         meta = event.style.meta
         row = meta.get("row", -1)
-        on_a_row = "column" in meta and row >= 0
-        already_selected = on_a_row and row == self.cursor_row  # super() posts it
+        column = meta.get("column", -1)
+        on_a_row = row >= 0 and column >= 0
+        # DataTable compares the whole coordinate, even in row-cursor mode.
+        already_selected = on_a_row and (row, column) == self.cursor_coordinate
         await super()._on_click(event)
         if on_a_row and not already_selected and self.show_cursor and self.cursor_type == "row":
             self._post_selected_message()
