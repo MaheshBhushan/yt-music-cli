@@ -1,39 +1,48 @@
 """Authentication module."""
 import getpass
-import shutil
-import uuid
 import json
-import threading
+import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
-import os
+import threading
 import time
+import uuid
 from pathlib import Path
 
 import requests
 import ytmusicapi
+from ytmusicapi.auth.oauth.credentials import OAuthCredentials
+from ytmusicapi.auth.oauth.exceptions import BadOAuthClient, UnauthorizedOAuthClient
+from ytmusicapi.auth.oauth.token import OAuthToken
+from ytmusicapi.exceptions import YTMusicError
+
 from ytm import config as config_mod
 from ytm.authentication import session as session_mod
 from ytm.authentication import storage as storage_mod
 from ytm.authentication.errors import (
     AccountSelectionError as AccountSelectionError,
+)
+from ytm.authentication.errors import (
     AuthError,
     AuthExpired,
-    AuthInvalidFormat as AuthInvalidFormat,
     AuthMissing,
     AuthStorageError,
-    BrowserUnavailable as BrowserUnavailable,
     LoginCancelled,
-    LoginTimedOut as LoginTimedOut,
     SessionVerificationUnavailable,
 )
+from ytm.authentication.errors import (
+    AuthInvalidFormat as AuthInvalidFormat,
+)
+from ytm.authentication.errors import (
+    BrowserUnavailable as BrowserUnavailable,
+)
+from ytm.authentication.errors import (
+    LoginTimedOut as LoginTimedOut,
+)
 from ytm.authentication.manager import AuthManager
-from ytmusicapi.auth.oauth.credentials import OAuthCredentials
-from ytmusicapi.auth.oauth.exceptions import BadOAuthClient, UnauthorizedOAuthClient
-from ytmusicapi.auth.oauth.token import OAuthToken
-from ytmusicapi.exceptions import YTMusicError
 
 AUTH_PATH = Path.home() / ".config" / "ytm" / "auth.json"
 
@@ -1015,33 +1024,69 @@ def cookies_file(path=None, cookies_path=None):
 
     yt-dlp (and therefore mpv's ytdl_hook) reads cookies from a file, while
     ytmusicapi keeps them as one Cookie header in auth.json. This writes the
-    header out in the file format, refreshing it whenever auth.json is newer,
-    so re-authenticating is the only step the user ever takes. Returns None
-    when there are no cookies to write (OAuth auth, or not authenticated).
+    header out in the file format, refreshing it whenever the active
+    credential is newer, so re-authenticating is the only step the user ever
+    takes. Returns None when there are no cookies to write (OAuth auth,
+    logged-out tombstone, or not authenticated).
+
+    The export runs under the same store lock login/logout use: it either
+    commits before a logout (whose cleanup then removes it) or runs after
+    and sees the tombstone, so it can never resurrect a credential file.
     """
     path = Path(AUTH_PATH if path is None else path)
     cookies_path = Path(COOKIES_PATH if cookies_path is None else cookies_path)
-    try:
-        header = load_cookies(path)
-    except AuthError:
-        return None
-    if header is None:
-        return None
-    cookies_path = Path(cookies_path)
-    source = SESSION_PATH if active_record(path) is not None else Path(path)
-    try:
-        fresh = cookies_path.stat().st_mtime >= source.stat().st_mtime
-    except OSError:
-        fresh = False
-    if fresh:
+    store = session_store(path)
+    with store.transaction():
+        try:
+            record = store.load()
+            if record is not None and record.method in ("none", "oauth"):
+                return None
+            header = load_cookies(path)
+        except AuthError:
+            return None
+        if header is None:
+            return None
+        source = store.path if record is not None else path
+        try:
+            fresh = cookies_path.stat().st_mtime >= source.stat().st_mtime
+        except OSError:
+            fresh = False
+        if fresh:
+            return str(cookies_path)
+        lines = ["# Netscape HTTP Cookie File"]
+        for pair in header.split(";"):
+            name, _, value = pair.strip().partition("=")
+            if name:
+                lines.append(f".youtube.com\tTRUE\t/\tTRUE\t2147483647\t{name}\t{value}")
+        _write_cookies_atomic(cookies_path, "\n".join(lines) + "\n")
         return str(cookies_path)
-    lines = ["# Netscape HTTP Cookie File"]
-    for pair in header.split(";"):
-        name, _, value = pair.strip().partition("=")
-        if name:
-            lines.append(f".youtube.com\tTRUE\t/\tTRUE\t2147483647\t{name}\t{value}")
-    _write_text_0600(cookies_path, "\n".join(lines) + "\n")
-    return str(cookies_path)
+
+
+def _write_cookies_atomic(path, text):
+    """Publish the cookie export atomically, or leave the old one intact.
+
+    A private temporary file in the same directory is fsynced and renamed
+    over the destination; a symlinked destination is refused rather than
+    followed and truncated, and a failed write removes only its own staging
+    file.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.is_symlink():
+        raise AuthStorageError("Refusing to write the cookie export through a symlink.")
+    fd, tmp_name = tempfile.mkstemp(dir=str(path.parent), prefix=path.name + ".tmp")
+    tmp = Path(tmp_name)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as file:
+            file.write(text)
+            file.flush()
+            os.fsync(file.fileno())
+        os.replace(tmp, path)
+    except OSError as exc:
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+        raise AuthStorageError("Could not write the cookie export.") from exc
 
 
 def _write_text_0600(path, text):

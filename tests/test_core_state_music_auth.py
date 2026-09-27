@@ -4,6 +4,7 @@ ytm.state, the music.py additions, and auth.cookies_file."""
 import json
 import os
 import stat
+import threading
 
 import pytest
 
@@ -177,3 +178,167 @@ def test_playlist_count_reads_track_count_from_a_one_track_page():
 
     assert music.playlist_count("LM", yt=YT()) == 1204
     assert music.playlist_count("SE", yt=YT()) is None
+
+
+# -- D3: cookie export participates in the credential transaction --------------
+
+
+def browser_headers(cookie="SID=x; __Secure-3PAPISID=secret"):
+    return {
+        "cookie": cookie,
+        "x-goog-authuser": "0",
+        "authorization": "SAPISIDHASH 0_0",
+        "origin": "https://music.youtube.com",
+    }
+
+
+def test_a_new_browser_record_exports_cookies():
+    from ytm.authentication.storage import StoredRecord
+
+    auth.session_store().save(
+        StoredRecord.browser(browser_headers("SID=new; __Secure-3PAPISID=xyz")),
+        expected_revision=None,
+    )
+    assert auth.cookies_file() == str(auth.COOKIES_PATH)
+    text = auth.COOKIES_PATH.read_text()
+    assert "__Secure-3PAPISID\txyz" in text
+    assert stat.S_IMODE(os.stat(auth.COOKIES_PATH).st_mode) == 0o600
+
+
+def test_a_tombstone_produces_no_export():
+    from ytm.authentication.storage import StoredRecord
+
+    store = auth.session_store()
+    store.save(StoredRecord.browser(browser_headers()), expected_revision=None)
+    auth.auth_manager().logout()
+    assert auth.cookies_file() is None
+    assert not auth.COOKIES_PATH.exists()
+
+
+def test_an_oauth_record_produces_no_export(tmp_path):
+    from ytm.authentication.storage import StoredRecord
+
+    token = tmp_path / "oauth.json"
+    token.write_text("{}")
+    auth.session_store().save(StoredRecord.oauth(token), expected_revision=None)
+    assert auth.cookies_file() is None
+    assert not auth.COOKIES_PATH.exists()
+
+
+def test_cookie_export_cannot_recreate_the_file_after_logout(monkeypatch):
+    from ytm.authentication.storage import StoredRecord
+
+    store = auth.session_store()
+    store.save(StoredRecord.browser(browser_headers()), expected_revision=None)
+
+    entered = threading.Event()
+    release = threading.Event()
+    real_write = auth._write_cookies_atomic
+
+    def paused_write(path, text):
+        entered.set()
+        assert release.wait(5)
+        real_write(path, text)
+
+    monkeypatch.setattr(auth, "_write_cookies_atomic", paused_write)
+    exported = []
+    exporter = threading.Thread(target=lambda: exported.append(auth.cookies_file()), daemon=True)
+    exporter.start()
+    assert entered.wait(2), "the export never reached its publication step"
+
+    logout_done = threading.Event()
+
+    def do_logout():
+        auth.auth_manager().logout()
+        logout_done.set()
+
+    logout = threading.Thread(target=do_logout, daemon=True)
+    logout.start()
+    release.set()
+    exporter.join(10)
+    logout.join(10)
+    assert not exporter.is_alive() and not logout.is_alive()
+    assert logout_done.is_set()
+    assert store.load().method == "none"
+    assert not auth.COOKIES_PATH.exists()
+
+
+def test_export_committed_before_logout_is_removed():
+    from ytm.authentication.storage import StoredRecord
+
+    store = auth.session_store()
+    store.save(StoredRecord.browser(browser_headers()), expected_revision=None)
+    assert auth.cookies_file() == str(auth.COOKIES_PATH)
+    assert auth.COOKIES_PATH.exists()
+    auth.auth_manager().logout()
+    assert store.load().method == "none"
+    assert not auth.COOKIES_PATH.exists()
+
+
+def test_an_account_change_refreshes_the_export():
+    from ytm.authentication.storage import StoredRecord
+
+    store = auth.session_store()
+    store.save(
+        StoredRecord.browser(browser_headers("SID=a; __Secure-3PAPISID=a")),
+        expected_revision=None,
+    )
+    auth.cookies_file()
+    assert "SID\ta" in auth.COOKIES_PATH.read_text()
+    os.utime(auth.COOKIES_PATH, (1, 1))  # ensure the new record is strictly newer
+
+    current = store.load()
+    store.save(
+        StoredRecord.browser(browser_headers("SID=b; __Secure-3PAPISID=b")),
+        expected_revision=current.revision,
+    )
+    assert auth.cookies_file() == str(auth.COOKIES_PATH)
+    text = auth.COOKIES_PATH.read_text()
+    assert "SID\tb" in text
+    assert "SID\ta" not in text
+
+
+def test_a_failed_export_preserves_the_previous_file(tmp_path, monkeypatch):
+    auth_path = tmp_path / "auth.json"
+    auth_path.write_text(json.dumps({"cookie": "SID=one"}))
+    cookies = tmp_path / "cookies.txt"
+    auth.cookies_file(auth_path, cookies)
+    before = cookies.read_bytes()
+    os.utime(cookies, (1, 1))
+    auth_path.write_text(json.dumps({"cookie": "SID=two"}))
+
+    def fail_replace(*args, **kwargs):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(auth.os, "replace", fail_replace)
+    with pytest.raises(auth.AuthStorageError):
+        auth.cookies_file(auth_path, cookies)
+    assert cookies.read_bytes() == before
+    assert not list(tmp_path.glob("cookies.txt.tmp*"))
+
+
+def test_a_symlinked_export_target_is_not_truncated(tmp_path):
+    auth_path = tmp_path / "auth.json"
+    auth_path.write_text(json.dumps({"cookie": "SID=x"}))
+    target = tmp_path / "real.txt"
+    target.write_text("keep me")
+    link = tmp_path / "cookies.txt"
+    link.symlink_to(target)
+    os.utime(link, (1, 1))  # the export is stale, so it must try to publish
+
+    with pytest.raises(auth.AuthStorageError):
+        auth.cookies_file(auth_path, link)
+    assert target.read_text() == "keep me"
+
+
+def test_public_search_does_not_export_cookies(monkeypatch):
+    monkeypatch.setattr(
+        auth, "cookies_file",
+        lambda *args, **kwargs: pytest.fail("public search exported cookies"),
+    )
+
+    class YT:
+        def search(self, query, filter=None, limit=20):
+            return []
+
+    assert music.search("anything", yt=YT()) == []

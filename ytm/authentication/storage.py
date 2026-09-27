@@ -460,6 +460,18 @@ class SessionStore:
     # -- cross-process lock -----------------------------------------------------
 
     @contextlib.contextmanager
+    def transaction(self):
+        """Hold the credential lock for a short derived-state read/write.
+
+        The same lock login and logout use, so an export cannot interleave
+        with a credential change. Callers must not perform network I/O
+        inside; the scope is a local read plus an atomic file write.
+        """
+        self._ensure_directory()
+        with self._lock():
+            yield self
+
+    @contextlib.contextmanager
     def _lock(self):
         """OS advisory lock: released on process death, never stolen by age."""
         with self._thread_lock:
