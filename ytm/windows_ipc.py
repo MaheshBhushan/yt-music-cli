@@ -128,6 +128,10 @@ class LineStream:
             pass
         if self._thread is not threading.current_thread():
             self._thread.join(PUMP_JOIN_TIMEOUT)
+        if not self._thread.is_alive():
+            # Bound methods otherwise keep transport -> stream -> transport
+            # alive until cyclic GC, including completed native thread handles.
+            self._read_chunk = self._cancel = None
 
     @property
     def closed(self):

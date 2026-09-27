@@ -113,6 +113,9 @@ class PipeServer:
             return
         self.connected.set()
         try:
+            if self.mode == "unread":
+                self._stop.wait(10)
+                return
             while not self._stop.is_set():
                 request = self._read_line()
                 if request is None:
@@ -246,3 +249,15 @@ def test_windows_pipe_repeated_cycles_do_not_leak_handles(pipe_server):
         server.close()
         assert not reader.is_alive(), "cancelled pipe reader survived close"
     assert _handle_count() <= baseline + 3
+
+
+def test_windows_pipe_write_has_a_deadline_when_peer_does_not_read(pipe_server):
+    server = pipe_server(mode="unread")
+    player = Player(ipc_path=server.path, spawn=False, timeout=0.2)
+    try:
+        started = time.monotonic()
+        with pytest.raises(PlayerError):
+            player.command("oversized-test-request", "x" * (1024 * 1024))
+        assert time.monotonic() - started < 3
+    finally:
+        player.close()

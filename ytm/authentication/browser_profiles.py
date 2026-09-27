@@ -182,6 +182,8 @@ class NativeBrowser:
                              close_fds=True)
         except OSError as exc:
             raise BrowserUnavailable('Could not open the selected browser.') from exc
+        from ytm.authentication import diagnostics
+        diagnostics.event("browser_opened", browser=browser, profile_selected=self.profile is not None)
         self.ready()
         # The terminal prompt is user-controlled; reject a late confirmation.
         if time.monotonic() - started >= timeout:

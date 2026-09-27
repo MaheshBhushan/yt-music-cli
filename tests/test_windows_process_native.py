@@ -109,6 +109,7 @@ def test_windows_owner_assignment_precedes_child_execution(tmp_path):
         assert _wait_for_file(pid_file)
         grandchild = int(pid_file.read_text())
         owner.close()
+        assert _wait_gone(child.pid)
         assert _wait_gone(grandchild)
     finally:
         owner.close()
