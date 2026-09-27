@@ -685,3 +685,50 @@ def test_find_mpv_looks_where_windows_package_managers_put_it(tmp_path):
     package.mkdir(parents=True)
     (package / "mpv.exe").write_bytes(b"")
     assert player_mod.find_mpv(which=nothing, environ=env, platform="win32") == str(package / "mpv.exe")
+
+
+# -- lifecycle events: a loadfile reply is not proof of playback -------------
+
+
+def test_observe_events_forwards_an_end_file_without_the_raw_error(mpv):
+    with Player(ipc_path=mpv.path, spawner=no_spawn, timeout=2.0) as p:
+        mpv.pending_events.append({
+            "event": "end-file",
+            "reason": "error",
+            "playlist_entry_id": 7,
+            "file_error": "SENTINEL https://media.example/?token=SECRET",
+        })
+        payload = None
+        for kind, name, value in p.observe_events("pause"):
+            if kind == "end-file":
+                payload = value
+                break
+    assert payload == {"reason": "error", "playlist_entry_id": 7}
+    assert "SENTINEL" not in json.dumps(payload)
+    assert "SECRET" not in json.dumps(payload)
+
+
+def test_observe_keeps_the_property_only_two_tuple_contract(mpv):
+    with Player(ipc_path=mpv.path, spawner=no_spawn, timeout=2.0) as p:
+        mpv.pending_events.append({"event": "end-file", "reason": "error", "playlist_entry_id": 1})
+        seen = []
+        for name, value in p.observe("pause"):
+            if name != "x":  # the fake server's unsolicited reply-matching event
+                seen.append((name, value))
+            if name == "pause":
+                break
+    assert seen == [("pause", False)]  # the end-file was dropped, not yielded
+
+
+def test_current_entry_id_uses_mpvs_entry_identity(mpv):
+    with Player(ipc_path=mpv.path, spawner=no_spawn) as p:
+        mpv.playlist[:] = [
+            {"filename": "https://music.youtube.com/watch?v=a", "title": "A", "id": 11},
+            {"filename": "https://music.youtube.com/watch?v=b", "title": "B", "id": 12},
+        ]
+        mpv.props["playlist-pos"] = 1
+        mpv.props["playlist-count"] = 2
+        assert p.current_entry_id() == 12
+        assert [e["id"] for e in p.playlist()] == [11, 12]
+        mpv.props["playlist-pos"] = -1
+        assert p.current_entry_id() is None

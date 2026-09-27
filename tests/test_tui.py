@@ -2348,3 +2348,18 @@ def test_subsecond_positions_reach_lyrics_but_rewrite_the_clock_once_per_second(
             assert writes[-2:] == ["0:01 / 5:12", "0:01 / 6:40"]
 
     asyncio.run(scenario())
+
+
+def test_playback_error_event_shows_a_safe_actionable_banner():
+    async def scenario():
+        stub = StubClient()
+        app = YTMApp(client=stub)
+        async with app.run_test() as pilot:
+            await settle(pilot)
+            app._apply_event("playback_error", {"video_id": "v1"})
+            await settle(pilot)
+            banner = app.query_one("#error-banner")
+            assert "Could not play this track" in str(banner.render())
+            assert "v1" not in str(banner.render())  # no track/secret data on the banner
+
+    asyncio.run(scenario())

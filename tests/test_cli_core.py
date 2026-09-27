@@ -74,6 +74,11 @@ class FakePlayer:
     def playlist(self):
         return list(self.entries)
 
+    def current_entry_id(self):
+        """mpv's id for the playing entry; stable per test, never recorded."""
+        cur = self._current()
+        return None if cur is None else self.entries.index(cur) + 1
+
     def queued_ids(self):
         return {e["video_id"] for e in self.entries}
 
