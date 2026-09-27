@@ -31,6 +31,9 @@ dependencies = [
     "yt-dlp",
     "bgutil-ytdlp-pot-provider",
     "textual",
+    # 0.12.0 is the last release supporting Python 3.11; 0.13+ replaced
+    # Pillow's deprecated Image.getdata() (the source of the cover-art
+    # deprecation warning) but requires Python >= 3.12.
     "textual-image",
     "platformdirs>=4",
 ]
