@@ -81,7 +81,10 @@ class LineStream:
                 if len(self._buffer) > self._max_buffer:
                     raise ValueError("unterminated response")
         except BaseException as exc:  # cancellation and broken pipes included
-            self._error = exc
+            # Do not retain the traceback: a cancelled overlapped operation's
+            # frame owns its event handle, and the reader is long-lived.
+            self._error = (ValueError("unterminated response") if isinstance(exc, ValueError)
+                           else PipeClosed("the connection to the player ended"))
         finally:
             self._lines.put(None)
 

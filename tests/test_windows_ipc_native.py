@@ -143,10 +143,13 @@ class PipeServer:
             kernel32.DisconnectNamedPipe(self.handle)
 
     def close(self):
+        if self.handle is None:
+            return
         self._stop.set()
         kernel32.CancelIoEx(self.handle, None)  # unblock connect/read
         self._thread.join(3)
         kernel32.CloseHandle(self.handle)
+        self.handle = None
 
 
 @pytest.fixture
@@ -223,18 +226,23 @@ def test_windows_pipe_close_cancels_blocked_observer(pipe_server):
 
 
 def test_windows_pipe_repeated_cycles_do_not_leak_handles(pipe_server):
-    # warm up, then check for monotonic growth rather than an exact count
+    # Close test-server handles and join its threads before measuring the
+    # client. Python 3.13 retains a native thread handle until join/GC.
     for _ in range(3):
         server = pipe_server(mode="silent")
         player = Player(ipc_path=server.path, spawn=False, timeout=0.1)
         with pytest.raises(PlayerError):
             player.command("get_property", "pause")
         player.close()
+        server.close()
     baseline = _handle_count()
     for _ in range(15):
         server = pipe_server(mode="silent")
         player = Player(ipc_path=server.path, spawn=False, timeout=0.1)
+        reader = player._transport._stream._thread
         with pytest.raises(PlayerError):
             player.command("get_property", "pause")
         player.close()
-    assert _handle_count() <= baseline + 16
+        server.close()
+        assert not reader.is_alive(), "cancelled pipe reader survived close"
+    assert _handle_count() <= baseline + 3
