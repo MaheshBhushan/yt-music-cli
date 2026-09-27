@@ -124,6 +124,18 @@ Chrome, Chromium, Edge, Firefox, Brave, Vivaldi, Opera and Helium are supported 
 
 Answering `n` at account confirmation cancels without replacing existing credentials. `--yes` skips this final confirmation; normal-profile login still requires a terminal and Enter after sign-in. ytm never closes your normal browser. If its cookie database is locked, close it yourself before pressing Enter. `--timeout` is checked after you return from the terminal prompt; it cannot interrupt a blocking Enter prompt.
 
+### Windows: Chrome is signed in but import fails
+
+A successful Chrome login does not guarantee that another program can read its stored cookies. `database_copy_failed` usually means Chrome still holds its database open, or the OS denies access. Close Chrome yourself (including its background processes), use the same Windows user, and retry with the correct profile:
+
+```powershell
+ytm login --from-browser chrome --profile "Default"
+```
+
+Use `"Profile 1"` or another directory name if that is where Music is signed in. An encryption failure is different: Chrome's App-Bound Encryption can prevent external decryption even after Chrome closes. Do not disable Chrome's security or run YTM as Administrator to bypass it. Sign in at music.youtube.com in Firefox and run `ytm login --from-browser firefox`, or try the isolated observation flow below (Google can reject automated browsers). See [Google's explanation of App-Bound Encryption](https://security.googleblog.com/2024/07/improving-security-of-chrome-cookies-on.html) and [yt-dlp's cookie database copy failure](https://github.com/yt-dlp/yt-dlp/issues/7271).
+
+`ytm login` and `ytm auth` now record authentication diagnostics automatically. On failure the terminal prints the exact `auth-*.jsonl` path. New Windows installations use `%LOCALAPPDATA%\ytm\state\logs\`; older installations may retain their legacy logs directory. Share the printed authentication log for debugging. It contains dependency versions, classified extraction reasons, OS error numbers when available, and validation progress. It excludes raw exception messages, cookies, headers, tokens, account names and profile paths. Ten recent logs are retained, with a ten-minute grace period for active runs. These diagnostics are separate from mpv logs, which can contain signed media URLs.
+
 ### Isolated browser observation (optional)
 
 For automatic page detection, use an isolated Playwright browser:
@@ -153,7 +165,7 @@ ytm login --from-browser helium --profile "Profile 1"
 ytm login --from-browser --authuser 1   # second Google account in that browser
 ```
 
-Auto-detection tries each browser in turn and, within a browser, every profile (Chromium's `Default`, `Profile 1`, …; System and Guest profiles are skipped), taking the first with a YouTube session. Each browser's failure reason is reported: not installed, no such profile, cookies could not be decrypted, database locked, or no YouTube login. If the browser has several Google accounts, `--authuser N` (0 is the first) or `auth.x-goog-authuser` in `config.toml` picks the default.
+Auto-detection tries each browser in turn. Profile discovery for standard browsers is delegated to yt-dlp; it does not guarantee selection of your active Chrome profile. Use `--profile "Profile 1"` (or the actual directory name shown by `chrome://version`) when needed. The custom Chromium-fork extractor tries eligible profiles and skips System/Guest profiles. Each browser's failure reason is reported: not installed, no such profile, cookies could not be decrypted, database locked, or no YouTube login. If the browser has several Google accounts, `--authuser N` (0 is the first) or `auth.x-goog-authuser` in `config.toml` picks the default.
 
 New browser-session records require `ytm login` again when they expire. Legacy imports with a recorded source retain their existing single reimport attempt. OAuth retains its own token-refresh mechanism.
 
@@ -264,7 +276,7 @@ check = true                    # ask PyPI once a day, toast in the TUI when new
 auto = false                    # true: install it (and fresh yt-dlp) automatically
 ```
 
-`control = "system"` makes the volume in ytm the same one the desktop shows: `+`/`-` and `ytm volume` move the default output through `wpctl` (PipeWire) or `pactl` (PulseAudio), and a media key or the tray slider shows up in the TUI. mpv's own volume is held at 100 so the stream is not attenuated twice. Without either tool, or with `control = "player"`, ytm uses mpv's software volume, which only ytm sees.
+`control = "system"` makes the volume in ytm the same one the desktop shows: `+`/`-` and `ytm volume` move the default output through `wpctl` (PipeWire), `pactl` (PulseAudio), or Windows Core Audio, and a media key or the tray slider shows up in the TUI. mpv's own volume is held at 100 so the stream is not attenuated twice. When no system mixer or Windows audio endpoint is available, or with `control = "player"`, ytm uses mpv's software volume, which only ytm sees.
 
 `art = "blocks"` draws the cover with coloured half-cell glyphs and works in every terminal, tmux included. `kitty` and `sixel` use the terminal's pixel protocol; Sixel is known to freeze the pane in Konsole, which is why it is opt-in.
 
@@ -276,7 +288,10 @@ The proof-of-origin token provider is a yt-dlp plugin installed with `ytm`. It a
 - **Local playlists** live in `~/.local/state/ytm/playlists.json` and show up next to your YouTube Music playlists in the TUI.
 - **Media keys.** `ytm` has no MPRIS of its own; install the [mpv-mpris](https://github.com/hoyon/mpv-mpris) plugin and mpv announces itself to your desktop.
 - **Updating.** `ytm update` upgrades ytm and yt-dlp through whatever installed them (pipx, `uv tool`, or pip), so the new version lands where the `ytm` command runs from. The TUI checks PyPI once a day and shows a toast when there is a newer release; set `auto = true` under `[update]` to have it install without asking. On Windows, interactive `ytm update` asks to exit and continue in a new PowerShell window. Close other ytm instances first: the helper waits for the original process and launcher locks, runs the installer, and verifies the installed version. It never terminates processes or requests elevation, and keeps the manual command visible if updating fails. TUI automatic updates, `--json`, and noninteractive calls still show the manual command. yt-dlp is why this matters: YouTube changes things and yt-dlp follows within days, so a stale copy is the usual cause of sudden "could not resolve" failures.
-- **Windows** works over a named pipe to mpv. Cookie import needs Firefox there, see Authentication.
+- **Windows** works over a named pipe to mpv. The test suite runs natively on Windows in CI (Python 3.11 and 3.13): the named-pipe transport, job-object process ownership, `msvcrt` storage locking and the PowerShell updater tests actually execute there. Windows system-volume control uses the default Core Audio output and follows device changes; it preserves mute. If no endpoint is available, it falls back to mpv volume. Hosted CI checks silent local decoding; audible output, device switching and real Google login still need desktop validation. Cookie import can be blocked by Chromium App-Bound Encryption (see Authentication), and native sign-off of a real browser login is still pending.
+- **Where files live.** On new Windows installations, config and the active authentication record live under `%LOCALAPPDATA%\ytm\`; playback state, playlists and logs use its `state\` subdirectory, and audio uses `cache\tracks\`. Older files remain readable at their existing locations until migrated. Run `ytm migrate-paths` for a preview, close other YTM instances, then run `ytm migrate-paths --apply` to copy managed configuration, state and cached tracks. Originals remain as backups, conflicting destinations are never overwritten, and authentication files are never copied by this command. Restart YTM after migration. Explicit `XDG_STATE_HOME` and `XDG_CACHE_HOME` overrides remain authoritative. Linux/macOS config, state and cache retain their existing locations (`~/.config/ytm/`, `~/.local/state/ytm/`, `~/.cache/ytm/`). Active authentication uses platformdirs, including `~/Library/Application Support/ytm/session.json` on macOS. Legacy `~/.config/ytm/auth.json` remains readable through the authentication compatibility path.
+- **Shutdown and ownership.** Playback helpers (mpv, its yt-dlp, any JavaScript runtime) belong to the interactive session: on Windows they are grouped in a kill-on-close job object, created suspended and assigned before they can run, so quitting or crashing the TUI removes the whole owned tree. The browser opened for login and the detached updater are deliberately outside that job and are never terminated with playback.
+- **Command replies and playback errors.** Every mpv command has a bounded reply timeout, on POSIX and on Windows; a player that stops answering reports a safe error instead of hanging, and the event observer stays cancelable. An asynchronous playback failure (a stream that fails after `loadfile` succeeded) shows "Could not play this track. Try another track or retry playback." instead of silence, while stop, skip, EOF and deliberate replacement stay silent.
 - **Cover-art warning.** On Python 3.11, `textual-image` 0.12.0 (the newest release that supports it) triggers a Pillow deprecation warning from `Image.getdata()`. Upstream replaced that call in 0.13, which requires Python 3.12; the warning is tracked upstream and harmless until Pillow 14.
 - **Logs.** mpv writes to `~/.local/state/ytm/mpv.log`. The TUI keeps a small bounded history of runs under `~/.local/state/ytm/logs/`: one `tui-<date>-<time>-<pid>.log` per launch, the newest ten kept, with keys, focus moves, backend requests and their timing, errors and resizes. Credential-looking values (cookie headers, signing cookies, tokens, signed URLs) are redacted before anything is written, and a failed launch is still readable after the restart that recovered from it. `YTM_TUI_LOG=<file>` pins one explicit file instead, truncated at each start. Attach the TUI trace for a key or focus problem; the mpv log is for local debugging only, because a resolved stream URL can appear in it.
 
@@ -331,5 +346,3 @@ pip install -e '.[dev]' && pytest -q
 ## License
 
 MIT, see [LICENSE](LICENSE).
-
-Detailed architecture, reviewed fixes, browser support and verification: [browser authentication handout](docs/BROWSER_AUTH_REVIEW_AND_MULTIBROWSER_HANDOUT.md).

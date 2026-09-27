@@ -3,8 +3,7 @@
 Measures the application users actually run: the YTM TUI process, mpv, and
 every owned child (yt-dlp, JavaScript runtimes, the radio helper, mixer
 utilities). The full measurement contract this harness implements is the
-benchmark handout kept with the project's local design notes
-(`docs/BENCHMARK_IMPLEMENTATION_HANDOUT.md`).
+project's benchmark design handout.
 
 ## Requirements
 
