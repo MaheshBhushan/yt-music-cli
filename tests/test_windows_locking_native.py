@@ -1,5 +1,4 @@
 """Native cross-process locking, never the user's credential store."""
-import os
 import subprocess
 import sys
 import time
