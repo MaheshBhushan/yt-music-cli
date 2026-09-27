@@ -203,6 +203,30 @@ def test_bare_ytm_opens_the_tui_and_exits_cleanly(monkeypatch):
     assert (out, err) == ("", "")
 
 
+def test_plain_and_explicit_tui_share_startup_error_handling(monkeypatch):
+    from ytm.player import PlayerError
+
+    def failing(args):
+        raise PlayerError("mpv is not installed; run 'ytm install-mpv'")
+
+    monkeypatch.setattr(cli, "cmd_tui", failing)
+    plain = run()
+    explicit = run("tui")
+    assert plain == explicit
+    assert plain[0] == 1
+    assert "mpv is not installed" in plain[2]
+    assert "Traceback" not in plain[2]
+
+
+def test_plain_and_explicit_tui_share_cancellation_handling(monkeypatch):
+    def interrupted(args):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(cli, "cmd_tui", interrupted)
+    assert run()[0] == 130
+    assert run("tui")[0] == 130
+
+
 def test_a_network_failure_is_reported_not_traced(fake, monkeypatch):
     import requests
 

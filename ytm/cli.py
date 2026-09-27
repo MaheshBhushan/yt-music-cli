@@ -967,12 +967,9 @@ def main(argv=None, out=sys.stdout, err=sys.stderr):
         if problem:
             parser.error(problem)
     if args.command is None:
-        # cmd_tui answers (data, text) like every other command, and a
-        # two-None tuple is truthy: `return cmd_tui(args) or 0` handed that
-        # tuple to sys.exit, so plain `ytm` printed "(None, None)" and left
-        # a failure exit code behind every TUI session
-        cmd_tui(args)
-        return 0
+        # plain `ytm` is the same command as `ytm tui`; route it through the
+        # shared handler so startup failures and Ctrl-C behave identically
+        args.func = cmd_tui
     try:
         data, text = args.func(args)
     except KeyboardInterrupt:
