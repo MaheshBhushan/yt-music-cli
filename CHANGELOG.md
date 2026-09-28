@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.11.0 — 2026-09-28
 
 - Classify Windows cookie-copy, locking and decryption failures without claiming a signed-in browser is logged out; add automatic, allowlisted authentication diagnostic logs.
 - Fix Windows pipe read/write deadlock with overlapped I/O and remove the pre-lock initialization race in state, playlist and credential sidecar locks.
