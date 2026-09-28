@@ -52,7 +52,9 @@ import sys
 import tomllib
 from pathlib import Path
 
-CONFIG_PATH = Path.home() / ".config" / "ytm" / "config.toml"
+from ytm.paths import application_path
+
+CONFIG_PATH = application_path("config", "config.toml")
 
 DEFAULTS = {
     # control: "system" makes ytm's volume the desktop's default output

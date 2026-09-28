@@ -29,12 +29,12 @@ import uuid
 from contextlib import contextmanager
 from pathlib import Path
 
+from ytm.paths import application_path
+
 from ytm import music as api
 from ytm.music import track_from_dict, track_to_dict
 
-DEFAULT_PATH = Path(
-    os.environ.get("XDG_STATE_HOME", os.path.expanduser("~/.local/state"))
-) / "ytm" / "playlists.json"
+DEFAULT_PATH = application_path("state", "playlists.json")
 
 LOCAL_ID_PREFIX = "local-"
 
@@ -67,9 +67,7 @@ def _file_lock(path):
         if sys.platform.startswith("win"):
             import msvcrt
 
-            if lock.seek(0, os.SEEK_END) == 0:
-                lock.write(b"\0")
-                lock.flush()
+            # Windows permits locking beyond EOF; pre-lock writes race.
             lock.seek(0)
             msvcrt.locking(lock.fileno(), msvcrt.LK_LOCK, 1)
         else:

@@ -29,13 +29,13 @@ import urllib.request
 from importlib import metadata
 from pathlib import Path
 
+from ytm.paths import application_path
+
 PACKAGE = "ytm"
 PYPI_URL = f"https://pypi.org/pypi/{PACKAGE}/json"
 #: where the last check result is remembered, so a day's worth of TUI
 #: launches costs one HTTP request
-CHECK_PATH = Path(
-    os.environ.get("XDG_STATE_HOME", os.path.expanduser("~/.local/state"))
-) / "ytm" / "update-check.json"
+CHECK_PATH = application_path("state", "update-check.json")
 CHECK_INTERVAL = 24 * 60 * 60  # seconds
 
 

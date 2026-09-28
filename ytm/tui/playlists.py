@@ -24,6 +24,12 @@ def _count_text(count):
 class PlaylistsPane(Vertical):
     """The user's playlists, each marked `(local)` or `(remote)`."""
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        #: rises whenever the name prompt is opened: a completion may only
+        #: touch the draft it was submitted from (UI-09)
+        self._prompt_session = 0
+
     def compose(self):
         yield Static("PLAYLISTS", id="playlists-title")
         # shown only while naming a new playlist (see prompt_new)
@@ -107,11 +113,37 @@ class PlaylistsPane(Vertical):
     def prompt_new(self):
         """Show the name box and give it focus."""
         box = self.query_one("#playlist-name", Input)
+        self._prompt_session += 1
         box.value = ""
+        box.disabled = False
         box.display = True
         box.focus()
+        return self._prompt_session
+
+    def prompt_session(self):
+        """The identity of the draft being edited (see `_create_playlist`)."""
+        return self._prompt_session
+
+    def set_prompt_pending(self, pending):
+        """Disable the name box while its creation is in flight.
+
+        A disabled Input still shows (and keeps) its text but receives no
+        Enter, so a second submission cannot start a duplicate create.
+        """
+        self.query_one("#playlist-name", Input).disabled = pending
+
+    def prompt_pending(self):
+        """Whether a create from the current draft is still running."""
+        return self.query_one("#playlist-name", Input).disabled
+
+    def focus_prompt(self):
+        """Put focus back on the name box, if the prompt is still up."""
+        box = self.query_one("#playlist-name", Input)
+        if box.display:
+            box.focus()
 
     def close_prompt(self):
         box = self.query_one("#playlist-name", Input)
+        box.disabled = False
         box.display = False
         self.query_one("#playlists-table", DataTable).focus()

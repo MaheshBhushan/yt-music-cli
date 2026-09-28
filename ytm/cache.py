@@ -26,13 +26,13 @@ import shutil
 import tempfile
 from pathlib import Path
 
+from ytm.paths import application_path
+
 from ytm import config as config_mod
 from ytm import js_runtime
 
 #: default location for cached track audio
-DEFAULT_CACHE_DIR = Path(
-    os.environ.get("XDG_CACHE_HOME", os.path.expanduser("~/.cache"))
-) / "ytm" / "tracks"
+DEFAULT_CACHE_DIR = application_path("cache", "tracks")
 
 #: default total size cap for the cache, in bytes
 DEFAULT_CAP_BYTES = 2 * 1024**3

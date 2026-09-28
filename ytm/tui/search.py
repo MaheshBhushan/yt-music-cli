@@ -62,6 +62,9 @@ class SearchPane(Vertical):
         widest cell) keep the table within the terminal width regardless of
         how long a title/artist/album gets -- long cells are truncated with
         an ellipsis instead of pushing other columns off screen.
+
+        This is a layout-only refresh: it must keep the highlighted result
+        and the scroll position, unlike a new result set (UI-02).
         """
         table = self.query_one("#search-results", DataTable)
         width = table.size.width or 80
@@ -78,14 +81,17 @@ class SearchPane(Vertical):
         time_column = table.columns.get("TIME")
         if time_column is not None:
             time_column.width = TIME_WIDTH
-        self._render_rows()
+        self._render_rows(preserve_selection=True)
 
-    def _render_rows(self):
+    def _render_rows(self, preserve_selection=False):
         tracks = getattr(self, "_tracks", None)
         if tracks is None:
             return
         table = self.query_one("#search-results", DataTable)
         widths = {key: table.columns[key].width for key in COLUMNS if key in table.columns}
+        previous_key = self._selected_key() if preserve_selection else None
+        previous_row = table.cursor_row if preserve_selection else None
+        previous_scroll = table.scroll_offset.y if preserve_selection else 0
         table.clear()
         for position, track in enumerate(tracks):
             table.add_row(
@@ -95,6 +101,35 @@ class SearchPane(Vertical):
                 _truncated(track.get("duration", ""), widths.get("TIME")),
                 key=str(position),
             )
+        if not tracks:
+            return
+        if preserve_selection:
+            row = self._row_of_key(previous_key)
+            if row is None or not 0 <= row < len(tracks):
+                # the same list was rebuilt, or it shrank under the cursor
+                row = min(previous_row or 0, len(tracks) - 1)
+            table.move_cursor(row=row, scroll=False)
+            if previous_scroll:
+                table.scroll_y = previous_scroll
+            return
+        table.move_cursor(row=0)
+
+    @staticmethod
+    def _row_of_key(key):
+        try:
+            return int(str(key))
+        except (TypeError, ValueError):
+            return None
+
+    def _selected_key(self):
+        table = self.query_one("#search-results", DataTable)
+        if table.row_count == 0 or table.cursor_row is None:
+            return None
+        try:
+            row_key, _ = table.coordinate_to_cell_key(table.cursor_coordinate)
+        except Exception:
+            return None
+        return row_key.value if row_key is not None else None
 
     def set_results(self, tracks):
         """Replace the results table's rows with `tracks` (list of dicts).
@@ -109,15 +144,8 @@ class SearchPane(Vertical):
 
     def selected_track(self):
         """The Track dict for the currently highlighted row, or None."""
-        table = self.query_one("#search-results", DataTable)
-        if table.row_count == 0:
-            return None
-        try:
-            row_key, _ = table.coordinate_to_cell_key(table.cursor_coordinate)
-        except Exception:
-            return None
         tracks = getattr(self, "_tracks", [])
         try:
-            return tracks[int(row_key.value)]
+            return tracks[int(self._selected_key())]
         except (TypeError, ValueError, IndexError):
             return None

@@ -1,4 +1,5 @@
 import json
+import sys
 from types import SimpleNamespace
 
 import pytest
@@ -41,7 +42,8 @@ def test_desktop_stores_refreshable_token_and_reuses_client(desktop, tmp_path):
     assert captured["run"]["host"] == "127.0.0.1"
     assert captured["run"]["open_browser"] is True
     for name in ("auth.json", "oauth_client.json", "oauth_desktop_client.json"):
-        assert (path.parent / name).stat().st_mode & 0o777 == 0o600
+        if sys.platform != "win32":  # POSIX modes are not Windows ACLs
+            assert (path.parent / name).stat().st_mode & 0o777 == 0o600
     source.unlink()
     auth.oauth_setup(path=path)
 

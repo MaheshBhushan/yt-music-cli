@@ -25,11 +25,11 @@ from contextlib import contextmanager
 from dataclasses import asdict
 from pathlib import Path
 
+from ytm.paths import application_path
+
 from ytm.music import track_from_dict
 
-STATE_PATH = Path(
-    os.environ.get("XDG_STATE_HOME", os.path.expanduser("~/.local/state"))
-) / "ytm" / "session.json"
+STATE_PATH = application_path("state", "session.json")
 
 #: how many tracks' metadata to remember before forgetting the oldest
 TRACK_MEMORY = 500
@@ -57,9 +57,7 @@ def _file_lock(path):
         if sys.platform.startswith("win"):
             import msvcrt
 
-            if lock.seek(0, os.SEEK_END) == 0:
-                lock.write(b"\0")
-                lock.flush()
+            # Windows permits locking beyond EOF; pre-lock writes race.
             lock.seek(0)
             msvcrt.locking(lock.fileno(), msvcrt.LK_LOCK, 1)
         else:

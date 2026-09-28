@@ -436,7 +436,7 @@ def test_client_error_on_playlist_action_shows_banner_not_crash():
     asyncio.run(scenario())
 
 
-def test_smoke_render_layout():
+def test_smoke_render_layout(tmp_path):
     """Headless smoke run: the app starts up and lays out all panes,
     including the lyrics pane (Change B), at two terminal sizes."""
 
@@ -456,12 +456,12 @@ def test_smoke_render_layout():
             return svg
 
     svg_100x30 = asyncio.run(scenario((100, 30)))
-    with open("/tmp/ytm_tui_smoke_100x30.svg", "w") as fh:
+    with open(tmp_path / "ytm_tui_smoke_100x30.svg", "w", encoding="utf-8") as fh:
         fh.write(svg_100x30)
     print(f"Smoke screenshot written to /tmp/ytm_tui_smoke_100x30.svg ({len(svg_100x30)} bytes)")
 
     svg_120x40 = asyncio.run(scenario((120, 40)))
-    with open("/tmp/ytm_tui_smoke_120x40.svg", "w") as fh:
+    with open(tmp_path / "ytm_tui_smoke_120x40.svg", "w", encoding="utf-8") as fh:
         fh.write(svg_120x40)
     print(f"Smoke screenshot written to /tmp/ytm_tui_smoke_120x40.svg ({len(svg_120x40)} bytes)")
 
@@ -1154,7 +1154,8 @@ def test_listener_drop_shows_a_banner_and_reconnects():
         app = YTMApp(client=stub)
         app.LISTEN_RETRY = 0.05
         shown = []
-        app._show_error = shown.append  # startup requests clear the banner again, so record instead
+        # startup requests clear the banner again, so record instead
+        app._show_error = lambda message, owner=None: shown.append(message)
         async with app.run_test() as pilot:
             await settle(pilot, 0.3)
             assert stub.listens == 2
@@ -1442,7 +1443,7 @@ def test_add_flow_arm_song_pick_playlist_confirm():
     async def scenario():
         stub = StubClient()
         app = YTMApp(client=stub)
-        async with app.run_test() as pilot:
+        async with app.run_test(size=(120, 40)) as pilot:
             await _search(pilot)
             results = app.query_one("#search-results", DataTable)
             results.focus()
@@ -1492,7 +1493,7 @@ def test_add_flow_escape_cancels_and_returns_focus():
     async def scenario():
         stub = StubClient()
         app = YTMApp(client=stub)
-        async with app.run_test() as pilot:
+        async with app.run_test(size=(120, 40)) as pilot:
             await _search(pilot)
             results = app.query_one("#search-results", DataTable)
             results.focus()
@@ -1571,7 +1572,8 @@ def test_stale_live_search_reply_cannot_overwrite_newer_results():
         app = YTMApp(client=stub)
         async with app.run_test() as pilot:
             await settle(pilot)
-            app._search_seq = 5
+            app._search_generation = 5
+            app._search_query = "new"
             newer = [dict(TRACK, title="Newer")]
             app._show_search_results(5, "new", {"tracks": newer})
             app._show_search_results(4, "old", {"tracks": [dict(TRACK, title="Older")] * 3})
@@ -2361,5 +2363,796 @@ def test_playback_error_event_shows_a_safe_actionable_banner():
             banner = app.query_one("#error-banner")
             assert "Could not play this track" in str(banner.render())
             assert "v1" not in str(banner.render())  # no track/secret data on the banner
+
+    asyncio.run(scenario())
+
+
+# -- UI review regressions: intent, identity, feedback and freshness -------------
+#
+# One test per confirmed finding (UI-01 .. UI-15; the widget-level finders live
+# in tests/test_tui_widgets.py and the backend contracts in
+# tests/test_tui_backend.py). Each drives the user-visible state the review's
+# probe captured, with the response held until the conflicting action happens.
+
+
+class GatedSearchClient(StubClient):
+    """A search for `hold_query` blocks until `release`; others answer at once."""
+
+    def __init__(self, hold_query, fail=False):
+        super().__init__()
+        self.hold_query = hold_query
+        self.fail = fail
+        self.started = threading.Event()
+        self.release = threading.Event()
+
+    def request(self, cmd, args=None):
+        if cmd == "search" and (args or {}).get("query") == self.hold_query:
+            self.calls.append((cmd, args))
+            self.started.set()
+            self.release.wait(timeout=5)
+            if self.fail:
+                raise ClientError("obsolete search failure")
+            return {"tracks": [TRACK]}
+        return super().request(cmd, args)
+
+
+def test_search_edit_invalidates_pending_results_and_autoplay():
+    """UI-01: clearing the box while a submitted search is in flight must not
+    restore results nor start playback for the abandoned query."""
+
+    async def scenario():
+        stub = GatedSearchClient(hold_query="ab")
+        app = YTMApp(client=stub)
+        try:
+            async with app.run_test() as pilot:
+                await settle(pilot)
+                await pilot.click("#search-input")
+                await pilot.press("a", "b")
+                await pilot.press("enter")  # submits with a play-first intent
+                await asyncio.get_running_loop().run_in_executor(None, stub.started.wait, 5)
+                # the user clears the box before the search answers
+                await pilot.press("backspace", "backspace")
+                await pilot.pause()
+                stub.release.set()
+                await pilot.pause(0.3)
+                assert app.query_one("#search-results", DataTable).row_count == 0
+                assert not [c for c in stub.calls if c[0] == "play"]
+        finally:
+            stub.release.set()
+
+    asyncio.run(scenario())
+
+
+def test_search_shortened_below_the_live_minimum_drops_the_reply():
+    """UI-01: a one-character edit invalidates a live search already running."""
+
+    async def scenario():
+        stub = GatedSearchClient(hold_query="ab")
+        app = YTMApp(client=stub)
+        try:
+            async with app.run_test() as pilot:
+                await settle(pilot)
+                await pilot.click("#search-input")
+                await pilot.press("a", "b")
+                await pilot.pause(app.SEARCH_DEBOUNCE + 0.1)  # live search dispatched
+                await asyncio.get_running_loop().run_in_executor(None, stub.started.wait, 5)
+                await pilot.press("backspace")  # "a": below the live minimum
+                stub.release.set()
+                await pilot.pause(0.3)
+                assert app.query_one("#search-results", DataTable).row_count == 0
+        finally:
+            stub.release.set()
+
+    asyncio.run(scenario())
+
+
+def test_search_typing_during_debounce_replaces_the_pending_query():
+    """UI-01: an edit inside the debounce window replaces the pending query
+    and the abandoned answer may not flash on screen."""
+
+    async def scenario():
+        stub = GatedSearchClient(hold_query="ab")
+        app = YTMApp(client=stub)
+        try:
+            async with app.run_test() as pilot:
+                await settle(pilot)
+                await pilot.click("#search-input")
+                await pilot.press("a", "b")
+                await pilot.pause(app.SEARCH_DEBOUNCE + 0.1)  # "ab" dispatched, held
+                await asyncio.get_running_loop().run_in_executor(None, stub.started.wait, 5)
+                await pilot.press("c")  # "abc": inside the debounce window
+                stub.release.set()  # the abandoned answer arrives now
+                await pilot.pause(0.1)
+                assert app.query_one("#search-results", DataTable).row_count == 0
+                await pilot.pause(app.SEARCH_DEBOUNCE + 0.2)
+                await settle(pilot)
+                searches = [args["query"] for cmd, args in stub.calls if cmd == "search"]
+                assert searches == ["ab", "abc"]
+                assert app.query_one("#search-results", DataTable).row_count == 1
+        finally:
+            stub.release.set()
+
+    asyncio.run(scenario())
+
+
+def test_obsolete_search_error_cannot_replace_current_results():
+    """UI-01/UI-06: a late failure from an abandoned query is dropped whole."""
+
+    async def scenario():
+        stub = GatedSearchClient(hold_query="ab", fail=True)
+        app = YTMApp(client=stub)
+        try:
+            async with app.run_test() as pilot:
+                await settle(pilot)
+                await pilot.click("#search-input")
+                await pilot.press("a", "b")
+                await pilot.pause(app.SEARCH_DEBOUNCE + 0.1)
+                await asyncio.get_running_loop().run_in_executor(None, stub.started.wait, 5)
+                await pilot.press("c")  # "abc": a newer search
+                await pilot.pause(app.SEARCH_DEBOUNCE + 0.2)
+                assert app.query_one("#search-results", DataTable).row_count == 1
+                stub.release.set()
+                await pilot.pause(0.3)
+                banner = app.query_one("#error-banner")
+                assert not banner.display
+                assert app.query_one("#search-results", DataTable).row_count == 1
+        finally:
+            stub.release.set()
+
+    asyncio.run(scenario())
+
+
+# -- UI-03: queue rows are entries, not positions --------------------------------
+
+
+def test_queue_selection_tracks_entry_across_insertions():
+    async def scenario():
+        app = YTMApp(client=StubClient())
+        async with app.run_test() as pilot:
+            await settle(pilot)
+            pane = app.query_one(QueuePane)
+            table = app.query_one("#queue-table", DataTable)
+            tracks = [dict(TRACK, video_id=name, title=name, entry_id=i)
+                      for i, name in enumerate(("A", "B", "C"))]
+            pane.set_queue({"tracks": tracks, "index": 0})
+            table.move_cursor(row=2)
+            assert pane.selected_track()["video_id"] == "C"
+            assert pane.play_args() == {"entry_id": 2}
+
+            # an insertion before the selection moves the row, not the entry
+            inserted = [dict(TRACK, video_id="X", title="X", entry_id=99)] + tracks
+            pane.set_queue({"tracks": inserted, "index": 1})
+            assert table.cursor_row == 3
+            assert pane.selected_track()["video_id"] == "C"
+            assert pane.play_args() == {"entry_id": 2}
+
+            # a reorder moves the selected entry too
+            reordered = [inserted[3], inserted[0], inserted[1], inserted[2]]
+            pane.set_queue({"tracks": reordered, "index": 2})  # A still playing
+            assert pane.selected_track()["video_id"] == "C"
+            assert pane.play_args() == {"entry_id": 2}
+
+            # two queued copies of one media id are still distinct entries
+            dupes = [dict(TRACK, video_id="D", title="D", entry_id=1),
+                     dict(TRACK, video_id="D", title="D", entry_id=2)]
+            pane.set_queue({"tracks": dupes, "index": 0})
+            table.move_cursor(row=1)
+            assert pane.play_args() == {"entry_id": 2}
+
+            # deleting the selected entry keeps a documented nearby fallback
+            pane.set_queue({"tracks": tracks, "index": 0})
+            table.move_cursor(row=2)
+            pane.set_queue({"tracks": tracks[:2], "index": 0})
+            assert table.cursor_row == 1
+            assert pane.play_args() is not None
+
+    asyncio.run(scenario())
+
+
+def test_queue_play_by_entry_id_ignores_a_stale_position():
+    """UI-03/UI-14: a click always targets the entry the user saw."""
+
+    class WithEntryIds(StubClient):
+        def request(self, cmd, args=None):
+            if cmd == "queue_get":
+                self.calls.append((cmd, args))
+                return {
+                    "tracks": [dict(TRACK, title="A", entry_id=1),
+                               dict(TRACK, video_id="b", title="B", entry_id=2)],
+                    "index": 0,
+                }
+            return super().request(cmd, args)
+
+    async def scenario():
+        stub = WithEntryIds()
+        app = YTMApp(client=stub)
+        async with app.run_test() as pilot:
+            await settle(pilot)
+            pane = app.query_one(QueuePane)
+            table = app.query_one("#queue-table", DataTable)
+            table.focus()
+            table.move_cursor(row=1)
+            await settle(pilot)
+            assert pane.play_args() == {"entry_id": 2}
+            await pilot.press("enter")
+            await settle(pilot)
+            queue_plays = [c for c in stub.calls if c[0] == "queue_play"]
+            assert queue_plays == [("queue_play", {"entry_id": 2})]
+
+    asyncio.run(scenario())
+
+
+# -- UI-05: no success toast for a failed enqueue -------------------------------
+
+
+def test_failed_enqueue_next_has_no_success_notification():
+    class Flaky(StubClient):
+        def __init__(self):
+            super().__init__()
+            self.fail = True
+
+        def request(self, cmd, args=None):
+            if cmd == "enqueue_next":
+                self.calls.append((cmd, args))
+                if self.fail:
+                    raise ClientError("enqueue_next failed")
+                return {"paused": False, "volume": 60}
+            return super().request(cmd, args)
+
+    async def scenario():
+        stub = Flaky()
+        app = YTMApp(client=stub)
+        toasts = []
+        app.notify = lambda message, **kw: toasts.append(str(message))
+        async with app.run_test() as pilot:
+            await _search(pilot)
+            app.query_one("#search-results", DataTable).focus()
+            await settle(pilot)
+            await pilot.press("u")
+            await settle(pilot)
+            assert toasts == []
+            assert "enqueue_next failed" in str(app.query_one("#error-banner").render())
+            # the same key succeeds afterwards: exactly one toast, naming the
+            # track that was actually enqueued
+            stub.fail = False
+            await pilot.press("u")
+            await settle(pilot)
+            assert toasts == ["Up next: Kaanave Kaanave"]
+
+    asyncio.run(scenario())
+
+
+# -- UI-06: errors belong to the operation that failed ---------------------------
+
+
+def test_unrelated_success_preserves_owned_error():
+    async def scenario():
+        stub = StubClient()
+        app = YTMApp(client=stub)
+        async with app.run_test() as pilot:
+            await settle(pilot)
+            app._apply_event("playback_error", {"video_id": "v"})
+            await settle(pilot)
+            banner = app.query_one("#error-banner")
+            assert banner.display
+            assert "Could not play this track" in str(banner.render())
+
+            # a successful live search is unrelated work: the error stays
+            await pilot.click("#search-input")
+            await pilot.press("a", "b")
+            await pilot.pause(app.SEARCH_DEBOUNCE + 0.2)
+            assert app.query_one("#search-results", DataTable).row_count == 1
+            assert banner.display
+            assert "Could not play this track" in str(banner.render())
+
+            # a successful player command is the matching retry: it clears
+            app.query_one("#queue-table").focus()
+            await pilot.press("space")
+            await settle(pilot)
+            assert not banner.display
+
+            # an explicit dismissal also works
+            app._show_error("later failure")
+            assert banner.display
+            app._clear_error()
+            assert not banner.display
+
+    asyncio.run(scenario())
+
+
+# -- UI-07: a partial playlist refresh is not a success -------------------------
+
+
+def test_mix_refresh_reports_partial_failure():
+    class Partial(StubClient):
+        def __init__(self):
+            super().__init__()
+            self.error = None
+
+        def request(self, cmd, args=None):
+            if cmd == "mixes_refresh":
+                self.calls.append((cmd, args))
+                return {
+                    "playlists": [{"playlist_id": "local-1", "title": "scratch",
+                                   "track_count": 12, "local": True}],
+                    "error": self.error,
+                }
+            return super().request(cmd, args)
+
+    async def scenario():
+        stub = Partial()
+        app = YTMApp(client=stub)
+        toasts = []
+        app.notify = lambda message, **kw: toasts.append(str(message))
+        async with app.run_test() as pilot:
+            await settle(pilot)
+            app.query_one("#queue-table").focus()
+            stub.error = "account unavailable: run ytm login"
+            await pilot.press("r")
+            await settle(pilot)
+            banner = app.query_one("#error-banner")
+            assert "account unavailable" in str(banner.render())
+            assert toasts == []  # no full-success announcement
+            table = app.query_one("#playlists-table", DataTable)
+            assert table.row_count >= 1  # local playlists stay usable
+            assert str(table.get_cell("local-1", "count")) == "12"
+
+            # an empty but successful refresh is still a success
+            stub.error = None
+            await pilot.press("r")
+            await settle(pilot)
+            assert toasts == ["Mixes refreshed"]
+            assert not banner.display
+
+    asyncio.run(scenario())
+
+
+def test_stale_playlist_refresh_cannot_replace_a_newer_view():
+    class Gated(StubClient):
+        def __init__(self):
+            super().__init__()
+            self.started = threading.Event()
+            self.release = threading.Event()
+            self.calls_started = 0
+
+        def request(self, cmd, args=None):
+            if cmd == "mixes_refresh":
+                self.calls.append((cmd, args))
+                self.calls_started += 1
+                if self.calls_started == 1:
+                    self.started.set()
+                    self.release.wait(timeout=5)
+                    return {"playlists": [{"playlist_id": "old", "title": "Old mix",
+                                           "track_count": 1}]}
+                return {"playlists": [{"playlist_id": "new", "title": "New mix",
+                                       "track_count": 2}]}
+            return super().request(cmd, args)
+
+    async def scenario():
+        stub = Gated()
+        app = YTMApp(client=stub)
+        try:
+            async with app.run_test() as pilot:
+                await settle(pilot)
+                app.action_refresh_mixes()
+                await asyncio.get_running_loop().run_in_executor(None, stub.started.wait, 5)
+                app.action_refresh_mixes()  # newer request answered first
+                await pilot.pause(0.3)
+                stub.release.set()
+                await pilot.pause(0.3)
+                table = app.query_one("#playlists-table", DataTable)
+                assert table.row_count == 2  # New mix + "+ new playlist"
+                assert str(table.get_cell("new", "count")) == "2"
+                assert "old" not in {str(key.value) for key in table.rows}
+        finally:
+            stub.release.set()
+
+    asyncio.run(scenario())
+
+
+# -- UI-08: counts only grow for a justified net addition ------------------------
+
+
+def test_playlist_count_respects_zero_net_addition():
+    class ZeroNet(StubClient):
+        def request(self, cmd, args=None):
+            if cmd == "playlist_add":
+                self.calls.append((cmd, args))
+                return {"playlist_id": args["playlist_id"], "added": 0, "track_count": 10}
+            return super().request(cmd, args)
+
+    async def scenario():
+        app = YTMApp(client=ZeroNet())
+        async with app.run_test() as pilot:
+            await settle(pilot)
+            pane = app.query_one(PlaylistsPane)
+            table = app.query_one("#playlists-table", DataTable)
+            pane.set_playlists({"playlists": [
+                {"playlist_id": "remote-1", "title": "Liked Songs", "track_count": 10},
+            ]})
+            table.move_cursor(row=0)
+            app._armed = dict(TRACK)
+            app._add_armed_to_highlighted()
+            await settle(pilot)
+            assert str(table.get_cell("remote-1", "count")) == "10"
+
+            # an unknown net (no `added` field) does not invent an increment
+            pane.set_count("remote-1", 10, added=0)
+            assert str(table.get_cell("remote-1", "count")) == "10"
+
+            # a known net still moves the row optimistically
+            pane.set_count("remote-1", None, added=1)
+            assert str(table.get_cell("remote-1", "count")) == "11"
+
+    asyncio.run(scenario())
+
+
+# -- UI-09: a playlist draft survives a failed create ----------------------------
+
+
+class GatedCreateClient(StubClient):
+    """playlist_create blocks until `release`; every call is recorded."""
+
+    def __init__(self):
+        super().__init__()
+        self.started = threading.Event()
+        self.release = threading.Event()
+
+    def request(self, cmd, args=None):
+        if cmd == "playlist_create":
+            self.calls.append((cmd, args))
+            self.started.set()
+            self.release.wait(timeout=5)
+            return {"playlist_id": "PLnew", "title": args["title"], "local": False}
+        return super().request(cmd, args)
+
+
+def test_failed_playlist_create_preserves_draft():
+    from textual.widgets import Input as _Input
+
+    class Failing(StubClient):
+        def request(self, cmd, args=None):
+            if cmd == "playlist_create":
+                self.calls.append((cmd, args))
+                raise ClientError("could not create the playlist")
+            return super().request(cmd, args)
+
+    async def scenario():
+        app = YTMApp(client=Failing())
+        async with app.run_test() as pilot:
+            await settle(pilot)
+            pane = app.query_one(PlaylistsPane)
+            pane.prompt_new()
+            box = app.query_one("#playlist-name", _Input)
+            box.value = "Road Trip 界"
+            await pilot.press("enter")
+            await settle(pilot)
+            assert box.display and box.value == "Road Trip 界"
+            assert not box.disabled
+            assert app.focused is box
+            assert "could not create" in str(app.query_one("#error-banner").render())
+
+    asyncio.run(scenario())
+
+
+def test_playlist_create_ignores_a_second_submit_and_keeps_a_newer_draft():
+    from textual.widgets import Input as _Input
+
+    async def scenario():
+        stub = GatedCreateClient()
+        app = YTMApp(client=stub)
+        toasts = []
+        app.notify = lambda message, **kw: toasts.append(str(message))
+        try:
+            async with app.run_test() as pilot:
+                await settle(pilot)
+                pane = app.query_one(PlaylistsPane)
+                box = app.query_one("#playlist-name", _Input)
+                session = pane.prompt_new()
+                box.value = "First"
+                app._create_playlist("First")
+                app._create_playlist("First")  # a second Enter while pending
+                await asyncio.get_running_loop().run_in_executor(None, stub.started.wait, 5)
+                assert len([c for c in stub.calls if c[0] == "playlist_create"]) == 1
+
+                # cancel the draft and start a newer one; the late success
+                # must not erase it or close its prompt
+                pane.close_prompt()
+                pane.prompt_new()
+                box.value = "Second"
+                stub.release.set()
+                await pilot.pause(0.4)
+                assert box.display and box.value == "Second"
+                assert toasts == ["Created playlist First"]
+                assert session != pane.prompt_session()
+        finally:
+            stub.release.set()
+
+    asyncio.run(scenario())
+
+
+# -- UI-10: control commands run off the UI thread, in order ---------------------
+
+
+def test_pending_control_request_does_not_block_input():
+    class Gated(StubClient):
+        def __init__(self):
+            super().__init__()
+            self.started = threading.Event()
+            self.release = threading.Event()
+
+        def request(self, cmd, args=None):
+            if cmd == "toggle":
+                self.calls.append((cmd, args))
+                self.started.set()
+                # untimed: a synchronous implementation could never return
+                # from the key press while the player is silent
+                self.release.wait()
+            return super().request(cmd, args)
+
+    async def scenario():
+        stub = Gated()
+        app = YTMApp(client=stub)
+        try:
+            async with app.run_test() as pilot:
+                await settle(pilot)
+                app.query_one("#queue-table", DataTable).focus()
+                await settle(pilot)
+                await pilot.press("space")
+                # the press returned while the player is still silent
+                await asyncio.get_running_loop().run_in_executor(None, stub.started.wait, 5)
+                assert not stub.release.is_set()
+                # and the UI processed another event before the release
+                await pilot.press("tab")
+                await pilot.pause()
+                assert app.focused.id != "queue-table"
+                stub.release.set()
+                await settle(pilot)
+                assert ("toggle", None) in stub.calls
+        finally:
+            stub.release.set()
+
+    asyncio.run(scenario())
+
+
+def test_control_requests_keep_their_order():
+    class Gated(StubClient):
+        def __init__(self):
+            super().__init__()
+            self.started = threading.Event()
+            self.release = threading.Event()
+            self.order = []
+
+        def request(self, cmd, args=None):
+            if cmd in ("toggle", "next", "prev"):
+                self.calls.append((cmd, args))
+                self.order.append(cmd)
+                if cmd == "toggle":
+                    self.started.set()
+                    self.release.wait()
+                return {"paused": False, "volume": 60}
+            return super().request(cmd, args)
+
+    async def scenario():
+        stub = Gated()
+        app = YTMApp(client=stub)
+        try:
+            async with app.run_test() as pilot:
+                await settle(pilot)
+                app.query_one("#queue-table", DataTable).focus()
+                await settle(pilot)
+                await pilot.press("space")
+                await asyncio.get_running_loop().run_in_executor(None, stub.started.wait, 5)
+                await pilot.press("n")
+                await pilot.press("p")
+                stub.release.set()
+                await settle(pilot)
+                assert stub.order == ["toggle", "next", "prev"]
+        finally:
+            stub.release.set()
+
+    asyncio.run(scenario())
+
+
+def test_rapid_volume_updates_coalesce_to_the_final_level():
+    class Gated(StubClient):
+        def __init__(self):
+            super().__init__()
+            self.started = threading.Event()
+            self.release = threading.Event()
+            self.levels = []
+
+        def request(self, cmd, args=None):
+            if cmd == "volume":
+                self.calls.append((cmd, args))
+                self.levels.append(args["level"])
+                if len(self.levels) == 1:
+                    self.started.set()
+                    self.release.wait()
+                return {"volume": args["level"]}
+            return super().request(cmd, args)
+
+    async def scenario():
+        stub = Gated()
+        app = YTMApp(client=stub)
+        try:
+            async with app.run_test() as pilot:
+                await settle(pilot)
+                start = app._volume
+                app.action_volume_up()  # the first call is held by the stub
+                await asyncio.get_running_loop().run_in_executor(None, stub.started.wait, 5)
+                for _ in range(4):
+                    app.action_volume_up()
+                await pilot.pause()
+                assert app._volume == start + 25
+                stub.release.set()
+                await settle(pilot)
+                assert stub.levels == [start + 5, start + 25]
+                assert app._volume == start + 25
+        finally:
+            stub.release.set()
+
+    asyncio.run(scenario())
+
+
+def test_quit_with_a_pending_control_request_touches_no_widget():
+    class Gated(StubClient):
+        def __init__(self):
+            super().__init__()
+            self.started = threading.Event()
+            self.release = threading.Event()
+
+        def request(self, cmd, args=None):
+            if cmd == "toggle":
+                self.calls.append((cmd, args))
+                self.started.set()
+                self.release.wait()
+            return super().request(cmd, args)
+
+    async def scenario():
+        stub = Gated()
+        app = YTMApp(client=stub)
+        try:
+            async with app.run_test() as pilot:
+                await settle(pilot)
+                app.query_one("#queue-table", DataTable).focus()
+                await pilot.press("space")
+                await asyncio.get_running_loop().run_in_executor(None, stub.started.wait, 5)
+                counts = _spy_widget_access(app)
+                await pilot.press("e")
+                assert not app._accepts_results()
+                stub.release.set()
+                await pilot.pause(0.2)
+            await asyncio.sleep(0.1)
+        finally:
+            stub.release.set()
+        assert counts == {"error": 0, "clear": 0}
+        assert stub.closed
+
+    asyncio.run(scenario())
+
+
+# -- UI-12: compact layouts never focus an invisible pane ------------------------
+
+
+def test_compact_playlist_action_keeps_focus_visible():
+    async def scenario():
+        app = YTMApp(client=StubClient())
+        async with app.run_test(size=(80, 24)) as pilot:
+            await settle(pilot)
+            assert app.screen.has_class("compact")
+            assert app.focused.id == "search-input"
+
+            # leave the search box (a letter key would be text there), then
+            # `l`: in compact it switches the middle row to the playlists, and
+            # focus must land on a widget the user can see
+            await pilot.press("down")
+            await pilot.pause()
+            await pilot.press("l")
+            await pilot.pause()
+            table = app.query_one("#playlists-table", DataTable)
+            assert app.focused is table
+            assert app._visible(app.focused)
+            assert app.query_one("#playlists-pane").display
+
+            # leaving the playlists puts the queue back and keeps focus visible
+            await pilot.press("escape")
+            await pilot.pause()
+            assert app.query_one("#queue-pane").display
+            assert not app.query_one("#playlists-pane").display
+            assert app.focused.id == "queue-table"
+            assert app._visible(app.focused)
+
+            # add-to-playlist from the visible queue works and stays visible
+            app.query_one(QueuePane).set_queue(_queue(3, 0))
+            app.query_one("#queue-table", DataTable).focus()
+            await settle(pilot)
+            await pilot.press("a")
+            await pilot.pause()
+            assert app.focused is table and app._visible(table)
+            assert "adding" in str(app.query_one("#playlists-title").render())
+            await pilot.press("enter")
+            await settle(pilot)
+            adds = [c for c in app.client.calls if c[0] == "playlist_add"]
+            assert adds and adds[0][1]["video_ids"] == ["q0"]
+
+            # growing the terminal restores the full layout
+            await pilot.resize_terminal(120, 40)
+            await pilot.pause()
+            assert app.query_one("#queue-pane").display
+            assert app.query_one("#playlists-pane").display
+            assert app._visible(app.focused)
+
+    asyncio.run(scenario())
+
+
+# -- UI-13: backend metadata is displayed literally ------------------------------
+
+
+def test_error_banner_displays_metadata_literally():
+    async def scenario():
+        app = YTMApp(client=StubClient())
+        async with app.run_test() as pilot:
+            await settle(pilot)
+            banner = app.query_one("#error-banner")
+            for message in (
+                "[bold]literal title[/bold]",
+                "[link=app.quit]click me[/link]\nsecond line",
+                "playlist [2026]",
+            ):
+                app._show_error(message)
+                rendered = banner.render()
+                assert str(rendered) == f"error: {message}"
+                assert rendered.spans == []  # no markup was parsed
+                assert banner.display
+                assert banner.styles.color is not None  # the CSS styling stays
+
+    asyncio.run(scenario())
+
+
+# -- UI-14: stale queue snapshots cannot repaint a newer queue -------------------
+
+
+def test_old_queue_refresh_cannot_replace_new_event():
+    class HeldQueue(StubClient):
+        def __init__(self):
+            super().__init__()
+            self.hold = False
+            self.started = threading.Event()
+            self.release = threading.Event()
+
+        def request(self, cmd, args=None):
+            if cmd == "queue_get" and self.hold:
+                self.calls.append((cmd, args))
+                self.started.set()
+                self.release.wait(timeout=5)
+                return {"tracks": [dict(TRACK, title="old queue")], "index": 0}
+            return super().request(cmd, args)
+
+    async def scenario():
+        stub = HeldQueue()
+        app = YTMApp(client=stub)
+        try:
+            async with app.run_test() as pilot:
+                await settle(pilot)
+                stub.hold = True
+                app._refresh_queue()  # a snapshot the user is waiting on
+                await asyncio.get_running_loop().run_in_executor(None, stub.started.wait, 5)
+                # a newer queue event arrives before that snapshot returns
+                app._apply_event(
+                    "queue_changed",
+                    {"tracks": [dict(TRACK, title="new queue")], "index": 0},
+                )
+                await pilot.pause()
+                stub.release.set()
+                await settle(pilot)
+                pane = app.query_one(QueuePane)
+                assert pane._tracks[0]["title"] == "new queue"
+                assert pane.selected_track()["title"] == "new queue"
+                # the visible action also targets the newest queue
+                assert pane._selected_key() == pane._keys[0]
+                assert pane.play_args() is not None
+        finally:
+            stub.release.set()
 
     asyncio.run(scenario())

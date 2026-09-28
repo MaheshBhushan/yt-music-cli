@@ -21,6 +21,8 @@ import re
 import time
 from pathlib import Path
 
+from ytm.paths import application_path
+
 #: how many per-run files to keep
 KEEP_RUNS = 10
 
@@ -30,9 +32,7 @@ MAX_TOTAL_BYTES = 2 * 1024 * 1024
 #: do not delete a file a live run may still be appending to
 ACTIVE_SECONDS = 30
 
-DEFAULT_DIR = Path(
-    os.environ.get("XDG_STATE_HOME", os.path.expanduser("~/.local/state"))
-) / "ytm" / "logs"
+DEFAULT_DIR = application_path("state", "logs")
 
 _RUN_PATH = None
 

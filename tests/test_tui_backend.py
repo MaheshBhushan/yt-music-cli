@@ -277,7 +277,11 @@ def test_playlist_add_to_liked_music_likes_instead_of_inserting(backend, monkeyp
     monkeypatch.setattr(music, "playlist_count", lambda pid, yt=None, **kw: 10)
     out = backend.request("playlist_add", {"playlist_id": "LM", "video_ids": ["v1", "v2"]})
     assert liked == ["v1", "v2"]
-    assert out["added"] == 2 and out["track_count"] == 10
+    # with no previous count known, no net membership increase is claimed
+    assert out == {"playlist_id": "LM", "track_count": 10}
+    # once the session has a count, an idempotent like is a zero net change
+    out = backend.request("playlist_add", {"playlist_id": "LM", "video_ids": ["v1"]})
+    assert out == {"playlist_id": "LM", "track_count": 10, "added": 0}
 
 
 def test_playlist_add_to_episodes_for_later_is_refused(backend, monkeypatch):
@@ -697,3 +701,120 @@ def test_a_late_error_from_an_older_entry_is_ignored(backend):
         ("end-file", None, {"reason": "error", "playlist_entry_id": old_id}),
     ])
     assert [e for e, _ in events if e == "playback_error"] == []
+
+
+def test_playlist_add_reads_private_count_on_account_client(backend, monkeypatch):
+    calls = []
+
+    class Account:
+        def add_playlist_items(self, playlist_id, video_ids):
+            calls.append((playlist_id, video_ids))
+            return {"status": "STATUS_SUCCEEDED"}
+
+        def get_playlist(self, playlist_id, limit=1):
+            return {"trackCount": 7}
+
+    class Anonymous:
+        def get_playlist(self, playlist_id, limit=1):
+            raise KeyError("Unable to find 'contents' using path []")
+
+    monkeypatch.setattr(music, "shared_client", lambda: Account())
+    monkeypatch.setattr(music, "catalogue_client", lambda: Anonymous())
+    out = backend.request("playlist_add", {"playlist_id": "PLprivate", "video_ids": ["v1"]})
+    assert out == {"playlist_id": "PLprivate", "added": 1, "track_count": 7}
+    assert calls == [("PLprivate", ["v1"])]
+
+
+@pytest.mark.parametrize("error", [music.ProviderError("missing contents"), KeyError("contents")])
+def test_playlist_add_count_provider_failure_preserves_success(backend, monkeypatch, error):
+    calls = []
+    monkeypatch.setattr(music, "add_playlist_items", lambda pid, vids: calls.append((pid, vids)))
+
+    def count(*args, **kwargs):
+        raise error
+
+    monkeypatch.setattr(music, "playlist_count", count)
+    out = backend.request("playlist_add", {"playlist_id": "PLprivate", "video_ids": ["v1"]})
+    assert out == {"playlist_id": "PLprivate", "added": 1}
+    assert calls == [("PLprivate", ["v1"])]
+    assert "PLprivate" not in backend._playlist_counts
+    assert backend._pending_adds["PLprivate"][0][0].video_id == "v1"
+
+
+# -- queue entry identity (UI-03) ---------------------------------------------
+
+
+def test_queue_snapshots_carry_the_player_entry_ids(backend):
+    backend.request("play", {"video_id": "a", "title": "A"})
+    backend.request("enqueue", {"video_id": "b", "title": "B"})
+    q = backend.request("queue_get")
+    ids = [t["entry_id"] for t in q["tracks"]]
+    assert len(ids) == 2 and None not in ids
+    assert len(set(ids)) == 2  # positional identity would defeat the purpose
+
+
+def test_queue_play_resolves_the_entry_id_at_execution_time(backend):
+    backend.request("play", {"video_id": "a", "title": "A"})
+    backend.request("enqueue", {"video_id": "b", "title": "B"})
+    b_id = backend.request("queue_get")["tracks"][1]["entry_id"]
+
+    # insert X right after A: B's positional index moved from 1 to 2
+    backend.request("enqueue_next", {"video_id": "x", "title": "X"})
+    assert [t["video_id"] for t in backend.request("queue_get")["tracks"]] == ["a", "x", "b"]
+
+    backend.request("queue_play", {"entry_id": b_id})
+    assert ("play_index", 2) in backend.fake.calls
+
+
+def test_queue_play_reports_an_entry_that_is_gone(backend):
+    backend.request("play", {"video_id": "a", "title": "A"})
+    with pytest.raises(BackendError, match="no longer there"):
+        backend.request("queue_play", {"entry_id": 999})
+
+
+def test_queue_tracks_keep_positional_play_for_payloads_without_ids(backend, monkeypatch):
+    monkeypatch.setattr(backend._player, "playlist", lambda: [
+        {"id": None, "url": "u1", "video_id": "a", "title": "A", "current": True},
+        {"id": None, "url": "u2", "video_id": "b", "title": "B", "current": False},
+    ])
+    q = backend.request("queue_get")
+    assert [t["entry_id"] for t in q["tracks"]] == [None, None]
+    backend.request("queue_play", {"index": 1})
+    assert ("play_index", 1) in backend.fake.calls
+
+
+# -- playlist count contract (UI-08) ------------------------------------------
+
+
+def test_playlist_add_reports_zero_net_for_an_already_liked_track(backend, monkeypatch):
+    monkeypatch.setattr(music, "like", lambda vid, yt=None: None)
+    monkeypatch.setattr(music, "playlist_count", lambda pid, yt=None, **kw: 10)
+    backend._account_changed()  # settle the credential revision first
+    backend._playlist_counts["LM"] = 10  # the session already read the count
+    out = backend.request("playlist_add", {"playlist_id": "LM", "video_ids": ["v1"]})
+    assert out == {"playlist_id": "LM", "added": 0, "track_count": 10}
+
+
+def test_playlist_add_net_reflects_a_new_like(backend, monkeypatch):
+    monkeypatch.setattr(music, "like", lambda vid, yt=None: None)
+    monkeypatch.setattr(music, "playlist_count", lambda pid, yt=None, **kw: 11)
+    backend._account_changed()  # settle the credential revision first
+    backend._playlist_counts["LM"] = 10
+    out = backend.request("playlist_add", {"playlist_id": "LM", "video_ids": ["v1"]})
+    assert out == {"playlist_id": "LM", "added": 1, "track_count": 11}
+
+
+def test_local_playlist_add_keeps_duplicate_entries(backend, monkeypatch, tmp_path):
+    from ytm import playlists_local
+
+    monkeypatch.setattr(playlists_local, "DEFAULT_PATH", tmp_path / "pl.json")
+    pid = playlists_local.create("mine")
+    args = {
+        "playlist_id": pid,
+        "video_ids": ["v1"],
+        "tracks": [{"video_id": "v1", "title": "One"}],
+    }
+    assert backend.request("playlist_add", args)["added"] == 1
+    assert backend.request("playlist_add", args)["added"] == 1
+    got = backend.request("playlist_get", {"playlist_id": pid})
+    assert [t["video_id"] for t in got["tracks"]] == ["v1", "v1"]
