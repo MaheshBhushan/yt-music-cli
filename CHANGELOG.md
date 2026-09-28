@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.11.1 — 2026-09-28
+
+- Seeking with nothing playing no longer surfaces mpv's raw "error running command" banner: the TUI treats the seek key and progress-bar click as a no-op, and `ytm seek` reports "nothing is playing" like the other commands that need a current track.
+
 ## 0.11.0 — 2026-09-28
 
 - Classify Windows cookie-copy, locking and decryption failures without claiming a signed-in browser is logged out; add automatic, allowlisted authentication diagnostic logs.
