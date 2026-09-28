@@ -55,3 +55,10 @@ def fresh_catalogue_client(monkeypatch, tmp_path):
     music.reset_client()
     yield
     music.reset_client()
+
+
+@pytest.fixture(autouse=True)
+def isolated_auth_diagnostics(monkeypatch, tmp_path):
+    """CLI authentication tests write only to their temporary directory."""
+    from ytm.authentication import diagnostics
+    monkeypatch.setattr(diagnostics, 'application_path', lambda *args: tmp_path / 'auth-logs')

@@ -16,6 +16,7 @@ Neither present means no mixer, and the caller falls back to mpv's volume.
 import re
 import shutil
 import subprocess
+import sys
 import threading
 
 #: how often to re-read the volume when no ``pactl subscribe`` is available
@@ -37,8 +38,13 @@ class SystemVolume:
         self.owner = None
 
     @classmethod
-    def detect(cls, which=shutil.which):
+    def detect(cls, which=shutil.which, platform=None):
         """A mixer for whatever this desktop has, or None when it has neither."""
+        if (platform or sys.platform) == "win32":
+            from ytm.windows_volume import WindowsVolume
+
+            mixer = WindowsVolume()
+            return mixer if mixer.get() is not None else None
         wpctl = which("wpctl")
         pactl = which("pactl")
         if not wpctl and not pactl:

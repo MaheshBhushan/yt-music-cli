@@ -3,6 +3,7 @@ daemon events to widget updates without ever polling.
 """
 
 import asyncio
+import collections
 import os
 import signal
 import sys
@@ -10,6 +11,7 @@ import threading
 import time
 from typing import ClassVar
 
+from rich.text import Text
 from textual.app import App, ComposeResult
 from textual.binding import Binding, BindingsMap
 from textual.containers import Horizontal
@@ -67,14 +69,45 @@ def _trace(line, mode="a"):
 
 
 class RequestDone(Message):
-    """A background request finished; `then` runs on the message loop."""
+    """A background request finished; `then` runs on the message loop.
 
-    def __init__(self, cmd, data, error, then):
+    `owner` names the operation that may clear an error the request reports;
+    `accept` may veto the completion entirely (a stale generation), and
+    `on_error` lets the requester repair its own widget state (a preserved
+    draft, say) without touching the shared banner rules.
+    """
+
+    def __init__(self, cmd, data, error, then, owner=None, accept=None, on_error=None):
         super().__init__()
         self.cmd = cmd
         self.data = data
         self.error = error
         self.then = then
+        self.owner = owner
+        self.accept = accept
+        self.on_error = on_error
+
+
+class ControlWork:
+    """One player command queued for the single control worker (UI-10)."""
+
+    __slots__ = ("args", "cmd", "owner", "then")
+
+    def __init__(self, cmd, args, then, owner):
+        self.cmd = cmd
+        self.args = args
+        self.then = then
+        self.owner = owner
+
+
+class ControlDone(Message):
+    """A control command finished; its `then` runs on the message loop."""
+
+    def __init__(self, work, data, error):
+        super().__init__()
+        self.work = work
+        self.data = data
+        self.error = error
 
 
 class LyricsFetched(Message):
@@ -138,8 +171,28 @@ class YTMApp(App):
         self._armed = None  # song chosen with A, waiting for a playlist
         self._return_to = None
         self._search_timer = None  # pending debounced live search
-        self._search_seq = 0  # rises per search; late replies for older ones are dropped
-        self._results_query = None  # query the results table currently shows
+        #: rises on every search-box edit. A dispatched request may only
+        #: render results, show an error or start playback while both the
+        #: generation and the normalized query still match (UI-01).
+        self._search_generation = 0
+        self._search_query = ""  # the normalized query the input holds now
+        self._submit_intent = None  # (generation, query) still allowed to autoplay
+        self._results_query = None  # query whose results the table shows
+        #: the operation that owns the banner error; unrelated successes must
+        #: not clear it (UI-06)
+        self._error_owner = None
+        #: rises on every observed queue event or snapshot request, so an old
+        #: response cannot repaint a newer queue (UI-14)
+        self._queue_generation = 0
+        #: rises on every playlist listing request (UI-07)
+        self._playlists_generation = 0
+        #: one drain worker executes control commands in submission order;
+        #: `volume` values waiting behind a held call coalesce to the newest
+        self._control_lock = threading.Lock()
+        self._control_queue = collections.deque()
+        self._control_running = False
+        self._control_closed = False
+        self._queued_volume = None
         self._config = config if config is not None else config_mod.load()
         self._bindings = BindingsMap(self._build_bindings(self._config["keys"]))
         self.theme = self._resolve_theme(self._config["ui"]["theme"])
@@ -278,19 +331,49 @@ class YTMApp(App):
         # Footer hides letter keys while the search box is focused)
         yield Static(self._shortcut_text(self._config["keys"], typing=True), id="shortcut-bar")
 
+    @staticmethod
+    def _visible(widget):
+        """Whether `widget` and every ancestor are displayed.
+
+        A child of a hidden pane still reports its own `display` as True;
+        focusing it would take the keyboard somewhere the user cannot see.
+        """
+        node = widget
+        while node is not None:
+            if not node.display:
+                return False
+            node = node.parent
+        return True
+
     def on_resize(self, event):
         """Small terminals lose the results table, playlists and lyrics."""
         size = event.size
         _trace(f"resize {size.width}x{size.height}")
         compact = size.width < self.COMPACT_WIDTH or size.height < self.COMPACT_HEIGHT
+        was_compact = self.screen.has_class("compact")
         self.screen.set_class(compact, "compact")
-        if compact and self.focused is not None and not self.focused.display:
+        if compact:
+            if not was_compact:
+                # entering the one-row layout: the queue shows unless a
+                # playlist draft is open, which must stay visible (UI-09/12)
+                prompt = self.query_one("#playlist-name", Input)
+                self._show_playlists_in_compact(prompt.display)
+        elif was_compact:
+            # back to the full layout: both panes are on screen again
+            self.query_one("#queue-pane").display = True
+            self.query_one("#playlists-pane").display = True
+        if compact and self.focused is not None and not self._visible(self.focused):
             self._focus_fallback()
 
+    def _show_playlists_in_compact(self, show):
+        """Swap the one middle row a compact layout has between the panes."""
+        self.query_one("#playlists-pane").display = show
+        self.query_one("#queue-pane").display = not show
+
     def _focus_fallback(self):
-        """Focus the search box, or the queue when the search pane is hidden."""
+        """Focus the search box, or the queue when that pane is hidden."""
         search = self.query_one("#search-input", Input)
-        if search.display:
+        if self._visible(search):
             search.focus()
         else:
             self.query_one("#queue-table", DataTable).focus()
@@ -404,6 +487,9 @@ class YTMApp(App):
     def on_daemon_event(self, message: DaemonEvent):
         if not self._accepts_results():
             return
+        # events are flowing again: the reconnect that answers a lost
+        # listener clears that error (UI-06)
+        self._clear_error("daemon")
         self._apply_event(message.event, message.data)
 
     # -- lifecycle -------------------------------------------------------
@@ -435,7 +521,14 @@ class YTMApp(App):
         self._lyrics_generation += 1
         with self._lyrics_lock:
             self._lyrics_pending = None
+        # queued control commands are dropped; a command already executing
+        # finishes but its completion is refused by `_accepts_results`
+        self._control_closed = True
+        with self._control_lock:
+            self._control_queue.clear()
+            self._queued_volume = None
         self.workers.cancel_group(self, "requests")
+        self.workers.cancel_group(self, "control")
         self.workers.cancel_group(self, "update")
         self.workers.cancel_group(self, "art")
         if self.client is not None:
@@ -561,9 +654,12 @@ class YTMApp(App):
         elif event == "queue_changed":
             self._queue_changed(data)
         elif event == "playback_error":
-            self._show_error("Could not play this track. Try another track or retry playback.")
+            self._show_error(
+                "Could not play this track. Try another track or retry playback.",
+                owner="playback",
+            )
         elif event == "error":
-            self._show_error((data or {}).get("error") or "daemon error")
+            self._show_error((data or {}).get("error") or "daemon error", owner="daemon")
 
     # -- helpers ---------------------------------------------------------
 
@@ -571,38 +667,78 @@ class YTMApp(App):
         # never consumes the key: this is the trace, the bindings do the work
         _trace(f"key {event.key!r} focus={getattr(self.focused, 'id', None)}")
 
-    def _show_error(self, message):
+    def _show_error(self, message, owner=None):
+        """Show `message` literally on the banner; `owner` says who clears it.
+
+        Backend strings can contain square brackets (playlist names, provider
+        messages), so the text is rendered as a Rich `Text` rather than through
+        the banner's markup parser. `owner` records the operation a later
+        success must belong to before it may hide this error (UI-06); the
+        newest error takes precedence and replaces whatever came before.
+        """
         _trace(f"error {message!r}")
+        self._error_owner = owner
         banner = self.query_one("#error-banner", Static)
-        banner.update(f"error: {message}")
+        banner.update(Text(f"error: {message}"))
         banner.display = True
 
-    def _clear_error(self):
+    def _clear_error(self, owner=None):
+        """Hide the banner. With `owner`, only when that operation owns it.
+
+        Called with no owner for an explicit dismissal or a state transition
+        that resolves every error; unrelated polling and refreshes pass their
+        own owner and leave somebody else's error alone.
+        """
+        if owner is not None and owner != self._error_owner:
+            return
+        self._error_owner = None
         banner = self.query_one("#error-banner", Static)
         banner.update("")
         banner.display = False
 
+    #: commands whose success proves the player is answering again: they own
+    #: one shared playback error, separate from search/playlist failures
+    PLAYBACK_COMMANDS: ClassVar = frozenset({
+        "play", "enqueue", "enqueue_next", "pause", "resume", "toggle", "next",
+        "prev", "seek", "volume", "queue_play", "queue_clear", "queue_remove",
+        "queue_move", "radio",
+    })
+
+    @classmethod
+    def _owner_of(cls, cmd):
+        return "playback" if cmd in cls.PLAYBACK_COMMANDS else cmd
+
     def _request(self, cmd, args=None):
-        """Send one *local* command (mpv over IPC, milliseconds) and surface
-        a `BackendError` as a visible banner. Anything that goes to the
-        network must use `_request_async` so the cursor never waits on it."""
+        """Send one *local* read (a status query) and surface a `BackendError`
+        as a visible banner. Control commands go through `_request_control`
+        so a slow player can never freeze the event loop (UI-10); anything
+        that goes to the network must use `_request_async`."""
         if self.client is None:
             return None
+        owner = self._owner_of(cmd)
         try:
             data = self.client.request(cmd, args)
-            self._clear_error()
-            return data
         except BackendError as exc:
-            self._show_error(str(exc))
+            self._show_error(str(exc), owner=owner)
             return None
+        self._clear_error(owner)
+        return data
 
-    def _request_async(self, cmd, args=None, then=None):
+    def _request_async(self, cmd, args=None, then=None, *, owner=None, accept=None, on_error=None):
         """Run a request on a worker thread; `then(data)` runs back on the
         message loop once it completes. Keeps search and playlist calls --
         the ones that hit YouTube -- off the UI thread (lyrics have their
-        own thread, see `_fetch_lyrics`)."""
+        own thread, see `_fetch_lyrics`).
+
+        `accept` is checked on the message loop before anything (including an
+        error) touches the UI; a stale callback is dropped whole. `owner`
+        decides which later success may clear an error this request reports,
+        and `on_error` lets the requester restore its own widget state.
+        """
         if self.client is None or not self._accepts_results():
             return
+        if owner is None:
+            owner = self._owner_of(cmd)
 
         _trace(f"request {cmd} {args!r}")
 
@@ -612,22 +748,98 @@ class YTMApp(App):
                 data = self.client.request(cmd, args)
             except BackendError as exc:
                 _trace(f"request {cmd} failed after {time.monotonic() - started:.1f}s: {exc}")
-                self.post_message(RequestDone(cmd, None, str(exc), then))
+                self.post_message(RequestDone(cmd, None, str(exc), then, owner, accept, on_error))
             else:
                 _trace(f"request {cmd} done in {time.monotonic() - started:.1f}s")
-                self.post_message(RequestDone(cmd, data, None, then))
+                self.post_message(RequestDone(cmd, data, None, then, owner, accept, on_error))
 
         self.run_worker(daemon_call(work), name=cmd, group="requests")
 
     def on_request_done(self, message: RequestDone):
         if not self._accepts_results():
             return
+        if message.accept is not None and not message.accept():
+            return  # superseded: not even its error may touch the UI
         if message.error is not None:
-            self._show_error(message.error)
+            self._show_error(message.error, owner=message.owner)
+            if message.on_error is not None:
+                message.on_error(message.error)
             return
-        self._clear_error()
+        self._clear_error(message.owner)
         if message.then is not None:
             message.then(message.data)
+
+    # -- control commands (UI-10) ----------------------------------------
+
+    def _request_control(self, cmd, args=None, then=None):
+        """Run one player command off the UI thread, in submission order.
+
+        A single drain worker executes queued commands one at a time, so
+        play/pause/skip/queue mutations keep their order without ever
+        blocking the keyboard. Rapid volume updates collapse into the newest
+        queued level. The worker is a daemon thread driven by a Textual
+        worker, so `quit` stays responsive and a blocked call cannot keep
+        the process alive.
+        """
+        if self.client is None or not self._accepts_results():
+            return
+        work = ControlWork(cmd, args, then, self._owner_of(cmd))
+        with self._control_lock:
+            if cmd == "volume" and self._queued_volume is not None:
+                # the newest level replaces the queued one, so stale volumes
+                # do not pile up behind a held call
+                self._queued_volume.args = args
+                self._queued_volume.then = then
+                return
+            self._control_queue.append(work)
+            if cmd == "volume":
+                self._queued_volume = work
+            start = not self._control_running
+            if start:
+                self._control_running = True
+        if start:
+            self.run_worker(
+                daemon_call(self._drain_control),
+                name="control", group="control", exit_on_error=False,
+            )
+
+    def _drain_control(self):
+        """The control worker: FIFO, one request at a time, until empty."""
+        while True:
+            with self._control_lock:
+                if self._control_closed or not self._control_queue:
+                    self._control_running = False
+                    return
+                work = self._control_queue.popleft()
+                if work is self._queued_volume:
+                    self._queued_volume = None
+            started = time.monotonic()
+            _trace(f"control {work.cmd} {work.args!r}")
+            try:
+                data = self.client.request(work.cmd, work.args)
+            except Exception as exc:
+                # a control command must never take the whole app down:
+                # anything the backend did not wrap is reported like a
+                # BackendError, and the next command still runs
+                error = exc if isinstance(exc, BackendError) else BackendError(
+                    f"{type(exc).__name__}: {exc}"
+                )
+                _trace(f"control {work.cmd} failed after {time.monotonic() - started:.1f}s: {error}")
+                self.post_message(ControlDone(work, None, str(error)))
+            else:
+                _trace(f"control {work.cmd} done in {time.monotonic() - started:.1f}s")
+                self.post_message(ControlDone(work, data, None))
+
+    def on_control_done(self, message: ControlDone):
+        if not self._accepts_results():
+            return
+        work = message.work
+        if message.error is not None:
+            self._show_error(message.error, owner=work.owner)
+            return
+        self._clear_error(work.owner)
+        if work.then is not None:
+            work.then(message.data)
 
     def _set_queue(self, data):
         self.query_one(QueuePane).set_queue(data)
@@ -637,8 +849,11 @@ class YTMApp(App):
         """Render a pushed queue change, at most once per redraw interval.
 
         The first change is drawn straight away; a burst behind it is drawn
-        once, when the interval is up, with whatever arrived last.
+        once, when the interval is up, with whatever arrived last. Every push
+        also rises the generation, so a snapshot requested earlier can no
+        longer repaint the queue when its answer arrives (UI-14).
         """
+        self._queue_generation += 1
         self._pending_queue = data
         if self._queue_timer is not None:
             return
@@ -653,56 +868,112 @@ class YTMApp(App):
     def _flush_queue(self):
         self._queue_timer = None
         data, self._pending_queue = self._pending_queue, None
-        if data is None:
+        if data is None or not self._accepts_results():
             return
         self._last_queue_render = time.monotonic()
         self._set_queue(data)
 
+    def _queue_snapshot(self, generation, data):
+        """Apply a requested queue snapshot unless a newer event was seen."""
+        if generation != self._queue_generation:
+            return
+        # a push still waiting to be flushed was observed before this
+        # snapshot was asked for, so the answer supersedes it
+        self._pending_queue = None
+        if self._queue_timer is not None:
+            self._queue_timer.stop()
+            self._queue_timer = None
+        self._set_queue(data)
+
     def _refresh_queue(self):
-        self._request_async("queue_get", then=self._set_queue)
+        self._queue_generation += 1
+        generation = self._queue_generation
+        self._request_async(
+            "queue_get",
+            then=lambda data: self._queue_snapshot(generation, data),
+            owner="queue",
+            accept=lambda: self._queue_generation == generation,
+        )
+
+    def _apply_playlists(self, data):
+        """Render a playlist listing, partial failures included (UI-07).
+
+        Local playlists stay usable when the account or network part failed,
+        and the failure is reported instead of a success message. A full
+        success clears a previous listing error.
+        """
+        pane = self.query_one(PlaylistsPane)
+        pane.set_playlists(data)
+        error = (data or {}).get("error")
+        if error:
+            self._show_error(error, owner="playlists")
+            return False
+        self._clear_error("playlists")
+        return True
+
+    def _request_playlists(self, cmd, then=None):
+        """Dispatch a listing request; only the newest may paint the pane."""
+        self._playlists_generation += 1
+        generation = self._playlists_generation
+        self._request_async(
+            cmd, then=then, owner="playlists",
+            accept=lambda: self._playlists_generation == generation,
+        )
 
     def _refresh_playlists(self):
-        def show(data):
-            self.query_one(PlaylistsPane).set_playlists(data)
-            if data and data.get("error"):
-                self._show_error(data["error"])
-
-        self._request_async("playlist_list", then=show)
+        self._request_playlists("playlist_list", then=self._apply_playlists)
 
     # -- search --------------------------------------------------------
 
     def on_input_changed(self, message: Input.Changed):
         """Search as you type: results appear after a short pause in typing,
-        no Enter needed. Enter still plays the first result."""
+        no Enter needed. Enter still plays the first result.
+
+        Every edit is a new generation (UI-01): once the input has moved on,
+        an outstanding request may not render results, show an error or start
+        playback -- even while the next request is still only debounced.
+        """
         if message.input.id != "search-input":
             return
         if self._search_timer is not None:
             self._search_timer.stop()
             self._search_timer = None
+        self._submit_intent = None
+        self._search_generation += 1
+        generation = self._search_generation
         query = message.value.strip()
+        self._search_query = query
         if len(query) < self.SEARCH_MIN_CHARS:
+            # nothing the table shows can belong to a query this short
+            self._results_query = None
+            self.query_one(SearchPane).set_results([])
             return
         self._search_timer = self.set_timer(
-            self.SEARCH_DEBOUNCE, lambda: self._live_search(query), name="live-search"
+            self.SEARCH_DEBOUNCE, lambda: self._live_search(generation, query), name="live-search"
         )
 
-    def _live_search(self, query):
-        """Fetch results for `query`; a slower, older search can never
-        overwrite a newer one (the sequence number guards that)."""
+    def _search_is_current(self, generation, query):
+        """Whether `(generation, query)` still describes the search box."""
+        return generation == self._search_generation and query == self._search_query
+
+    def _live_search(self, generation, query):
+        """Fetch results for `query`; only the current edit may show them."""
         self._search_timer = None
-        self._search_seq += 1
-        seq = self._search_seq
+        if not self._search_is_current(generation, query):
+            return
         self._request_async(
             "search", {"query": query},
-            then=lambda data: self._show_search_results(seq, query, data),
+            then=lambda data: self._show_search_results(generation, query, data),
+            accept=lambda: self._search_is_current(generation, query),
         )
 
-    def _show_search_results(self, seq, query, data):
-        if seq != self._search_seq:
-            return  # stale: the user has typed more since
+    def _show_search_results(self, generation, query, data):
+        if not self._search_is_current(generation, query):
+            return False  # stale: the user has edited since
         tracks = (data or {}).get("tracks") or []
         self.query_one(SearchPane).set_results(tracks)
         self._results_query = query
+        return True
 
     def on_input_submitted(self, message: Input.Submitted):
         if message.input.id == "playlist-name":
@@ -716,7 +987,7 @@ class YTMApp(App):
 
         def play_first(tracks):
             if tracks:
-                self._request("play", self._track_args(tracks[0]))
+                self._request_control("play", self._track_args(tracks[0]))
             # hand focus to the results: from here space toggles, arrows
             # seek and Enter/click plays, instead of typing into the box
             self.action_focus_results()
@@ -728,15 +999,22 @@ class YTMApp(App):
         if self._search_timer is not None:
             self._search_timer.stop()
             self._search_timer = None
-        self._search_seq += 1
-        seq = self._search_seq
+        generation = self._search_generation
+        # separate from display validity: an answer may still be worth showing
+        # without keeping permission to start playback (UI-01)
+        self._submit_intent = (generation, query)
 
         def show(data):
-            self._show_search_results(seq, query, data)
-            if seq == self._search_seq:
+            if not self._show_search_results(generation, query, data):
+                return
+            if self._submit_intent == (generation, query):
+                self._submit_intent = None
                 play_first((data or {}).get("tracks") or [])
 
-        self._request_async("search", {"query": query}, then=show)
+        self._request_async(
+            "search", {"query": query}, then=show,
+            accept=lambda: self._search_is_current(generation, query),
+        )
 
     def on_data_table_row_selected(self, message: DataTable.RowSelected):
         """Enter or a mouse click on any of the three tables."""
@@ -745,7 +1023,9 @@ class YTMApp(App):
         if table_id == "search-results":
             self.action_play_selected()
         elif table_id == "queue-table":
-            self._request("queue_play", {"index": message.cursor_row})
+            args = self.query_one(QueuePane).play_args(message.row_key.value)
+            if args is not None:
+                self._request_control("queue_play", args)
         elif table_id == "playlists-table":
             pane = self.query_one(PlaylistsPane)
             if pane.new_selected():
@@ -756,12 +1036,15 @@ class YTMApp(App):
                 return
             playlist_id = pane.selected_playlist_id()
             if playlist_id is not None:
+                generation = self._queue_generation
                 self._request_async(
-                    "playlist_play", {"playlist_id": playlist_id}, then=self._set_queue,
+                    "playlist_play", {"playlist_id": playlist_id},
+                    then=lambda data: self._queue_snapshot(generation, data),
+                    accept=lambda: self._queue_generation == generation,
                 )
 
     def on_now_playing_seek_requested(self, message: NowPlaying.SeekRequested):
-        self._request("seek", {"seconds": message.seconds, "absolute": True})
+        self._request_control("seek", {"seconds": message.seconds, "absolute": True})
 
     # -- actions ---------------------------------------------------------
 
@@ -787,9 +1070,9 @@ class YTMApp(App):
             self._disarm()  # Escape while choosing a playlist cancels the add
             return
         table = self.query_one("#search-results", DataTable)
-        if not table.display:
-            # compact layout: the results table is hidden, so the queue is
-            # the list to hand focus to
+        if not self._visible(table):
+            # compact or hidden search: the results are not on screen, so the
+            # queue is the list to hand focus to
             self.query_one("#queue-table", DataTable).focus()
             return
         table.focus()
@@ -803,9 +1086,23 @@ class YTMApp(App):
         _trace(f"focus -> {widget_id}")
         if widget_id in ("search-results", "queue-table"):
             self._pick_pane = widget_id
+        if widget_id not in ("playlists-table", "playlist-name"):
+            # compact layouts show one middle pane; focus leaving the
+            # playlists puts the queue back (UI-12)
+            self._restore_compact_queue()
         self.query_one("#shortcut-bar", Static).update(
             self._shortcut_text(self._config["keys"], typing=widget_id == "search-input")
         )
+
+    def _restore_compact_queue(self):
+        """Put the queue back on the one middle row compact layouts have."""
+        if not self.screen.has_class("compact"):
+            return
+        playlists_pane = self.query_one("#playlists-pane")
+        if not playlists_pane.display:
+            return
+        playlists_pane.display = False
+        self.query_one("#queue-pane").display = True
 
     def action_leave_search(self):
         """Down in the search box: hand focus to the lists, as Escape does.
@@ -814,16 +1111,40 @@ class YTMApp(App):
             self.action_focus_results()
 
     def _create_playlist(self, title):
+        """Create the playlist named in the prompt, keeping the draft safe.
+
+        The prompt is disabled while the request is in flight, so a second
+        Enter cannot create a duplicate. It only closes and clears on
+        confirmed success; a failure leaves the exact text editable and
+        focused (UI-09). A completion belongs to the prompt session it was
+        submitted from, so a late answer can never erase a newer draft.
+        """
         pane = self.query_one(PlaylistsPane)
-        pane.close_prompt()
-        if not title.strip():
+        if pane.prompt_pending():
+            return  # a create from this draft is already in flight
+        session = pane.prompt_session()
+        title = title.strip()
+        if not title:
+            self._show_error("a playlist needs a name", owner="playlist_create")
             return
+        pane.set_prompt_pending(True)
 
         def created(data):
+            if pane.prompt_session() == session:
+                pane.close_prompt()
             self.notify(f"Created playlist {data.get('title') or title}")
             self._refresh_playlists()
 
-        self._request_async("playlist_create", {"title": title.strip()}, then=created)
+        def failed(message):
+            if pane.prompt_session() != session:
+                return  # cancelled (or a newer draft took over): leave it be
+            pane.set_prompt_pending(False)
+            pane.focus_prompt()
+
+        self._request_async(
+            "playlist_create", {"title": title},
+            then=created, on_error=failed, owner="playlist_create",
+        )
 
     @staticmethod
     def _track_args(track):
@@ -857,59 +1178,104 @@ class YTMApp(App):
         args = self._selected_track_args()
         if args is None:
             return
-        self._request("play", args)
+        self._request_control("play", args)
 
     def action_enqueue_selected(self):
         args = self._selected_track_args()
         if args is None:
             return
-        self._request("enqueue", args)
+        self._request_control("enqueue", args)
 
     def action_play_next_selected(self):
-        """Put the highlighted song right after the one playing."""
+        """Put the highlighted song right after the one playing.
+
+        The title is captured now, so the toast names the track that was
+        actually enqueued even if the cursor moves before the answer; the
+        toast itself only runs on success (UI-05).
+        """
         args = self._selected_track_args()
         if args is None:
             return
-        self._request("enqueue_next", args)
-        self.notify(f"Up next: {args.get('title') or 'track'}", timeout=3)
+        title = args.get("title") or "track"
+        self._request_control(
+            "enqueue_next", args,
+            then=lambda data: self.notify(f"Up next: {title}", timeout=3),
+        )
 
     def action_toggle(self):
-        self._request("toggle")
+        self._request_control("toggle")
 
     def action_next(self):
-        self._request("next")
+        self._request_control("next")
 
     def action_prev(self):
-        self._request("prev")
+        self._request_control("prev")
 
     def action_seek_back(self):
-        self._request("seek", {"seconds": -SEEK_STEP})
+        self._request_control("seek", {"seconds": -SEEK_STEP})
 
     def action_seek_forward(self):
-        self._request("seek", {"seconds": SEEK_STEP})
+        self._request_control("seek", {"seconds": SEEK_STEP})
 
     def action_volume_up(self):
-        level = max(0, min(100, self._volume + VOLUME_STEP))
-        data = self._request("volume", {"level": level})
-        if data is not None:
-            self._volume = data.get("volume", level)
+        self._set_volume(self._volume + VOLUME_STEP)
 
     def action_volume_down(self):
-        level = max(0, min(100, self._volume - VOLUME_STEP))
-        data = self._request("volume", {"level": level})
+        self._set_volume(self._volume - VOLUME_STEP)
+
+    def _set_volume(self, level):
+        """Apply `level` now and confirm it off the UI thread.
+
+        `_volume` moves immediately so repeated presses accumulate even
+        while the player is still answering the first one; the completion
+        reconciles it with what the player actually reports. Rapid updates
+        coalesce into one queued command, so the last level still wins.
+        """
+        level = max(0, min(100, level))
+        self._volume = level
+        self._request_control(
+            "volume", {"level": level},
+            then=lambda data: self._volume_applied(level, data),
+        )
+
+    def _volume_applied(self, level, data):
         if data is not None:
             self._volume = data.get("volume", level)
 
     def action_focus_playlists(self):
-        self.query_one("#playlists-table", DataTable).focus()
+        self._focus_playlists()
+
+    def _focus_playlists(self):
+        """Focus the playlist table, switching compact layouts to it.
+
+        A visible table inside the hidden playlists pane is not a valid
+        destination (UI-12): in a compact terminal the one middle row is
+        swapped from the queue to the playlists, and an action that cannot
+        reach it at all keeps focus on a visible control and explains why.
+        """
+        table = self.query_one("#playlists-table", DataTable)
+        if not self._visible(table) and self.screen.has_class("compact"):
+            self._show_playlists_in_compact(True)
+        if not self._visible(table):
+            self._show_error(
+                "playlists are not shown in this layout; enlarge the terminal to manage them",
+                owner="layout",
+            )
+            return False
+        table.focus()
+        self._clear_error("layout")
+        return True
 
     def action_refresh_mixes(self):
         """Ask YouTube for today's mixes again. Until then a mix plays the
-        same tracklist every time, so what the pane showed is what you get."""
+        same tracklist every time, so what the pane showed is what you get.
+
+        A partial answer (local playlists plus an account/network error) is
+        rendered and reported, not announced as a full success (UI-07)."""
         def done(data):
-            self.query_one(PlaylistsPane).set_playlists(data)
-            self.notify("Mixes refreshed", timeout=3)
-        self._request_async("mixes_refresh", then=done)
+            if self._apply_playlists(data):
+                self.notify("Mixes refreshed", timeout=3)
+        self._request_playlists("mixes_refresh", then=done)
 
     def action_add_to_playlist(self):
         """Two-step add: `a` on a song arms it and jumps to the playlists pane;
@@ -925,12 +1291,15 @@ class YTMApp(App):
             return
         track_args = self._selected_track_args()
         if track_args is None:
-            self._show_error("nothing to add: highlight a track or play one")
+            self._show_error("nothing to add: highlight a track or play one", owner="playlist_add")
             return
+        previous = self.focused
+        if not self._focus_playlists():
+            return  # compact: explained, and the song is not armed for a
+                    # pane the user cannot see
         self._armed = track_args
-        self._return_to = self.focused
+        self._return_to = previous
         pane.arm(track_args.get("title") or "track")
-        self.query_one("#playlists-table", DataTable).focus()
 
     def _in_playlists(self):
         return getattr(self.focused, "id", None) == "playlists-table"
@@ -940,7 +1309,7 @@ class YTMApp(App):
         self.query_one(PlaylistsPane).disarm()
         target = getattr(self, "_return_to", None)
         self._return_to = None
-        if target is not None and target.is_attached:
+        if target is not None and target.is_attached and self._visible(target):
             target.focus()
 
     def _add_armed_to_highlighted(self):
@@ -949,11 +1318,11 @@ class YTMApp(App):
         pane = self.query_one(PlaylistsPane)
         playlist_id = pane.selected_playlist_id()
         if playlist_id is None:
-            self._show_error("highlight a playlist first, then press a")
+            self._show_error("highlight a playlist first, then press a", owner="playlist_add")
             return
         track_args = self._armed or self._selected_track_args()
         if track_args is None:
-            self._show_error("nothing to add: highlight a track or play one")
+            self._show_error("nothing to add: highlight a track or play one", owner="playlist_add")
             return
 
         def added(data):
@@ -962,7 +1331,11 @@ class YTMApp(App):
             # number that the add already reported is a whole round of
             # requests for nothing
             self.notify(f"Added {track_args.get('title') or 'track'} to {pane.title_of(playlist_id) or 'playlist'}")
-            pane.set_count(playlist_id, (data or {}).get("track_count"), added=1)
+            data = data or {}
+            # `added` is the known net membership increase; it is absent (or
+            # zero) for an idempotent like, so the count never grows just
+            # because a request succeeded (UI-08)
+            pane.set_count(playlist_id, data.get("track_count"), added=int(data.get("added") or 0))
 
         self._request_async(
             "playlist_add",

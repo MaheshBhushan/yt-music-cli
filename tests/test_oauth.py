@@ -1,5 +1,6 @@
 """Tests for OAuth sign-in (the `ytm auth` default): device-code flow and dual auth-kind support."""
 import json
+import sys
 
 import pytest
 
@@ -78,13 +79,15 @@ def test_oauth_setup_stores_token_at_mode_0600(tmp_path, monkeypatch):
 
     auth.oauth_setup(path=path, credentials_factory=_FakeCredentials, sleep=lambda s: None)
 
-    assert path.stat().st_mode & 0o777 == 0o600
+    if sys.platform != "win32":  # POSIX modes are not Windows ACLs
+        assert path.stat().st_mode & 0o777 == 0o600
     token = json.loads(path.read_text())
     assert token["access_token"] == "at-1"
     assert token["refresh_token"] == "rt-1"
 
     client_path = auth._oauth_client_path(path)
-    assert client_path.stat().st_mode & 0o777 == 0o600
+    if sys.platform != "win32":  # POSIX modes are not Windows ACLs
+        assert client_path.stat().st_mode & 0o777 == 0o600
     stored = json.loads(client_path.read_text())
     assert stored == {"client_id": "cid", "client_secret": "csecret"}
 

@@ -2,19 +2,41 @@ name: tests
 
 on:
   push:
-    branches: [main]
+    branches: [main, "ci/windows-validation/**"]
   pull_request:
 
 jobs:
   pytest:
-    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
+        os: [ubuntu-latest]
         python-version: ["3.11", "3.12", "3.13"]
+        include:
+          # Native Windows coverage for the named-pipe transport, job-object
+          # process ownership, msvcrt locking and the PowerShell updater.
+          # Oldest and newest supported Python first; expand once stable.
+          - os: windows-latest
+            python-version: "3.11"
+          - os: windows-latest
+            python-version: "3.13"
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.python-version }}
-      - run: pip install -e '.[dev]'
-      - run: pytest -q
+      - run: pip install -e '.[dev]' pytest-timeout
+      - name: Install mpv for native decoding smoke test
+        if: runner.os == 'Windows'
+        run: choco install mpv --yes --no-progress
+      - run: pytest -v --timeout=180
+      - name: Windows PowerShell 5.1 updater tests
+        if: runner.os == 'Windows' && !cancelled()
+        env:
+          YTM_TEST_POWERSHELL: powershell.exe
+        run: python -m pytest -q tests/test_windows_update.py
+      - name: Native Windows locking and smoke results
+        if: runner.os == 'Windows' && !cancelled()
+        run: python -m pytest -v --timeout=60 tests/test_windows_ipc_native.py tests/test_windows_process_native.py tests/test_windows_locking_native.py tests/test_windows_smoke.py

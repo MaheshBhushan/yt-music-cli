@@ -9,6 +9,7 @@ the CLI expects. No real mpv, no network.
 import json
 import os
 import socket
+import sys
 import threading
 import time
 
@@ -131,6 +132,11 @@ class FakeMpv:
 
 @pytest.fixture
 def mpv(tmp_path):
+    if sys.platform.startswith("win"):
+        pytest.skip(
+            "Unix-socket fixture; the Windows pipe transport is covered by "
+            "tests/test_windows_ipc_native.py in the Windows job"
+        )
     fake = FakeMpv(str(tmp_path / "mpv.sock"))
     yield fake
     fake.close()
@@ -148,6 +154,7 @@ def test_connects_to_a_running_mpv_without_spawning(mpv):
         assert p.get("volume") == 70.0
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="Unix-socket startup fixture; native mpv startup covered separately")
 def test_spawns_mpv_when_nothing_listens_and_waits_for_the_socket(tmp_path):
     path = str(tmp_path / "mpv.sock")
     spawned = []
@@ -225,10 +232,12 @@ def test_mpv_args_omit_what_is_not_configured():
 
 def test_default_ipc_path_is_a_socket_on_posix_and_a_pipe_on_windows(monkeypatch):
     monkeypatch.setenv("XDG_RUNTIME_DIR", "/run/user/1000")
-    assert default_ipc_path("linux") == "/run/user/1000/ytm/mpv.sock"
+    from pathlib import Path
+    assert Path(default_ipc_path("linux")) == Path("/run/user/1000/ytm/mpv.sock")
     assert default_ipc_path("win32") == r"\\.\pipe\ytm-mpv"
     monkeypatch.delenv("XDG_RUNTIME_DIR")
-    assert default_ipc_path("linux").endswith("/mpv.sock")
+    monkeypatch.setattr(os, "getuid", lambda: 1000, raising=False)
+    assert Path(default_ipc_path("linux")).name == "mpv.sock"
 
 
 # -- loading and transport --------------------------------------------------
@@ -535,7 +544,7 @@ def test_spawning_a_missing_mpv_explains_instead_of_reporting_errno(monkeypatch)
     """The bare OSError ("[Errno 2] No such file or directory: 'mpv'") is the
     first thing a fresh `uv tool install ytm` shows, and it does not say that
     mpv is a separate program, let alone how to get one."""
-    monkeypatch.setattr(player_mod.shutil, "which", lambda tool: None)
+    monkeypatch.setattr(player_mod, "find_mpv", lambda *args, **kwargs: None)
     with pytest.raises(PlayerError) as excinfo:
         spawn_mpv(["mpv", "--idle=yes"])
     assert "[Errno 2]" not in str(excinfo.value)
@@ -569,6 +578,7 @@ class _Process:
         return self.returncode
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="Unix-socket startup fixture; native mpv startup covered separately")
 def test_an_mpv_that_is_merely_slow_is_waited_for(tmp_path, monkeypatch):
     """mpv's first start after installation took 11 s on macOS -- one second
     past the old 10 s limit -- so ytm gave up on an mpv that was coming up

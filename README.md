@@ -51,7 +51,7 @@ pip install -e '.[dev]'       # or '.[dev,login]'
 
 ## Usage
 
-The TUI is `ytm` with no arguments. Results appear as you type; Enter plays the first one. Every key is listed in the bar at the bottom, and everything is clickable: results, queue rows, playlists, the progress bar, the shortcuts. Your daily mixes (Supermix, Discover Mix, ...) sit below your playlists. In a terminal under 100 columns or 24 rows, such as a tmux pane, the layout collapses to the search box, the queue and the player strip.
+The TUI is `ytm` with no arguments. Results appear as you type; Enter plays the first one. Every key is listed in the bar at the bottom, and everything is clickable: results, queue rows, playlists, the progress bar, the shortcuts. Your daily mixes (Supermix, Discover Mix, ...) sit below your playlists. In a terminal under 100 columns or 24 rows, such as a tmux pane, the layout collapses to the search box, the queue and the player strip; `l` switches the middle row to your playlists, and leaving them brings the queue back.
 
 | Key | Action |
 |---|---|
@@ -65,7 +65,7 @@ The TUI is `ytm` with no arguments. Results appear as you type; Enter plays the 
 | `←` `→` | Seek 5 s |
 | `+` `-` | Volume (`=` also raises it). This is the system output volume, so it matches the tray and the media keys; see `[audio] control` |
 | `a` | Add the selected song to a playlist: `a`, pick the list with `↑` `↓`, `a` or `Enter` |
-| `l` | Focus playlists |
+| `l` | Focus playlists (in a compact terminal, switches the middle row to them) |
 | `r` | Refresh your mixes (a mix keeps the same tracklist until you do) |
 | `Tab` | Cycle panes |
 | `e` | Exit and stop this session’s player |

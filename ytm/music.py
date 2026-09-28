@@ -14,6 +14,8 @@ import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
+from ytm.paths import application_path
+
 import requests
 import ytmusicapi
 from ytmusicapi.exceptions import YTMusicError, YTMusicServerError
@@ -103,9 +105,7 @@ _CLIENT = {
 
 #: Where the visitor id YouTube handed out is kept, so a one-shot CLI run
 #: does not have to fetch the home page to learn it again.
-VISITOR_PATH = Path(
-    os.environ.get("XDG_STATE_HOME", os.path.expanduser("~/.local/state"))
-) / "ytm" / "visitor.json"
+VISITOR_PATH = application_path("state", "visitor.json")
 
 #: how long a stored visitor id is reused before it is fetched again
 VISITOR_TTL = 24 * 60 * 60

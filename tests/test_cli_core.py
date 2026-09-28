@@ -29,6 +29,7 @@ class FakePlayer:
         self.paused = False
         self.vol = 70.0
         self.pos = 134.0
+        self._next_id = 0
 
     def __enter__(self):
         return self
@@ -44,7 +45,11 @@ class FakePlayer:
         if current:
             for e in self.entries:
                 e["current"] = False
-        self.entries.append({"url": url, "video_id": video_id, "title": title, "current": current})
+        self._next_id += 1
+        self.entries.append({
+            "id": self._next_id, "url": url, "video_id": video_id,
+            "title": title, "current": current,
+        })
 
     def play(self, url, title=None):
         self.calls.append(("play", url, title))
@@ -75,9 +80,9 @@ class FakePlayer:
         return list(self.entries)
 
     def current_entry_id(self):
-        """mpv's id for the playing entry; stable per test, never recorded."""
+        """mpv's id for the playing entry; stable across moves in a test."""
         cur = self._current()
-        return None if cur is None else self.entries.index(cur) + 1
+        return None if cur is None else cur["id"]
 
     def queued_ids(self):
         return {e["video_id"] for e in self.entries}

@@ -514,8 +514,6 @@ class SessionStore:
     def _os_lock(fd, acquire):
         if os.name == "nt":
             import msvcrt
-            if os.fstat(fd).st_size == 0:
-                os.write(fd, b"0")
             os.lseek(fd, 0, os.SEEK_SET)
             msvcrt.locking(fd, msvcrt.LK_NBLCK if acquire else msvcrt.LK_UNLCK, 1)
         else:

@@ -1,5 +1,22 @@
 # Changelog
 
+## Unreleased
+
+- Classify Windows cookie-copy, locking and decryption failures without claiming a signed-in browser is logged out; add automatic, allowlisted authentication diagnostic logs.
+- Fix Windows pipe read/write deadlock with overlapped I/O and remove the pre-lock initialization race in state, playlist and credential sidecar locks.
+
+- Windows IPC is deadline-aware and cancelable: named-pipe reads run through one reader thread per connection and `CancelIoEx`, so a player that stops answering fails within the command timeout instead of hanging forever. A late reply cannot satisfy a later command; closing a connection cancels and joins its reader.
+- Windows playback children are owned by a kill-on-close Job Object: mpv, yt-dlp and any JavaScript runtime are created suspended, assigned to the session job, then resumed, so closing or crashing the TUI removes the whole owned tree. Unrelated processes, the login browser and the detached updater are never affected.
+- CI runs the suite natively on Windows (Python 3.11 and 3.13) with named-pipe, job-object, `msvcrt` locking and PowerShell updater tests, alongside the existing Linux matrix.
+- Added Windows Core Audio master-volume control with mpv fallback when no endpoint is available.
+- Added Windows application-data paths and explicit `ytm migrate-paths [--apply]` migration; legacy data remains readable and originals are retained.
+- Added native Windows locking, silent mpv decoding and disposable-installation PowerShell 5.1 update smoke tests. Desktop Google login and audible-output validation remain separate acceptance checks.
+- The TUI no longer lets slower, older work overwrite what you are doing: editing or clearing the search box invalidates in-flight results and their play-first intent, a queue refresh cannot restore a stale queue or move a deliberate selection to another song, and a failed playlist creation keeps the name you typed editable instead of discarding it.
+- Playback controls no longer freeze the interface: play/pause/skip/seek/volume commands run off the UI thread in order, rapid volume presses collapse into one update, and quitting during a slow command stays responsive.
+- Failures stop reporting success: a failed "play next" shows only the error, a partial mixes refresh keeps local playlists and reports what failed, and playlist counts no longer grow for an idempotent like. Unrelated successful work no longer clears a playback error, and provider error text is shown literally.
+- Now-playing and artwork stay with the current track: a new song starts with an unknown duration instead of inheriting the previous one's seek range, queue labels fit their terminal cells (CJK and emoji included), and a cover still downloading shows a placeholder rather than the previous track's art.
+- In a compact terminal, `l` switches the middle row to the playlists and keyboard focus can no longer land on a hidden pane; resizing keeps the highlighted search result selected.
+
 ## 0.10.1 — 2026-09-27
 
 - Clicking a playlist, queue entry or search result now selects it exactly once. Duplicate click dispatch previously issued a second playback request, stopping the first stream-resolution attempt and restarting it. Repeated clicks and keyboard Enter still work normally.

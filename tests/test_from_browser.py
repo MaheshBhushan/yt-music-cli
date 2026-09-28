@@ -1,5 +1,6 @@
 """Tests for `ytm auth --from-browser` (T15): cookie extraction from a local browser."""
 import json
+import sys
 
 import pytest
 
@@ -59,7 +60,8 @@ def test_from_browser_writes_headers_with_authuser_and_mode_0600(tmp_path, monke
 
     auth.from_browser("chrome", path=path, client_factory=_fake_client_ok, config=_config())
 
-    assert path.stat().st_mode & 0o777 == 0o600
+    if sys.platform != "win32":  # POSIX modes are not Windows ACLs
+        assert path.stat().st_mode & 0o777 == 0o600
     headers = json.loads(path.read_text())
     assert headers["x-goog-authuser"] == "0"
     assert "SID=sid-value" in headers["cookie"]
@@ -165,7 +167,7 @@ def test_windows_chromium_decrypt_failure_gets_the_app_bound_hint(tmp_path, monk
         auth.from_browser("chrome", path=path, client_factory=_fake_client_ok, config=_config())
     message = str(excinfo.value)
     assert "App-Bound Encryption" in message
-    assert "--from-browser firefox" in message and "'ytm auth' signs in with Google" in message
+    assert "--from-browser firefox" in message and "--method playwright" in message
 
 
 @pytest.mark.parametrize("reason", ["Failed to decrypt with DPAPI", "FAILED TO DECRYPT WITH DPAPI"])
@@ -182,7 +184,7 @@ def test_windows_dpapi_failure_gets_browser_alternatives(tmp_path, monkeypatch, 
     message = str(excinfo.value)
     assert "could not be decrypted" in message
     assert "--from-browser firefox" in message
-    assert "'ytm auth'" in message
+    assert "--method playwright" in message
     assert not path.exists()
 
 
@@ -327,7 +329,7 @@ def test_fork_profile_option_selects_one_profile_directory(tmp_path, monkeypatch
     header, _ = auth._extract_browser_cookie_header("helium", profile="Profile 1")
     assert "__Secure-3PAPISID=b" in header
     assert auth._extract_browser_cookie_header("helium", profile="Profile 7") == (
-        None, 'profile "Profile 7" not found'
+        None, 'selected profile not found; check --profile'
     )
 
 

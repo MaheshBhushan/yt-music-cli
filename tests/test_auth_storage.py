@@ -34,8 +34,9 @@ def test_a_new_record_gets_a_private_directory_and_file(tmp_path):
     path = tmp_path / "cfg" / "session.json"
     store = SessionStore(path)
     store.save(browser_record(), expected_revision=None)
-    assert stat.S_IMODE(os.stat(tmp_path / "cfg").st_mode) == 0o700
-    assert stat.S_IMODE(os.stat(path).st_mode) == 0o600
+    if os.name != "nt":
+        assert stat.S_IMODE(os.stat(tmp_path / "cfg").st_mode) == 0o700
+        assert stat.S_IMODE(os.stat(path).st_mode) == 0o600
     assert not list((tmp_path / "cfg").glob(".*tmp*"))
 
 

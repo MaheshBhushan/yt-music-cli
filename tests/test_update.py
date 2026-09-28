@@ -99,7 +99,8 @@ def test_upgrade_commands_per_installer():
     assert update.upgrade_commands("editable") == []
 
 
-def test_upgrade_is_only_done_when_the_new_version_is_really_installed():
+def test_upgrade_is_only_done_when_the_new_version_is_really_installed(monkeypatch):
+    monkeypatch.setattr(update.sys, "platform", "linux")
     ok_run = lambda cmd, capture_output, text: subprocess.CompletedProcess(cmd, 0, stdout="Requirement already satisfied\n", stderr="")
     ok, text = update.upgrade(kind="pipx", run=ok_run, target="0.9.0", verify=lambda: "0.8.0")
     assert not ok and "0.8.0 is still installed" in text and "0.9.0" in text
@@ -145,7 +146,8 @@ def test_upgrade_without_pip_or_uv_explains_itself(monkeypatch):
     assert not ok and "uv pip install" in text and sys.executable in text
 
 
-def test_upgrade_runs_each_command_and_stops_on_failure():
+def test_upgrade_runs_each_command_and_stops_on_failure(monkeypatch):
+    monkeypatch.setattr(update.sys, "platform", "linux")
     ran = []
     def run(cmd, capture_output, text):
         ran.append(cmd)

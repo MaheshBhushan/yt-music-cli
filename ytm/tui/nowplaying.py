@@ -5,6 +5,7 @@ import io
 import urllib.request
 from dataclasses import dataclass
 
+from rich.text import Text
 from textual.containers import Container, Horizontal, Vertical
 from textual.markup import escape
 from textual.message import Message
@@ -69,7 +70,17 @@ class QueueSummaryLayout:
 
 
 def _truncate(title, width=QUEUE_COLUMN_WIDTH):
-    return title if len(title) <= width else title[:width - 1] + "…"
+    """Truncate to `width` terminal cells, the ellipsis included (UI-11).
+
+    String length is not display width: CJK glyphs take two cells each, and
+    a naive slice would overflow the column and crowd the next one. Rich's
+    truncation measures cells and never splits a wide glyph.
+    """
+    if width <= 0:
+        return ""
+    text = Text(str(title), no_wrap=True, overflow="ellipsis")
+    text.truncate(width, overflow="ellipsis")
+    return text.plain
 
 
 #: cells kept free on the queue row for the "vol NNN" label plus its margin
@@ -133,6 +144,7 @@ class AlbumArt(Container):
         self._fetcher = fetcher
         self._renderer = ART_RENDERERS.get(renderer, ART_RENDERERS[DEFAULT_ART])
         self._url = None
+        self._pending_url = None  # a different download is already running
         self._cache = {}
         self._image_widget = None
         if self._renderer is None:
@@ -150,7 +162,14 @@ class AlbumArt(Container):
         return self._image_widget.image if self._image_widget is not None else None
 
     def show(self, url):
-        """Display the cover at `url`; blank when there is none."""
+        """Display the cover at `url`; blank when there is none.
+
+        A different, uncached URL blanks the previous cover immediately: the
+        new title must not sit beside the old track's art while the download
+        runs (UI-15). A fetch already in flight for the same URL is not
+        started twice, cached art still swaps instantly, and a failed
+        download leaves the placeholder for the current track.
+        """
         self._url = url or None
         if self._renderer is None:
             return
@@ -158,8 +177,14 @@ class AlbumArt(Container):
             self._set_image(None)
             return
         if url in self._cache:
+            if self._pending_url == url:
+                self._pending_url = None
             self._set_image(self._cache[url])
             return
+        if url == self._pending_url:
+            return  # that download is already running; keep the placeholder
+        self._pending_url = url
+        self._set_image(None)
 
         def work():
             try:
@@ -177,6 +202,8 @@ class AlbumArt(Container):
         self.app.run_worker(daemon_call(work), name=f"art:{url}", group="art")
 
     def _arrived(self, url, image):
+        if url == self._pending_url:
+            self._pending_url = None
         if image is not None:
             if len(self._cache) >= ART_CACHE_SIZE:
                 self._cache.pop(next(iter(self._cache)))
@@ -214,6 +241,10 @@ class NowPlaying(Vertical):
         self._position = 0
         self._clock_text = None  # last "m:ss / m:ss" written; see on_position
         self._video_id = None
+        self._entry_id = None
+        #: the queued entry every timing field on this pane belongs to: a
+        #: position update from any other entry is ignored (UI-04)
+        self._entry_identity = None
         self._title = "nothing playing"
         self._paused = False
         self._queue_tracks = []
@@ -257,8 +288,15 @@ class NowPlaying(Vertical):
 
     def on_track_changed(self, data):
         data = data or {}
+        identity = self._identity_of(data)
+        if identity != self._entry_identity:
+            # a new entry (or an idle player) starts from a clean clock:
+            # the previous track's duration must never become its seek limit
+            self._entry_identity = identity
+            self._reset_timing(data)
         self._title = data.get("title") or "Unknown Title"
         self._video_id = data.get("video_id")
+        self._entry_id = data.get("entry_id")
         self._render_track_line()
         artist = data.get("artist") or ""
         album = data.get("album") or ""
@@ -266,6 +304,28 @@ class NowPlaying(Vertical):
             escape(" · ".join(part for part in (artist, album) if part))
         )
         self.query_one(AlbumArt).show(data.get("thumbnail"))
+
+    @staticmethod
+    def _identity_of(data):
+        """The entry a position update must belong to: entry id, else video."""
+        entry = (data or {}).get("entry_id")
+        return entry if entry is not None else (data or {}).get("video_id")
+
+    def _reset_timing(self, data=None):
+        """Forget the previous entry's elapsed time, duration and seek range."""
+        self._position = 0
+        self._duration_seconds = int((data or {}).get("duration_seconds") or 0)
+        self._clock_text = None
+        self.query_one("#now-playing-progress", ProgressBar).update(
+            total=self._duration_seconds or None, progress=0
+        )
+        self._write_clock(0, self._duration_seconds)
+
+    def _write_clock(self, position, duration):
+        clock = f"{_format_time(position)} / {_format_time(duration)}"
+        if clock != self._clock_text:
+            self._clock_text = clock
+            self.query_one("#now-playing-time", Static).update(clock)
 
     def on_state_changed(self, data):
         self._paused = bool((data or {}).get("paused"))
@@ -276,19 +336,36 @@ class NowPlaying(Vertical):
 
     def on_position(self, data):
         data = data or {}
+        if not self._position_is_current(data):
+            return  # a late position from the entry that just ended
         position = data.get("position") or 0
-        duration = data.get("duration_seconds") or self._duration_seconds
+        duration = data.get("duration_seconds")
+        if duration:
+            # cache a known duration only while the same entry is playing
+            self._duration_seconds = duration
         self._position = position
-        self._duration_seconds = duration
         bar = self.query_one("#now-playing-progress", ProgressBar)
-        bar.update(total=duration or None, progress=position)
+        bar.update(total=self._duration_seconds or None, progress=position)
         # positions now arrive several times a second (timed lyrics need
         # them); the clock only reads in whole seconds, so it is rewritten
         # only when its text would differ
-        clock = f"{_format_time(position)} / {_format_time(duration)}"
-        if clock != self._clock_text:
-            self._clock_text = clock
-            self.query_one("#now-playing-time", Static).update(clock)
+        self._write_clock(position, self._duration_seconds)
+
+    def _position_is_current(self, data):
+        """Whether a position payload belongs to the entry on screen.
+
+        The entry id is preferred (one song may be queued twice); the video
+        id is the fallback for payloads that only carry that. An update is
+        accepted while either identity is unknown, which keeps the first
+        event of a session and minimal payloads working.
+        """
+        entry = (data or {}).get("entry_id")
+        if entry is not None and self._entry_id is not None:
+            return entry == self._entry_id
+        video = (data or {}).get("video_id")
+        if video is not None and self._video_id is not None:
+            return video == self._video_id
+        return True
 
     def set_volume(self, level):
         self.query_one("#now-playing-volume", Static).update(f"vol {int(level)}")
