@@ -100,6 +100,10 @@ class FakePlayer:
             "count": len(self.entries),
         }
 
+    def has_media(self):
+        """A file is loaded exactly when an entry is current."""
+        return self._current() is not None
+
     def volume(self, level=None):
         if level is not None:
             self.vol = max(0, min(100, level))
@@ -395,26 +399,37 @@ def test_local_commands_never_import_the_catalogue(fake, monkeypatch):
 
     monkeypatch.delitem(sys.modules, "ytm.music", raising=False)
     monkeypatch.delitem(sys.modules, "ytmusicapi", raising=False)
+    fake._add("https://music.youtube.com/watch?v=seed", "Seed", True)
     for argv in (["pause"], ["resume"], ["toggle"], ["next"], ["prev"], ["volume", "40"], ["seek", "-5"], ["clear"], ["shuffle"]):
         assert run(*argv)[0] == 0
     assert "ytmusicapi" not in sys.modules
 
 
 def test_transport_commands_map_to_player_calls(fake):
-    run("pause"); run("resume"); run("toggle"); run("next"); run("prev"); run("stop")
-    run("seek", "-5"); run("seek", "90", "--to"); run("clear"); run("shuffle")
+    fake._add("https://music.youtube.com/watch?v=seed", "Seed", True)
+    run("pause"); run("resume"); run("toggle"); run("next"); run("prev")
+    run("seek", "-5"); run("seek", "90", "--to")
+    run("stop"); run("clear"); run("shuffle")
     assert fake.calls == [
-        ("pause",), ("resume",), ("toggle",), ("next",), ("prev",), ("stop",),
-        ("seek", -5.0), ("seek", 90.0), ("clear",), ("shuffle",),
+        ("pause",), ("resume",), ("toggle",), ("next",), ("prev",),
+        ("seek", -5.0), ("seek", 90.0), ("stop",), ("clear",), ("shuffle",),
     ]
 
 
 def test_seek_passes_absolute_flag(fake):
     # FakePlayer.__getattr__ drops kwargs; check via a dedicated recorder
+    fake._add("https://music.youtube.com/watch?v=seed", "Seed", True)
     seen = {}
     fake.seek = lambda s, absolute=False: seen.update(s=s, absolute=absolute)
     run("seek", "90", "--to")
     assert seen == {"s": 90.0, "absolute": True}
+
+
+def test_seek_with_nothing_playing_is_refused(fake):
+    code, out, err = run("seek", "10")
+    assert code != 0
+    assert "nothing is playing" in out + err
+    assert not any(call[0] == "seek" for call in fake.calls)
 
 
 def test_toggle_reports_the_resulting_state(fake):

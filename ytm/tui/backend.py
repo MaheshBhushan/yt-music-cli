@@ -337,7 +337,10 @@ class Backend:
     def _seek(self, args):
         seconds = float(args.get("seconds") or 0)
         absolute = bool(args.get("absolute"))
-        self._player.seek(seconds, absolute=absolute)
+        # nothing loaded: mpv would reject the seek, so a seek key or
+        # progress-bar click stays a no-op instead of raising a banner
+        if self._player.has_media():
+            self._player.seek(seconds, absolute=absolute)
         return {"seconds": seconds, "absolute": absolute}
 
     def _volume(self, args):
