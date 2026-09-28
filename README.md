@@ -2,7 +2,7 @@
 <p align="center">YouTube Music in the terminal: search, queue, radio and lyrics, with mpv doing the playing.</p>
 
 <p align="center">
-  <img alt="PyPI" src="https://img.shields.io/pypi/v/ytm.svg">
+  <img alt="PyPI" src="https://img.shields.io/pypi/v/ytm.svg?cachebust=0.11.1">
   <img alt="Tests" src="https://github.com/MaheshBhushan/yt-music-cli/actions/workflows/tests.yml/badge.svg">
   <img alt="License" src="https://img.shields.io/github/license/MaheshBhushan/yt-music-cli">
   <img alt="Last commit" src="https://img.shields.io/github/last-commit/MaheshBhushan/yt-music-cli">
