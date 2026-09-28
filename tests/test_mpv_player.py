@@ -201,6 +201,13 @@ def test_unavailable_property_yields_the_default(mpv):
         assert p.get("media-title", "nothing") == "nothing"
 
 
+def test_has_media_follows_the_loaded_file(mpv):
+    with Player(ipc_path=mpv.path, spawner=no_spawn) as p:
+        assert p.has_media() is False
+        mpv.props["path"] = "/tmp/song.webm"
+        assert p.has_media() is True
+
+
 # -- mpv command line -------------------------------------------------------
 
 

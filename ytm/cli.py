@@ -352,6 +352,8 @@ def cmd_toggle(args):
 
 def cmd_seek(args):
     with player(spawn=False) as p:
+        if not p.has_media():
+            raise CliError("nothing is playing")
         p.seek(args.seconds, absolute=args.to)
         status = p.status()
     return {"status": status}, _clock(status["position"])

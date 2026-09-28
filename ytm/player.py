@@ -691,6 +691,15 @@ class Player:
     def prev(self):
         self.command("playlist-prev", "force")
 
+    def has_media(self):
+        """Whether a file is loaded, so a seek has something to act on.
+
+        mpv answers a seek with "error running command" while idle; callers
+        ask first so a transport key with nothing playing stays a silent
+        no-op instead of painting an error banner.
+        """
+        return self.get("path") is not None
+
     def seek(self, seconds, absolute=False):
         self.command("seek", seconds, "absolute" if absolute else "relative")
 

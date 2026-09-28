@@ -61,11 +61,18 @@ def test_queue_get_after_enqueue(backend):
 
 
 def test_transport_and_volume(backend):
+    backend.fake._add("https://music.youtube.com/watch?v=abc", "T", True)
     backend.request("toggle")
     assert backend.request("status")["paused"] is True
     assert backend.request("volume", {"level": 40})["volume"] == 40
     backend.request("seek", {"seconds": -5})
-    assert ("seek", -5.0) in backend.fake.calls or any(c[0] == "seek" for c in backend.fake.calls)
+    assert ("seek", -5.0) in backend.fake.calls
+
+
+def test_seek_with_nothing_loaded_stays_silent(backend):
+    data = backend.request("seek", {"seconds": 5})
+    assert data == {"seconds": 5.0, "absolute": False}
+    assert not any(call[0] == "seek" for call in backend.fake.calls)
 
 
 def test_radio_replaces_the_queue(backend, catalogue):
