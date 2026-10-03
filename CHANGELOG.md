@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.11.2 — 2026-10-03
+
+- Stale browser cookies recover by themselves again. YouTube answers a rotated-out cookie copy with an account menu that has no account name. ytm now treats that as signed out and re-imports the live cookies from the browser, including sessions saved by `ytm login --from-browser`. Before, this showed "account response could not be read".
+- Other unreadable account responses and non-401 OAuth failures report an unknown status and keep stored credentials. They no longer ask you to log in again.
+- Tab cycles focus within the visible screen, and clicking the playlists pane focuses its list.
+
 ## 0.11.1 — 2026-09-28
 
 - Seeking with nothing playing no longer surfaces mpv's raw "error running command" banner: the TUI treats the seek key and progress-bar click as a no-op, and `ytm seek` reports "nothing is playing" like the other commands that need a current track.
