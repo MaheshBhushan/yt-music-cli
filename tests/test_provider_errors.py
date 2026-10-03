@@ -181,7 +181,7 @@ def test_empty_liked_and_library_songs_are_valid_results():
     assert music.library_songs(yt=YT()) == []
 
 
-def test_a_stale_session_keyerror_is_expiry_not_a_response_dump():
+def test_an_unreadable_account_response_is_unknown_not_expired():
     class Stale:
         def get_liked_songs(self, limit=100):
             raise KeyError("Unable to find 'twoColumnBrowseResultsRenderer' on {'SECRET': 'dump'}")
@@ -189,7 +189,7 @@ def test_a_stale_session_keyerror_is_expiry_not_a_response_dump():
         def get_account_info(self):
             raise KeyError("Unable to find 'header' on {'SECRET': 'dump'}")
 
-    with pytest.raises(AuthExpired, match="signed out") as excinfo:
+    with pytest.raises(SessionVerificationUnavailable) as excinfo:
         music.liked_songs(yt=Stale())
     assert "SECRET" not in str(excinfo.value)
 
@@ -215,7 +215,7 @@ def test_an_empty_library_songs_listing_probes_the_account():
         def get_account_info(self):
             raise KeyError("Unable to find 'header' on {'SECRET': 'dump'}")
 
-    with pytest.raises(AuthExpired, match="signed out") as excinfo:
+    with pytest.raises(SessionVerificationUnavailable) as excinfo:
         music.library_songs(yt=Stale())
     assert "SECRET" not in str(excinfo.value)
 
@@ -284,3 +284,84 @@ def test_cli_prints_a_typed_provider_error_verbatim(monkeypatch):
     code, out, err = run("search", "anything")
     assert code == 1
     assert "HTTP 403" in err and "Traceback" not in err
+
+
+@pytest.mark.parametrize("account", [None, {}, {"accountName": ""}, {"accountName": 123}])
+def test_missing_account_identity_does_not_prove_expiry(account):
+    class YT:
+        def get_account_info(self):
+            return account
+
+    with pytest.raises(SessionVerificationUnavailable) as excinfo:
+        music._probe_account(YT())
+    assert "ytm login" not in str(excinfo.value)
+
+
+@pytest.mark.parametrize("error", [KeyError("SECRET"), TypeError("SECRET"), ValueError("SECRET")])
+def test_unreadable_probe_never_refreshes_or_replaces_credentials(monkeypatch, error):
+    from tests.test_auth_migration import headers
+    from ytm.authentication.storage import StoredRecord
+
+    store = auth.session_store()
+    store.save(StoredRecord.browser(headers()), expected_revision=None)
+    before = store.path.read_bytes()
+
+    class YT:
+        def get_library_playlists(self, limit=25):
+            return []
+
+        def get_account_info(self):
+            raise error
+
+    monkeypatch.setattr(music, "shared_client", lambda: YT())
+    monkeypatch.setattr(auth, "refresh_from_browser", lambda *a, **kw: pytest.fail("must not refresh"))
+    with pytest.raises(SessionVerificationUnavailable) as excinfo:
+        music.library_playlists()
+    assert "SECRET" not in str(excinfo.value)
+    assert "ytm login" not in str(excinfo.value)
+    assert store.path.read_bytes() == before
+    assert auth.auth_manager().status(validate=False).logged_in
+
+
+SIGNED_OUT_MENU = KeyError(
+    "Unable to find 'header' using path ['actions', 0, 'openPopupAction', 'popup', "
+    "'multiPageMenuRenderer', 'header', 'activeAccountHeaderRenderer', 'accountName'] "
+    "on {'SECRET': 'dump'}, exception: 'header'"
+)
+
+
+def test_an_account_menu_without_its_header_is_signed_out():
+    class YT:
+        def get_account_info(self):
+            raise SIGNED_OUT_MENU
+
+    with pytest.raises(AuthExpired) as excinfo:
+        music._probe_account(YT())
+    assert "SECRET" not in str(excinfo.value)
+
+
+def test_a_signed_out_browser_record_is_reimported_and_retried(monkeypatch):
+    from tests.test_auth_migration import headers
+    from ytm.authentication.storage import StoredRecord
+
+    store = auth.session_store()
+    store.save(StoredRecord.browser(headers(), source="existing_browser:chrome"), expected_revision=None)
+    calls = []
+
+    class Stale:
+        def get_library_playlists(self, limit=25):
+            return []
+
+        def get_account_info(self):
+            raise SIGNED_OUT_MENU
+
+    class Fresh:
+        def get_library_playlists(self, limit=25):
+            return [{"playlistId": "PL1", "title": "favs"}]
+
+    yts = iter([Stale(), Fresh()])
+    monkeypatch.setattr(music, "shared_client", lambda: next(yts))
+    monkeypatch.setattr(auth, "refresh_from_browser", lambda *a, **kw: calls.append(auth.browser_source(*a)))
+    monkeypatch.setattr(music, "_remember_visitor_id", lambda: None)
+    assert [p.title for p in music.library_playlists()] == ["favs"]
+    assert calls and calls[0]["browser"] == "chrome"

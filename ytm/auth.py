@@ -981,10 +981,24 @@ def browser_source(path=None):
         with open(source_path(path), encoding="utf-8") as file:
             source = json.load(file)
     except (OSError, ValueError):
-        return None
+        source = None
     if not isinstance(source, dict) or not source.get("browser"):
+        source = None
+    try:
+        record = session_store(path).load()
+    except AuthError:
         return None
-    return source
+    if record is None:
+        return source
+    # A versioned record names its browser itself; the sidecar only adds the
+    # profile and authuser, and only when it describes the same browser.
+    prefix = "existing_browser:"
+    if record.method != "browser" or not (record.source or "").startswith(prefix):
+        return None
+    browser = record.source[len(prefix):]
+    if source is not None and source["browser"] == browser:
+        return source
+    return {"browser": browser, "profile": None, "authuser": None}
 
 
 _refresh_lock = threading.Lock()
@@ -1195,8 +1209,15 @@ def _oauth_client(path, credentials_factory=None):
         # persists it back to path) if the stored token is due to expire, so a
         # revoked/invalid refresh token surfaces here rather than mid-request.
         _ = ytm._token.access_token
-    except (YTMusicError, UnauthorizedOAuthClient, BadOAuthClient) as exc:
+    except (UnauthorizedOAuthClient, BadOAuthClient) as exc:
         raise AuthExpired(_OAUTH_EXPIRED_HINT) from exc
+    except YTMusicError as exc:
+        if is_expiry(exc):
+            raise AuthExpired(_OAUTH_EXPIRED_HINT) from exc
+        raise SessionVerificationUnavailable(
+            "YouTube Music could not verify the OAuth session. Stored credentials "
+            "were kept; retry later or check for a ytmusicapi update."
+        ) from exc
     return ytm
 
 
