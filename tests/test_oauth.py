@@ -224,3 +224,40 @@ def test_oauth_client_missing_raises_auth_missing(tmp_path):
 
     with pytest.raises(AuthMissing, match="ytm auth"):
         auth.client(path=path)
+
+
+@pytest.mark.parametrize('status', [400, 403, 429, 500, 503])
+def test_oauth_provider_failure_does_not_report_expired(tmp_path, monkeypatch, status):
+    from ytmusicapi.exceptions import YTMusicServerError
+
+    from ytm.auth import SessionVerificationUnavailable
+
+    path = tmp_path / 'auth.json'
+    path.write_text(json.dumps(_oauth_token_dict(expired=False)))
+    auth._write_json_0600(auth._oauth_client_path(path), {'client_id': 'cid', 'client_secret': 'csec'})
+    before = path.read_bytes()
+
+    def unavailable(*args, **kwargs):
+        raise YTMusicServerError(f'Server returned HTTP {status}: SECRET')
+
+    monkeypatch.setattr(auth.ytmusicapi, 'YTMusic', unavailable)
+    with pytest.raises(SessionVerificationUnavailable) as excinfo:
+        auth._oauth_client(path, credentials_factory=_FakeCredentials)
+    assert 'SECRET' not in str(excinfo.value)
+    assert 'ytm login' not in str(excinfo.value)
+    assert path.read_bytes() == before
+
+
+def test_oauth_explicit_401_still_reports_expired(tmp_path, monkeypatch):
+    from ytmusicapi.exceptions import YTMusicServerError
+
+    path = tmp_path / 'auth.json'
+    path.write_text(json.dumps(_oauth_token_dict(expired=False)))
+    auth._write_json_0600(auth._oauth_client_path(path), {'client_id': 'cid', 'client_secret': 'csec'})
+
+    def rejected(*args, **kwargs):
+        raise YTMusicServerError('Server returned HTTP 401: Unauthorized')
+
+    monkeypatch.setattr(auth.ytmusicapi, 'YTMusic', rejected)
+    with pytest.raises(AuthExpired):
+        auth._oauth_client(path, credentials_factory=_FakeCredentials)

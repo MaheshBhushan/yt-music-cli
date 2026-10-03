@@ -184,6 +184,8 @@ ytm account --no-check  # local facts only, no network
 
 `account` distinguishes **expired** (YouTube rejected the session: run `ytm login`), **unknown** (offline or provider trouble: credentials are kept and nothing is deleted), and **invalid** (the stored record is unreadable). Permission errors (HTTP 403) are reported as permission problems with that operation, never as an expired sign-in.
 
+Updates keep credentials in the per-user locations below. Updating or restarting ytm does not require another login. An unreadable account response leaves verification **unknown**; it does not prove that your session expired. Google can still expire or revoke a session independently of an update.
+
 `ytm logout` is local and idempotent: it writes a logged-out tombstone and deletes ytm's credential copies (the legacy `auth.json`, its source sidecar, `cookies.txt`, and managed OAuth generations). The `session.json` tombstone remains. It never calls Google's logout or revocation endpoint, and never clears your normal browser cookies, local playlists, search history or cached audio. A file that cannot be removed is reported instead of hidden.
 
 ### Where credentials live

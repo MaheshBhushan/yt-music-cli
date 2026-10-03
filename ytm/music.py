@@ -286,15 +286,8 @@ def _refreshing(fn):
         try:
             result = fn(*args, **kwargs)
         except AuthExpired as stale:
-            # An interactive session has no browser source to reimport: its
-            # recovery is `ytm login`, not a silent refresh. Only legacy
-            # extracted credentials have a sidecar to go back to.
-            try:
-                interactive = auth_mod.active_record(auth_mod.AUTH_PATH) is not None
-            except AuthError:
-                interactive = True  # an unreadable record is not reimportable either
-            if interactive:
-                raise
+            # Only sessions imported from a local browser can be re-extracted;
+            # an interactive or OAuth session recovers through `ytm login`.
             source = auth_mod.browser_source(auth_mod.AUTH_PATH)
             if source is None:
                 raise
@@ -601,12 +594,10 @@ def _mixes_from_home(shelves):
 def _probe_account(yt):
     """Read the account menu, or explain why the session is not usable.
 
-    Account-only resources are unreadable without a session, and ytmusicapi's
-    signed-out page fails navigation with a missing-field KeyError rather than
-    an HTTP status. For these operations a probe that cannot produce a
-    readable account name is the provider saying "signed out"; network
-    failures stay unknown, and a readable name means the session is live and
-    a listing failure is a response-shape problem.
+    Only an explicit authentication rejection proves expiry. Parser failures
+    and missing account fields leave validity unknown, just as they do in
+    AuthManager.status(). Provider or dependency changes must not turn an
+    unreadable response into a request to replace stored credentials.
     """
     try:
         account = yt.get_account_info()
@@ -619,13 +610,26 @@ def _probe_account(yt):
             "YouTube Music could not be reached to check the account; "
             "stored credentials were kept."
         ) from exc
-    except (KeyError, TypeError, ValueError) as exc:
-        # the signed-out menu has no account header; ytmusicapi fails the
-        # navigation with a KeyError carrying the whole response
-        raise AuthExpired(_SIGNED_OUT_HINT) from exc
+    except KeyError as exc:
+        # A signed-out session still gets the account menu, just without the
+        # account header ytmusicapi reads the name from.
+        if "activeAccountHeaderRenderer" in str(exc) and "Unable to find 'header'" in str(exc):
+            raise AuthExpired(_SIGNED_OUT_HINT) from exc
+        raise SessionVerificationUnavailable(
+            "YouTube Music's account response could not be read. Stored credentials "
+            "were kept; retry later or check for a ytmusicapi update."
+        ) from exc
+    except (TypeError, ValueError) as exc:
+        raise SessionVerificationUnavailable(
+            "YouTube Music's account response could not be read. Stored credentials "
+            "were kept; retry later or check for a ytmusicapi update."
+        ) from exc
     name = account.get("accountName") if isinstance(account, dict) else None
     if not isinstance(name, str) or not name.strip():
-        raise AuthExpired(_SIGNED_OUT_HINT)
+        raise SessionVerificationUnavailable(
+            "YouTube Music did not return a readable account identity. "
+            "Stored credentials were kept; account validity is unknown."
+        )
     return account
 
 

@@ -127,10 +127,8 @@ def test_account_listings_without_credentials_say_how_to_login(monkeypatch, argv
     assert "ytm auth" not in err
 
 
-def test_a_stale_session_keyerror_never_dumps_the_provider_response(monkeypatch):
-    """Stale cookies make YouTube serve the signed-out page; ytmusicapi fails
-    navigation with a KeyError carrying the whole response. The user must get
-    the login instruction, not that dump."""
+def test_an_unreadable_account_response_does_not_request_login(monkeypatch):
+    """Parser failures leave validity unknown and never expose response data."""
 
     class Stale:
         def get_liked_songs(self, limit=100):
@@ -148,6 +146,7 @@ def test_a_stale_session_keyerror_never_dumps_the_provider_response(monkeypatch)
     code, out, err = run("liked")
     assert code == 1
     assert out == ""  # failures render to stderr only
-    assert "Run 'ytm login' again." in err
+    assert "Stored credentials were kept" in err
+    assert "ytm login" not in err
     assert "Traceback" not in err
     assert "SECRET" not in err
