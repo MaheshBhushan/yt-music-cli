@@ -63,6 +63,11 @@ class PlaylistsPane(Vertical):
             except Exception:
                 pass  # the highlighted playlist is gone; row 0 is fine
 
+    def on_click(self):
+        """Make the heading and unused pane space focus the playlist list."""
+        if not self.query_one("#playlist-name", Input).display:
+            self.query_one("#playlists-table", DataTable).focus()
+
     def set_count(self, playlist_id, count, added=0):
         """Update one playlist's count cell in place after adding `added`
         tracks. YouTube's count can lag the add by a few seconds, so the

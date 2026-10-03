@@ -1350,7 +1350,7 @@ class YTMApp(App):
             self._disarm()
 
     def action_cycle_pane(self):
-        self.focus_next()
+        self.screen.focus_next()
 
     def action_quit_only(self):
         self._begin_shutdown()
