@@ -8,8 +8,10 @@ rather than depending on the pytest-asyncio plugin.
 import asyncio
 import threading
 
+import pytest
 from textual.widgets import DataTable, Static
 
+from ytm import config
 from ytm.tui.app import LyricsFetched, YTMApp
 from ytm.tui.backend import BackendError as ClientError
 from ytm.tui.lyrics import (
@@ -23,6 +25,13 @@ from ytm.tui.nowplaying import NowPlaying, queue_summary_layout, split_queue
 from ytm.tui.playlists import PlaylistsPane
 from ytm.tui.queue import QueuePane
 from ytm.tui.search import SearchPane
+
+
+@pytest.fixture(autouse=True)
+def isolated_config(monkeypatch, tmp_path):
+    """Use defaults unless a test supplies its own config, never personal keys."""
+    monkeypatch.setattr(config, "CONFIG_PATH", tmp_path / "config.toml")
+
 
 TRACK = {
     "video_id": "abc123",
