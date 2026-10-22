@@ -21,6 +21,7 @@ import json
 import os
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -69,6 +70,24 @@ def default_ipc_path(platform=None):
     if not runtime_dir:
         runtime_dir = os.path.join(tempfile.gettempdir(), f"ytm-{os.getuid()}")
     return str(Path(runtime_dir) / "ytm" / "mpv.sock")
+
+
+def ensure_private_ipc_dir(directory):
+    """Create the socket directory and refuse one another local user controls.
+
+    The fallback location sits in the shared temp directory, where another
+    user could pre-create it and then take over mpv's IPC socket.
+    """
+    directory = Path(directory)
+    directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+    uid = os.getuid()
+    for path in (directory, directory.parent):
+        info = path.stat()
+        if info.st_uid not in (uid, 0):
+            raise PermissionError(f"{path} is owned by another user")
+        if info.st_mode & 0o022 and not info.st_mode & stat.S_ISVTX:
+            raise PermissionError(f"{path} is writable by other users")
+    return directory
 
 
 def mpv_args(
@@ -304,7 +323,7 @@ def _startup_log_file(args):
     if path is None:
         return subprocess.DEVNULL
     try:
-        path.parent.mkdir(parents=True, exist_ok=True)
+        ensure_private_ipc_dir(path.parent)
         return open(path, "wb")
     except OSError:
         return subprocess.DEVNULL
@@ -394,7 +413,10 @@ class Player:
         # through one handle. The transport owns the deadline/cancellation
         # policy so a player that stops answering cannot block a command.
         if not sys.platform.startswith("win"):
-            Path(self._ipc_path).parent.mkdir(parents=True, exist_ok=True)
+            try:
+                ensure_private_ipc_dir(Path(self._ipc_path).parent)
+            except OSError as exc:
+                raise PlayerError(f"unsafe mpv IPC directory: {exc}") from exc
         self._transport = open_transport(self._ipc_path, self._timeout)
 
     def _readline(self, deadline):
