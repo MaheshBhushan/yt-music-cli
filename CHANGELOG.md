@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.12.0 — 2026-10-23
+
+- Like or unlike the current song from the TUI with `!` (configurable as `[keys] like`). The now-playing line shows `(liked)` right away, and the marker reverts if YouTube refuses the rating. Thanks to @paul-sx (#58).
+- Songs from Liked Music and other results that carry a like status keep it through the queue and the backend state.
+- Spawning mpv on Windows no longer fails with `AttributeError` from a POSIX-only owner check on the log directory.
+- Security: the mpv socket directory is private to the user, the website's `sharp` and `undici` dependencies are patched, and CI workflows run with least-privilege tokens.
+
 ## 0.11.2 — 2026-10-03
 
 - Stale browser cookies recover by themselves again. YouTube answers a rotated-out cookie copy with an account menu that has no account name. ytm now treats that as signed out and re-imports the live cookies from the browser, including sessions saved by `ytm login --from-browser`. Before, this showed "account response could not be read".
