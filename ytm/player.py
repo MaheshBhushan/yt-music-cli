@@ -80,6 +80,9 @@ def ensure_private_ipc_dir(directory):
     """
     directory = Path(directory)
     directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+    if not hasattr(os, "getuid"):
+        # Windows: no POSIX owners or mode bits; the per-user profile dir is private.
+        return directory
     uid = os.getuid()
     for path in (directory, directory.parent):
         info = path.stat()
