@@ -1232,6 +1232,8 @@ class YTMApp(App):
             then=lambda data: self.query_one(NowPlaying).set_liked(
                 (data or {}).get("liked"), (data or {}).get("video_id")
             ),
+            # put the marker back if YouTube refused the rating
+            on_error=lambda _err: self.query_one(NowPlaying).set_liked(not liked, video_id),
         )
 
     def action_seek_back(self):
