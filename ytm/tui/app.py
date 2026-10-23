@@ -194,7 +194,8 @@ class YTMApp(App):
         self._control_closed = False
         self._queued_volume = None
         self._config = config if config is not None else config_mod.load()
-        self._bindings = BindingsMap(self._build_bindings(self._config["keys"]))
+        self._keys = {**config_mod.DEFAULTS["keys"], **(self._config.get("keys") or {})}
+        self._bindings = BindingsMap(self._build_bindings(self._keys))
         self.theme = self._resolve_theme(self._config["ui"]["theme"])
         self.client = client
         self._backend_factory = Backend if client is None else None
@@ -229,12 +230,13 @@ class YTMApp(App):
 
     @staticmethod
     def _build_bindings(keys):
-        """The BINDINGS table with the five customisable keys from config.
+        """The BINDINGS table with the customisable keys from config.
 
         Any other binding (`q`, `u`, `s`, `+`, `-`, `Tab`, `l`, `a`, arrows, `x`) keeps
-        its hardcoded default -- only `toggle`, `next`, `prev`, `search` and
+        its hardcoded default -- only `toggle`, `next`, `prev`, `like`, `search` and
         `quit` are user-configurable.
         """
+        keys = {**config_mod.DEFAULTS["keys"], **(keys or {})}
         return [
             (keys["search"], "focus_search", "Search"),
             # `s`/`e` are plain (non-priority) bindings: they act from any
@@ -250,6 +252,7 @@ class YTMApp(App):
             (keys["toggle"], "toggle", "Play/Pause"),
             (keys["next"], "next", "Next"),
             (keys["prev"], "prev", "Prev"),
+            (keys["like"], "toggle_like", "Like"),
             # priority so they seek from any pane, but `check_action` hands
             # them back to the search box while it has focus
             Binding("left", "seek_back", "Seek -5s", priority=True),
@@ -284,6 +287,8 @@ class YTMApp(App):
         the key would. With `typing` (the search box has focus) it opens
         with how to get out, because until then `l`, `q`, `a`... are letters.
         """
+        keys = {**config_mod.DEFAULTS["keys"], **(keys or {})}
+
         def link(key, label, action):
             return f"[@click=app.{action}][b]{key}[/b] {label}[/]"
 
@@ -294,6 +299,7 @@ class YTMApp(App):
             link(keys["toggle"], "play/pause", "toggle"),
             link(keys["next"], "next", "next"),
             link(keys["prev"], "prev", "prev"),
+            link(keys["like"], "like", "toggle_like"),
             link("q", "enqueue", "enqueue_selected"),
             link("u", "play next", "play_next_selected"),
             "[@click=app.seek_back][b]←[/b][/]/[@click=app.seek_forward][b]→[/b][/] seek",
@@ -329,7 +335,7 @@ class YTMApp(App):
         yield Static("", id="error-banner")
         # the shortcut bar: every key, always, whatever has focus (Textual's
         # Footer hides letter keys while the search box is focused)
-        yield Static(self._shortcut_text(self._config["keys"], typing=True), id="shortcut-bar")
+        yield Static(self._shortcut_text(self._keys, typing=True), id="shortcut-bar")
 
     @staticmethod
     def _visible(widget):
@@ -1091,7 +1097,7 @@ class YTMApp(App):
             # playlists puts the queue back (UI-12)
             self._restore_compact_queue()
         self.query_one("#shortcut-bar", Static).update(
-            self._shortcut_text(self._config["keys"], typing=widget_id == "search-input")
+            self._shortcut_text(self._keys, typing=widget_id == "search-input")
         )
 
     def _restore_compact_queue(self):
@@ -1156,6 +1162,7 @@ class YTMApp(App):
             "duration": track.get("duration"),
             "duration_seconds": track.get("duration_seconds"),
             "thumbnail": track.get("thumbnail"),
+            "liked": bool(track.get("liked")),
         }
 
     def _selected_track_args(self):
@@ -1210,6 +1217,24 @@ class YTMApp(App):
 
     def action_prev(self):
         self._request_control("prev")
+
+    def action_toggle_like(self):
+        now_playing = self.query_one(NowPlaying)
+        video_id = now_playing.current_video_id
+        if not video_id:
+            self._show_error("nothing is playing")
+            return
+        liked = not now_playing.current_liked
+        now_playing.set_liked(liked)
+        self._request_async(
+            "like_set",
+            {"video_id": video_id, "liked": liked},
+            then=lambda data: self.query_one(NowPlaying).set_liked(
+                (data or {}).get("liked"), (data or {}).get("video_id")
+            ),
+            # put the marker back if YouTube refused the rating
+            on_error=lambda _err: self.query_one(NowPlaying).set_liked(not liked, video_id),
+        )
 
     def action_seek_back(self):
         self._request_control("seek", {"seconds": -SEEK_STEP})
