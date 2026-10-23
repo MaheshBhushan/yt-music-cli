@@ -25,3 +25,6 @@ playwright/.auth/
 
 # Local static-analysis cache
 .code-health-cache/
+.env
+.env.*
+!.env.example
