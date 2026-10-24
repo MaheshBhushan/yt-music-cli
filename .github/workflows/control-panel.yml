@@ -1,0 +1,29 @@
+name: control panel
+
+on:
+  push:
+    branches: [main, 'improvement/**']
+    paths: ['control-panel/**', 'ytm/**', 'tests/**', 'pyproject.toml', '.github/workflows/control-panel.yml']
+  pull_request:
+    paths: ['control-panel/**', 'ytm/**', 'tests/**', 'pyproject.toml', '.github/workflows/control-panel.yml']
+
+jobs:
+  integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: control-panel/package-lock.json
+      - run: pip install -e '.[dev]'
+      - run: npm --prefix control-panel ci
+      - run: npm --prefix control-panel exec -- playwright install --with-deps chromium
+      - run: python -m pytest -q tests/test_panel.py tests/test_tui_backend.py
+      - run: npm --prefix control-panel run build
+      - run: npm --prefix control-panel test

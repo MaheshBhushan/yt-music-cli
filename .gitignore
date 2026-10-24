@@ -28,3 +28,9 @@ playwright/.auth/
 .env
 .env.*
 !.env.example
+
+# Local React control panel
+control-panel/node_modules/
+control-panel/dist/
+control-panel/test-results/
+control-panel/playwright-report/
