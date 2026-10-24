@@ -36,7 +36,8 @@ def validate_command(payload):
         valid = (set(args) == {"query"} and isinstance(query, str)
                  and 0 < len(query.strip()) <= 200)
     elif cmd in TRACK_COMMANDS:
-        valid = (not (set(args) - TRACK_TEXT - {"duration_seconds"})
+        valid = (not (set(args) - TRACK_TEXT - {"duration_seconds", "liked"})
+                 and type(args.get("liked", False)) is bool
                  and all(isinstance(args[k], str) and len(args[k]) <= 2000
                          for k in args.keys() & TRACK_TEXT)
                  and isinstance(args.get("video_id"), str)
